@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}本地在存 · TG 归档台{% endblock %}
+{% block page_id %}library-local{% endblock %}
+{% block active_nav %}library{% endblock %}
+{% block active_page %}local{% endblock %}
+{% block page_title %}本地在存{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">本地在存 · 在盘 {{ local_unarchived }}</span>{% endblock %}
+{% block content %}
+<style>
+/* ---- 本地在存复选框与卡片高亮 ---- */
+.thumb .card-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(10, 12, 20, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.thumb .card-check:hover {
+  opacity: 1;
+  background: rgba(10, 12, 20, 0.75);
+}
+.thumb .card-check .check,
+.table-wrap .check {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(10, 12, 20, 0.1);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.thumb .card-check .check:hover,
+.table-wrap .check:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+.thumb .card-check .check:checked,
+.table-wrap .check:checked {
+  background: var(--brand, #7c3aed);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+.thumb .card-check .check:checked::after,
+.table-wrap .check:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.thumb .card-check .check:indeterminate,
+.table-wrap .check:indeterminate {
+  background: var(--brand, #7c3aed);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+.thumb .card-check .check:indeterminate::after,
+.table-wrap .check:indeterminate::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  width: 9px;
+  height: 2px;
+  background: #fff;
+}
+.thumb.selected {
+  border-color: var(--brand, #7c3aed);
+  box-shadow: 0 0 0 1.5px var(--brand, #7c3aed), var(--glass-shadow);
+}
+tr.selected {
+  background: rgba(124, 58, 237, 0.1) !important;
+}
+
+/* ---- 底部浮动批量操作条 (Glassmorphism) ---- */
+.floating-batch-bar {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 85;
+  pointer-events: auto;
+  animation: batchSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes batchSlideUp {
+  from { opacity: 0; transform: translate(-50%, 18px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.batch-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4, 16px);
+  padding: 10px 20px;
+  background: var(--glass-bg-strong, rgba(20, 24, 38, 0.92));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border-strong, rgba(255, 255, 255, 0.22));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  border-radius: var(--radius-lg, 14px);
+  color: var(--text-1, #f3f4f6);
+}
+.batch-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.batch-bar-info strong {
+  color: var(--brand, #a78bfa);
+  font-size: 15px;
+}
+.batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  .floating-batch-bar {
+    width: calc(100% - 32px);
+    left: 16px;
+    transform: none;
+    bottom: 20px;
+  }
+  .batch-bar-inner {
+    justify-content: space-between;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+}
+</style>
+
+<div class="page-header">
+  <div>
+    <h1>本地在存</h1>
+    <p>已下载到磁盘、等待归档的文件</p>
+  </div>
+</div>
+
+<!-- 归档异常智能归类与一键批量重试看板 -->
+<div class="card pad-md mb-4 archive-failure-card" id="archiveFailureCard" x-data="archiveFailurePanel()" x-init="load()" x-show="total > 0" style="display:none;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.22);border-radius:var(--radius-lg);margin-bottom:var(--space-4);">
+  <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:20px;">🚨</span>
+      <div>
+        <div style="font-weight:600;font-size:14px;color:var(--text-1);">
+          归档异常告警中心 · 存在 <span class="tnum" style="color:var(--err);font-weight:700;" x-text="total">0</span> 个转存失败任务
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px;">
+          可按错误类别快捷排查，或执行一键批量重试
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="gap:8px;">
+      <button type="button" class="btn sm danger" :disabled="busy || !retryableCount" @click="retryAll()" title="重新调度所有失败的归档任务（本地文件已丢失的不可重试）">
+        <span x-show="busy" class="spinner"></span>
+        <span x-show="!busy" x-text="retryableCount ? ('⚡ 一键重试全部失败任务') : '无可重试任务'">⚡ 一键重试全部失败任务</span>
+        <span x-show="busy">正在重新调度…</span>
+      </button>
+      <button type="button" class="btn sm ghost" :disabled="busy" @click="load()" title="刷新异常列表">
+        <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 错误分类统计胶囊 -->
+  <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap;">
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='all'?'active':''" @click="setCategory('all')">
+      全部 (<span x-text="total"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='token_expired'?'active':''" @click="setCategory('token_expired')" x-show="categories.token_expired > 0">
+      🔑 鉴权过期 (<span x-text="categories.token_expired"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='storage_full'?'active':''" @click="setCategory('storage_full')" x-show="categories.storage_full > 0">
+      💾 容量超限 (<span x-text="categories.storage_full"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='conflict'?'active':''" @click="setCategory('conflict')" x-show="categories.conflict > 0">
+      ⚠️ 文件冲突 (<span x-text="categories.conflict"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='timeout'?'active':''" @click="setCategory('timeout')" x-show="categories.timeout > 0">
+      🌐 网络超时 (<span x-text="categories.timeout"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='unknown'?'active':''" @click="setCategory('unknown')" x-show="categories.unknown > 0">
+      ❓ 未知异常 (<span x-text="categories.unknown"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='source_missing'?'active':''" @click="setCategory('source_missing')" x-show="categories.source_missing > 0">
+      🗑️ 本地文件已丢失 (<span x-text="categories.source_missing"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='remote_changed'?'active':''" @click="setCategory('remote_changed')" x-show="categories.remote_changed > 0">
+      🔄 云端文件已变动 (<span x-text="categories.remote_changed"></span>)
+    </button>
+    <button type="button" class="fail-cat-pill" :class="activeCategory==='remote_missing'?'active':''" @click="setCategory('remote_missing')" x-show="categories.remote_missing > 0">
+      🔍 云端对象不存在 (<span x-text="categories.remote_missing"></span>)
+    </button>
+  </div>
+
+  <!-- 失败任务明细 -->
+  <div class="failure-list" style="margin-top:12px;max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
+    <template x-for="j in filteredJobs" :key="j.id">
+      <div class="failure-item-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-2);border-radius:var(--radius-sm);font-size:12px;gap:8px;">
+        <div style="min-width:0;flex:1;">
+          <div style="font-weight:500;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="j.filename"></div>
+          <div style="color:var(--err);margin-top:2px;font-size:11px;" x-text="j.categoryLabel + ' · ' + j.error"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          <span class="sub tnum" x-text="j.size"></span>
+          <button type="button" class="btn xs ghost" :disabled="j.retryable === false"
+                  :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : '单项重试'"
+                  @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : '重试'">重试</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<div x-data="{view:'grid'}">
+  <!-- Filter + view toggle：htmx 局部刷新 #localFiles；
+       来源聊天选项来自真实账号聊天列表（chat_sources），不再硬编码 mock 聊天名 -->
+  <div class="card" style="margin-bottom:var(--space-5);">
+    <div class="row" style="justify-content:space-between;">
+      <form class="row" style="gap:var(--space-3);flex:1;" hx-get="/partials/local-files" hx-target="#localFiles" hx-swap="innerHTML" hx-trigger="change">
+        <div class="field" style="margin:0;min-width:130px;">
+          <label>分类</label>
+          <select class="select" name="category" aria-label="归档分类">
+            <option value="" {% if not selected_category %}selected{% endif %}>全部资产</option>
+            <option value="unarchived" {% if selected_category == 'unarchived' %}selected{% endif %}>⚡ 未归档</option>
+            <option value="archived" {% if selected_category == 'archived' %}selected{% endif %}>📦 已归档</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0;min-width:130px;">
+          <label>来源聊天</label>
+          <select class="select" name="source" aria-label="来源聊天">
+            <option value="">全部</option>
+            {% for s in chat_sources %}<option value="{{ s.title }}">{{ s.title }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field" style="margin:0;min-width:130px;">
+          <label>类型</label>
+          <select class="select" name="type" aria-label="文件类型">
+            <option value="">全部</option>
+            <option value="video">视频</option>
+            <option value="photo">图片</option>
+            <option value="audio">音频</option>
+            <option value="document">文档</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0;min-width:120px;">
+          <label>大小</label>
+          <select class="select" name="size" aria-label="文件大小">
+            <option value="">全部</option>
+            <option value="lt100mb">&lt;100MB</option>
+            <option value="100mb-500mb">100-500MB</option>
+            <option value="gt1gb">&gt;1GB</option>
+          </select>
+        </div>
+      </form>
+      <div class="seg">
+        <button :class="view==='grid'?'active':''" @click="view='grid'" aria-label="网格视图">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-grid"/></svg>网格
+        </button>
+        <button :class="view==='table'?'active':''" @click="view='table'" aria-label="表格视图">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-list"/></svg>表格
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 结果区（数量条 + 网格/表格 + 空态，筛选时被 /partials/local-files 局部替换） -->
+  <div id="localFiles">
+    {% include "partials/_local_files.html" %}
+  </div>
+
+  <!-- 底部浮动批量操作条 -->
+  <div id="localBatchBar" class="floating-batch-bar" style="display:none;" role="region" aria-label="批量操作条">
+    <div class="batch-bar-inner">
+      <div class="batch-bar-info">
+        <svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--brand);"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>已选中 <strong id="localSelectedCount" class="tnum">0</strong> 个文件</span>
+      </div>
+      <div class="batch-bar-actions">
+        <button type="button" class="btn primary sm" id="btnBatchArchive" onclick="window.__bulkArchiveLocal()" title="将选中的文件批量归档到云端">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-cloud"/></svg>
+          批量归档
+        </button>
+        <button type="button" class="btn danger sm" id="btnBatchDelete" onclick="window.__bulkDeleteLocal()" title="删除选中的本地原文件并释放磁盘空间">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          批量删除
+        </button>
+        <button type="button" class="btn ghost sm" onclick="window.__localClearSelection()" title="取消所有勾选">
+          取消
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

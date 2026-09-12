@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import pill %}
+{% block title %}任务队列 · TG 归档台{% endblock %}
+{% block page_id %}tasks{% endblock %}
+{% block active_nav %}tasks{% endblock %}
+{% block page_title %}任务队列{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">任务队列 · 进行中 {{ running_count }}</span>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>任务队列</h1>
+    <p>管理下载、校验与归档任务</p>
+  </div>
+  <div class="row">
+    <span class="delta up" style="padding:6px 12px;">运行中 {{ running_count }}</span>
+    <span class="delta flat" style="padding:6px 12px;">今日完成 {{ done_today }}</span>
+  </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card" style="margin-bottom:var(--space-5);">
+  <form class="row" hx-get="/partials/tasks" hx-target="#tasksTable" hx-swap="outerHTML" hx-trigger="change, submit" style="gap:var(--space-3);">
+    <div class="field" style="margin:0;flex:1;min-width:140px;">
+      <label>状态</label>
+      <select class="select" name="status" aria-label="状态过滤">
+        <option value="">全部</option>
+        <option value="active">⚡ 进行中 / 活跃任务</option>
+        <option value="pending">待处理</option>
+        <option value="waiting_disk">磁盘挂起</option>
+        <option value="download">下载中</option>
+        <option value="downloaded">已下载</option>
+        <option value="upload">归档中</option>
+        <option value="archived">已归档</option>
+        <option value="isolated">隔离</option>
+        <option value="failed">失败</option>
+      </select>
+    </div>
+    <div class="field" style="margin:0;flex:1;min-width:150px;">
+      <label>日期范围</label>
+      <input class="input" type="date" name="date_from" aria-label="开始日期">
+      <input class="input" type="date" name="date_to" aria-label="结束日期">
+    </div>
+    <div class="field" style="margin:0;flex:1;min-width:150px;">
+      <label>来源聊天</label>
+      <select class="select" name="source" aria-label="来源聊天">
+        <option value="">全部</option>
+        {% for s in chat_sources %}<option value="{{ s.title }}">{{ s.title }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field" style="margin:0;flex:1;min-width:150px;">
+      <label>批量操作</label>
+      <div class="row" style="gap:8px;">
+        <button class="btn sm" type="button" aria-label="批量重试" onclick="window.__bulkRetry()"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>重试</button>
+        <button class="btn sm danger" type="button" aria-label="批量取消" onclick="window.__bulkCancel()"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>取消</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Tasks table -->
+{% include "partials/_tasks_table.html" %}
+{% endblock %}

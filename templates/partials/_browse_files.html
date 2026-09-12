@@ -1,0 +1,125 @@
+{# _browse_files.html — /browse 文件列表 htmx 片段（大图卡片网格）。
+   三种用法：首页 include（服务端首渲染）、"加载更多"（outerHTML 换掉游标块，
+   追加新卡片 + 新游标块）、切换聊天/类型后整格 innerHTML 重铺。
+   片段末尾的脚本会同步总数到工具栏（htmx 默认求值 swap 内容中的 script）。
+   整卡可点切换勾选（按钮/复选框除外），缩略图为 16:10 大图。 #}
+{% for f in browse_rows %}
+<div class="thumb browse-card{% if f.dl == 'completed' or f.is_downloaded %} done is-downloaded{% endif %}{% if f.is_archived %} is-archived{% endif %}"
+     data-tg="{{ f.telegramId }}" data-chat="{{ f.chatId }}"
+     data-msg="{{ f.messageId }}" data-file="{{ f.fileId }}"
+     data-uid="{{ f.uniqueId }}"
+     data-name="{{ f.name }}"
+     data-size="{{ f.size_str }}"
+     data-archived="{{ '1' if f.is_archived else '0' }}"
+     data-cloud-path="{{ f.cloud_path }}"
+     data-cloud-drive="{{ f.cloud_drive }}"
+     data-openlist-url="{{ f.openlist_url }}"
+     data-archived-date="{{ f.archived_date }}"
+     data-downloaded="{{ '1' if f.is_downloaded or f.dl == 'completed' else '0' }}"
+     data-local-path="{{ f.local_path }}"
+     onclick="window.__browseCardClick(event, this)">
+  <div class="t-img">
+    {% if f.thumb_uid %}
+    {# 全尺寸缩略图（320px 级，经 bridge /preview 代理 + 浏览器私有缓存一天）；
+       chat/msg 供 /preview 在缩略图未就绪时经 GetMessage 定位补下载 #}
+    <img src="/preview/{{ f.telegramId }}/{{ f.thumb_uid }}?chat={{ f.chatId }}&amp;msg={{ f.messageId }}"
+         alt="{{ f.name }}" loading="lazy">
+    {% elif f.thumb %}
+    {# 兜底：无 thumbnailUniqueId 时退回 minithumbnail（40px 级，模糊但聊胜于无） #}
+    <img src="data:image/jpeg;base64,{{ f.thumb }}" alt="{{ f.name }}" loading="lazy">
+    {% else %}
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#ic-file"/></svg>
+    <span class="t-ext">{{ f.ext }}</span>
+    {% endif %}
+    {% if f.dur_str %}<span class="dur-badge tnum">{{ f.dur_str }}</span>{% endif %}
+    <label class="card-check" title="选择" onclick="event.stopPropagation()">
+      <input type="checkbox" class="check browse-check" {% if (f.dl == 'completed' or f.is_downloaded) or f.is_archived %}disabled{% endif %}
+             aria-label="选择 {{ f.name }}">
+    </label>
+    <span class="t-badge">
+      {% if f.is_archived %}
+        <span class="badge ok" title="已归档到网盘：{{ f.cloud_path }}" style="color:var(--ok);background:rgba(52,211,153,.18);font-weight:600;">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:2px;"><use href="#ic-cloud"/></svg>已归档
+        </span>
+      {% elif f.is_archiving %}
+        <span class="badge" title="正在排队归档中…" style="color:var(--m-upload);background:rgba(167,139,250,.18);font-weight:600;">
+          <span class="p-dot"></span>归档中
+        </span>
+      {% elif f.is_downloaded or f.dl == 'completed' %}
+        <span class="badge ok" title="本地在存：{{ f.local_path }}" style="color:var(--brand-b);background:rgba(56,189,248,.18);font-weight:600;">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:2px;"><use href="#ic-hdd"/></svg>本地在存
+        </span>
+      {% elif f.dl == 'downloading' %}<span class="badge accent">下载中</span>
+      {% elif f.dl == 'paused' %}<span class="badge">已暂停</span>
+      {% elif f.dl == 'error' %}<span class="badge danger">失败</span>
+      {% else %}<span class="badge">未下载</span>{% endif %}
+    </span>
+  </div>
+  <div class="t-body">
+    <div class="t-name" title="{{ f.name }}">{{ f.name }}</div>
+    <div class="t-meta">
+      <span class="badge">{{ f.type_label }}</span>
+      <span class="tnum">{{ f.size_str }}</span> ·
+      <span class="tnum">{{ f.date_str }}</span>
+    </div>
+    <div class="t-foot">
+      {# 底部操作区（已归档）：只保留 OpenList 按钮。
+         历史缺陷：曾经渲染连体药丸「已归档 | OpenList」，左段「已归档」
+         与缩略图右上角的 t-badge「已归档」重复（用户圈出要求删除），
+         现已移除左段；资产详情入口仍可经缩略图徽章/卡片点击到达。
+         msg N 已移除：会挤压按钮导致文字竖排换行；
+         messageId 仍在卡片 dataset（data-msg）里，抽屉与调试不受影响。 #}
+      {% if f.is_archived and f.openlist_url %}
+      <span class="pill-group">
+        <button type="button" class="seg seg-right" title="在 OpenList 中打开：{{ f.cloud_path }}"
+                onclick="event.stopPropagation(); window.__browseOpenOpenList(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><use href="#ic-external"/></svg><span>OpenList</span>
+        </button>
+      </span>
+      {% elif f.is_archived %}
+      <button type="button" class="badge ghost" title="点击查看资产详情与操作"
+              style="font-size:11px;color:var(--ok);cursor:pointer;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.25);border-radius:var(--radius-sm);padding:2px 6px;"
+              onclick="event.stopPropagation(); window.__openBrowseAssetDrawer(this)">
+        ✓ 资产详情
+      </button>
+      {% elif f.is_downloaded or f.dl == 'completed' %}
+      {% elif f.is_downloaded or f.dl == 'completed' %}
+      <button type="button" class="badge ghost" title="本地在存：{{ f.local_path }}，点击查看资产详情与操作"
+              style="font-size:11px;color:var(--brand-b);cursor:pointer;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.25);border-radius:var(--radius-sm);padding:2px 6px;"
+              onclick="event.stopPropagation(); window.__openBrowseAssetDrawer(this)">
+        💾 本地在存
+      </button>
+      {% elif f.dl not in ('completed', 'downloading') %}
+      <button type="button" class="icon-btn xs" title="下载" aria-label="下载 {{ f.name }}"
+              onclick="event.stopPropagation(); window.__browseDownloadOne(this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+      </button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% if browse_cursor %}
+{# 滚动到底部自动加载下一页（IntersectionObserver 见 browse.html）。
+   按钮保留为「可点兜底 + 无障碍入口」，JS 也会直接 click 它以复用同一条 htmx 链路。 #}
+<div class="browse-more" id="browse-more-row" data-cursor="{{ browse_cursor }}">
+  <button type="button" class="btn sm ghost" id="browseMoreBtn"
+          hx-get="/partials/browse-files?tg={{ sel_tg }}&amp;chat={{ sel_chat }}&amp;type={{ sel_type }}&amp;cursor={{ browse_cursor }}&amp;hide_archived={{ '1' if hide_archived else '0' }}"
+          hx-target="#browse-more-row" hx-swap="outerHTML">
+    <span class="spinner" id="browseMoreSpin" style="display:none;margin-right:6px;"></span>
+    加载更多（已列 <span class="tnum">{{ browse_loaded | default(browse_rows | length) }}</span> / 共 <span class="tnum">{{ browse_count }}</span>{% if browse_collapsed %} · 已折叠 <span class="tnum">{{ browse_collapsed }}</span> 条重复{% endif %}）
+  </button>
+</div>
+{% endif %}
+{% if not browse_rows and not browse_cursor %}
+<div class="browse-more">
+  <div class="empty" style="padding:var(--space-8) var(--space-5);">
+    <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#ic-inbox"/></svg></div>
+    <h3>没有匹配的文件</h3>
+    <p>这个聊天下没有该类型的文件，换个筛选条件或选择其他聊天。</p>
+  </div>
+</div>
+{% endif %}
+<script>
+  window.dispatchEvent(new CustomEvent('browse-count', { detail: {{ browse_count | tojson }} }));
+</script>

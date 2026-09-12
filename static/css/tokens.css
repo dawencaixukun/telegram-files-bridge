@@ -1,0 +1,120 @@
+/* =====================================================================
+   tokens.css — Design Tokens  (Dark default  /  Light via [data-theme])
+   Glassmorphism design system for the TG 归档管理台
+   ===================================================================== */
+
+:root {
+  /* ---- Radii ---- */
+  --radius-card: 20px;
+  --radius-control: 12px;
+  --radius-pill: 999px;
+
+  /* ---- Spacing (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ---- Typography ---- */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "JetBrains Mono",
+    Consolas, "Liberation Mono", monospace;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-med: 260ms;
+  --dur-slow: 480ms;
+
+  /* ---- Layout ---- */
+  --sidebar-w: 240px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h: 64px;
+
+  /* ---- Glass card recipe (default: DARK) ---- */
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-bg-strong: rgba(255, 255, 255, 0.14); /* data-dense areas */
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-border-strong: rgba(255, 255, 255, 0.26);
+  --glass-blur: blur(20px) saturate(140%);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  --glass-shadow-soft: 0 4px 18px rgba(0, 0, 0, 0.18);
+
+  /* ---- Text ---- */
+  --text-1: rgba(255, 255, 255, 0.92);
+  --text-2: rgba(255, 255, 255, 0.6);
+  --text-3: rgba(255, 255, 255, 0.35);
+
+  /* ---- Brand gradient (purple → cyan) ---- */
+  --brand-a: #8b5cf6;
+  --brand-b: #22d3ee;
+  --brand-grad: linear-gradient(135deg, var(--brand-a) 0%, var(--brand-b) 100%);
+  --brand-grad-soft: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.85),
+    rgba(34, 211, 238, 0.85)
+  );
+
+  /* ---- Semantic / status colours ---- */
+  --ok: #34d399;      /* success - green */
+  --info: #60a5fa;    /* running  - blue  */
+  --wait: #fbbf24;    /* queued   - orange*/
+  --err: #f87171;     /* failed   - red   */
+  --iso: #fb7185;     /* isolated - rose  */
+  --queued: #9ca3af;  /* pending  - grey  */
+  --m-code: #22d3ee;  /* verifying- cyan  */
+  --m-upload: #a78bfa;/* uploading- purple*/
+
+  /* ---- Dark ambient background layers ---- */
+  --bga-1: rgba(124, 58, 237, 0.55);
+  --bga-2: rgba(37, 99, 235, 0.5);
+  --bga-3: rgba(34, 211, 238, 0.42);
+  --bga-4: rgba(236, 72, 153, 0.32);
+  --bg-canvas: #0b0b14;
+
+  /* ---- Chart theming (matches glass) ---- */
+  --chart-grid: rgba(255, 255, 255, 0.08);
+  --chart-tick: rgba(255, 255, 255, 0.42);
+  --chart-tooltip-bg: rgba(20, 20, 32, 0.82);
+  --chart-tooltip-border: rgba(255, 255, 255, 0.16);
+
+  --sidebar-active-bg: rgba(255, 255, 255, 0.1);
+  --hover-bg: rgba(255, 255, 255, 0.07);
+  --focus-ring: rgba(139, 92, 246, 0.55);
+  --scrollbar: rgba(255, 255, 255, 0.18);
+}
+
+/* ---------------- LIGHT THEME ---------------- */
+[data-theme="light"] {
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-bg-strong: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(40, 40, 90, 0.14);
+  --glass-border-strong: rgba(40, 40, 90, 0.24);
+  --glass-shadow: 0 8px 32px rgba(40, 40, 90, 0.14);
+  --glass-shadow-soft: 0 4px 18px rgba(40, 40, 90, 0.08);
+
+  --text-1: rgba(20, 22, 40, 0.92);
+  --text-2: rgba(20, 22, 40, 0.6);
+  --text-3: rgba(20, 22, 40, 0.35);
+
+  --bga-1: rgba(147, 111, 245, 0.5);
+  --bga-2: rgba(96, 165, 250, 0.45);
+  --bga-3: rgba(103, 232, 249, 0.4);
+  --bga-4: rgba(244, 114, 182, 0.3);
+  --bg-canvas: #e9eaf5;
+
+  --chart-grid: rgba(40, 40, 90, 0.1);
+  --chart-tick: rgba(40, 40, 90, 0.5);
+  --chart-tooltip-bg: rgba(255, 255, 255, 0.9);
+  --chart-tooltip-border: rgba(40, 40, 90, 0.2);
+
+  --sidebar-active-bg: rgba(255, 255, 255, 0.6);
+  --hover-bg: rgba(40, 40, 90, 0.06);
+  --focus-ring: rgba(139, 92, 246, 0.45);
+  --scrollbar: rgba(40, 40, 90, 0.22);
+}

@@ -1,0 +1,318 @@
+{% extends "base.html" %}
+{% block title %}日志中心 · TG 归档台{% endblock %}
+{% block page_id %}logs{% endblock %}
+{% block active_nav %}logs{% endblock %}
+{% block page_title %}日志中心{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">实时输出 · SSE</span>{% endblock %}
+
+{% block content %}
+<div x-data="logConsole()" x-init="init()">
+  <div class="page-header">
+    <div>
+      <h1>日志中心</h1>
+      <p>实时运行日志 · SSE 实时推送</p>
+    </div>
+    <div class="row">
+      <button class="btn" @click="paused=!paused" :title="paused ? '点击继续实时滚动' : '点击暂停实时滚动'">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <use :href="paused ? '#ic-play' : '#ic-pause'" href="#ic-pause"/>
+        </svg>
+        <span x-text="paused ? '继续滚动' : '暂停滚动'">暂停滚动</span>
+      </button>
+      <a class="btn" href="/api/logs.txt" download title="导出服务端日志缓冲（最近 1000 条）">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+        下载日志文件
+      </a>
+    </div>
+  </div>
+
+  <!-- 归档异常智能归类与一键批量重试看板 -->
+  <div class="card pad-md mb-4 archive-failure-card" id="archiveFailureCard" x-data="archiveFailurePanel()" x-init="load()" x-show="total > 0" style="display:none;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.22);border-radius:var(--radius-lg);margin-bottom:var(--space-4);">
+    <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:20px;">🚨</span>
+        <div>
+          <div style="font-weight:600;font-size:14px;color:var(--text-1);">
+            归档异常告警中心 · 存在 <span class="tnum" style="color:var(--err);font-weight:700;" x-text="total">0</span> 个转存失败任务
+          </div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px;">
+            可按错误类别快捷排查，或执行一键批量重试
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn sm danger" :disabled="busy || !retryableCount" @click="retryAll()" title="重新调度所有失败的归档任务（本地文件已丢失的不可重试）">
+          <span x-show="busy" class="spinner"></span>
+          <span x-show="!busy" x-text="retryableCount ? '⚡ 一键重试全部失败任务' : '无可重试任务'">⚡ 一键重试全部失败任务</span>
+          <span x-show="busy">正在重新调度…</span>
+        </button>
+        <button type="button" class="btn sm ghost" :disabled="busy" @click="load()" title="刷新异常列表">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 错误分类统计胶囊 -->
+    <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap;">
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='all'?'active':''" @click="setCategory('all')">
+        全部 (<span x-text="total"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='token_expired'?'active':''" @click="setCategory('token_expired')" x-show="categories.token_expired > 0">
+        🔑 鉴权过期 (<span x-text="categories.token_expired"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='storage_full'?'active':''" @click="setCategory('storage_full')" x-show="categories.storage_full > 0">
+        💾 容量超限 (<span x-text="categories.storage_full"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='conflict'?'active':''" @click="setCategory('conflict')" x-show="categories.conflict > 0">
+        ⚠️ 文件冲突 (<span x-text="categories.conflict"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='timeout'?'active':''" @click="setCategory('timeout')" x-show="categories.timeout > 0">
+        🌐 网络超时 (<span x-text="categories.timeout"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='unknown'?'active':''" @click="setCategory('unknown')" x-show="categories.unknown > 0">
+        ❓ 未知异常 (<span x-text="categories.unknown"></span>)
+        ❓ 未知异常 (<span x-text="categories.unknown"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='source_missing'?'active':''" @click="setCategory('source_missing')" x-show="categories.source_missing > 0">
+        🗑️ 本地文件已丢失 (<span x-text="categories.source_missing"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='remote_changed'?'active':''" @click="setCategory('remote_changed')" x-show="categories.remote_changed > 0">
+        🔄 云端文件已变动 (<span x-text="categories.remote_changed"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='remote_missing'?'active':''" @click="setCategory('remote_missing')" x-show="categories.remote_missing > 0">
+        🔍 云端对象不存在 (<span x-text="categories.remote_missing"></span>)
+      </button>
+    </div>
+
+    <!-- 失败任务明细 -->
+    <div class="failure-list" style="margin-top:12px;max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
+      <template x-for="j in filteredJobs" :key="j.id">
+        <div class="failure-item-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-2);border-radius:var(--radius-sm);font-size:12px;gap:8px;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-weight:500;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="j.filename"></div>
+            <div style="color:var(--err);margin-top:2px;font-size:11px;" x-text="j.categoryLabel + ' · ' + j.error"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            <span class="sub tnum" x-text="j.size"></span>
+            <button type="button" class="btn xs ghost" :disabled="j.retryable === false"
+                    :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : '单项重试'"
+                    @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : '重试'">重试</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="card" style="margin-bottom:var(--space-5);">
+    <div class="row" style="gap:var(--space-3);flex-wrap:wrap;">
+      <div class="field" style="margin:0;">
+        <label>级别</label>
+        <div class="row" style="gap:10px;align-items:center;">
+          <label class="row" style="gap:6px;font-size:13px;color:var(--text-2);cursor:pointer;user-select:none;">
+            <input type="checkbox" class="check" x-model="filterLevels.INFO" checked>
+            <span class="lbadge lv lv-info">INFO</span>
+          </label>
+          <label class="row" style="gap:6px;font-size:13px;color:var(--text-2);cursor:pointer;user-select:none;">
+            <input type="checkbox" class="check" x-model="filterLevels.WARN" checked>
+            <span class="lbadge lv lv-warn">WARN</span>
+          </label>
+          <label class="row" style="gap:6px;font-size:13px;color:var(--text-2);cursor:pointer;user-select:none;">
+            <input type="checkbox" class="check" x-model="filterLevels.ERROR" checked>
+            <span class="lbadge lv lv-error">ERROR</span>
+          </label>
+          <div class="row" style="gap:4px;margin-left:4px;">
+            <button type="button" class="btn xs ghost" style="padding:2px 8px;font-size:11px;height:24px;" @click="toggleAllLevels(true)">全选</button>
+            <button type="button" class="btn xs ghost" style="padding:2px 8px;font-size:11px;height:24px;" @click="toggleAllLevels(false)">清空</button>
+          </div>
+        </div>
+      </div>
+      <div class="field" style="margin:0;flex:1;min-width:140px;">
+        <label>任务 ID</label>
+        <div class="row" style="position:relative;">
+          <input class="input" x-model="taskId" placeholder="过滤任务 ID，留空显示全部" style="padding-right:28px;">
+          <button type="button" class="icon-btn xs" x-show="taskId" @click="taskId=''" title="清除任务过滤"
+                  style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:22px;height:22px;border:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="field" style="margin:0;flex:2;min-width:180px;">
+        <label>关键词</label>
+        <div class="row" style="position:relative;">
+          <input class="input" x-model="keyword" placeholder="包含关键词，如 floodwait / 隔离" style="padding-right:28px;">
+          <button type="button" class="icon-btn xs" x-show="keyword" @click="keyword=''" title="清除关键词"
+                  style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:22px;height:22px;border:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log list（徽章化整齐行：扁平结构，无嵌套 template，稳定高效） -->
+  <div class="log-list" x-ref="term" @scroll="onScroll" aria-live="polite">
+    <template x-for="(l, i) in visibleLines" :key="'lg'+i">
+      <div class="lrow" x-show="l.ok">
+        <span class="ltime" x-text="l.time"></span>
+        <span class="lbadge lv" :class="'lv-' + (l.level||'info').toLowerCase()" x-text="l.level"></span>
+        <span class="lbadge trace" x-show="l.taskId" x-text="'#' + l.taskId" @click="taskId=l.taskId" :title="'点击按此任务 ID 过滤：' + l.taskId"></span>
+        <span class="lbadge method" x-show="l.method" x-text="l.method"></span>
+        <span class="lbadge" :class="l.statusCls" x-show="l.status" x-text="l.status"></span>
+        <span class="lbadge dur" x-show="l.dur" x-text="l.dur"></span>
+        <span class="lmsg" x-text="l.msg"></span>
+      </div>
+    </template>
+    <div class="lempty" x-show="visibleCount === 0">
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text-2);">暂无匹配的运行日志</div>
+      <div style="font-size:12px;" x-show="!filterLevels.INFO && !filterLevels.WARN && !filterLevels.ERROR">
+        已取消勾选全部级别，请点击上方「全选」或勾选对应级别。
+      </div>
+      <div style="font-size:12px;" x-show="filterLevels.INFO || filterLevels.WARN || filterLevels.ERROR">
+        等待新的日志输出，或尝试清空任务 ID / 关键词过滤项。
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  // 日志装饰：从消息文本提取 HTTP 方法/状态码/耗时等片段扁平输出为徽章，
+  // 其余原文保留（截图风格：级别灰、请求标识浅蓝、状态码浅绿、方法浅灰）。
+  function __decorateLog(l) {
+    var cached = l._dec;
+    if (cached && cached.raw === l.msg && cached.tid === l.taskId) return cached;
+    var msg = String(l.msg || '');
+    var method = null, status = null, statusCls = null, dur = null;
+
+    var MethodRe = /(?:^|["\s])(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b/;
+    // 状态码只认明确上下文（HTTP/1.1 200、'401 Unauthorized'、status=/code=），不误判任务 ID 或字节数
+    var StatusRe = /(?:HTTP\/\d(?:\.\d)?\s*|status\s*[=:]\s*|code\s*[=:]\s*|"|')([1-5]\d{2})(?![#\d])/;
+    var DurRe = /\b(\d+(?:\.\d+)?)\s*(ms|毫秒|s|秒|分钟|min)\b/;
+
+    var m = msg.match(MethodRe);
+    if (m) { method = m[1]; msg = msg.replace(MethodRe, ' '); }
+
+    m = msg.match(StatusRe);
+    if (m) {
+      status = m[1];
+      var code = parseInt(m[1], 10);
+      statusCls = code >= 500 ? 'st5' : (code >= 400 ? 'st4' : (code >= 300 ? 'st3' : 'st2'));
+      msg = msg.replace(StatusRe, ' ');
+    }
+
+    m = msg.match(DurRe);
+    if (m) { dur = m[1] + m[2]; msg = msg.replace(DurRe, ' '); }
+
+    msg = msg.replace(/\s+/g, ' ').replace(/\s+[·|]\s+/g, ' · ').trim();
+    l._dec = { raw: l.msg, tid: l.taskId, method: method, status: status, statusCls: statusCls, dur: dur, msg: msg };
+    return l._dec;
+  }
+
+  window.logConsole = function () {
+    return {
+      lines: [],
+      // 级别过滤：独立布尔值绑定，点进页面 100% 自动全选勾选，根除多选数组绑定脱靶问题
+      filterLevels: {
+        INFO: true,
+        WARN: true,
+        ERROR: true
+      },
+      taskId: '',
+      keyword: '',
+      paused: false,
+      pinned: true,
+      ss: null,
+      counter: 0,
+      init: function () {
+        var self = this;
+        // 种子数据：从后端真实恢复的记录注入
+        var seed = {{ seed_logs | tojson }};
+        if (Array.isArray(seed)) {
+          seed.forEach(function (l) {
+            self.lines.push({
+              level: l.level || 'INFO',
+              msg: l.msg || '',
+              taskId: l.taskId || '',
+              time: l.time || '—'
+            });
+          });
+        }
+        // SSE 流：从服务端当前游标断点续传，重连时动态获取最新 since 游标，不重播已下发历史
+        var sinceSeq = {{ logs_last_seq | default(0) }};
+        if (window.__openSSE) {
+          self.ss = window.__openSSE(function () {
+            return '/sse/logs?since=' + sinceSeq;
+          }, function (d) {
+            if (d && typeof d.seq === 'number') {
+              sinceSeq = Math.max(sinceSeq, d.seq);
+            }
+            if (self.paused) return;
+            self.lines.push(self.__mk(d.level, d.msg, d.taskId));
+            if (self.lines.length > 500) self.lines.splice(0, self.lines.length - 500);
+            self.__scroll(true);
+          });
+        }
+        this.__scroll(true);
+      },
+      toggleAllLevels: function (checked) {
+        this.filterLevels.INFO = !!checked;
+        this.filterLevels.WARN = !!checked;
+        this.filterLevels.ERROR = !!checked;
+      },
+      __mk: function (level, msg, taskId) {
+        var d = new Date();
+        function p(n){ return (n < 10 ? '0' : '') + n; }
+        var time = p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+        return { level: level || 'INFO', msg: msg || '', taskId: taskId || '', time: time };
+      },
+      __scroll: function (force) {
+        var t = this.$refs.term;
+        if (!t) return;
+        if (this.pinned === false && !force) return;
+        this.$nextTick(function () { t.scrollTop = t.scrollHeight; });
+      },
+      onScroll: function () {
+        var t = this.$refs.term;
+        if (!t) return;
+        var dist = t.scrollHeight - t.scrollTop - t.clientHeight;
+        this.pinned = dist < 40;
+      },
+      get visibleLines() {
+        var self = this;
+        return this.lines.map(function (l) {
+          var ok = !!self.filterLevels[l.level];
+          if (self.taskId && String(l.taskId).indexOf(self.taskId) < 0) ok = false;
+          if (self.keyword && String(l.msg).toLowerCase().indexOf(self.keyword.toLowerCase()) < 0) ok = false;
+          var dec = __decorateLog(l);
+          return {
+            level: l.level,
+            taskId: l.taskId,
+            time: l.time,
+            method: dec.method,
+            status: dec.status,
+            statusCls: dec.statusCls,
+            dur: dec.dur,
+            msg: dec.msg,
+            ok: ok
+          };
+        });
+      },
+      get visibleCount() {
+        var self = this;
+        var cnt = 0;
+        for (var i = 0; i < this.lines.length; i++) {
+          var l = this.lines[i];
+          if (!self.filterLevels[l.level]) continue;
+          if (self.taskId && String(l.taskId).indexOf(self.taskId) < 0) continue;
+          if (self.keyword && String(l.msg).toLowerCase().indexOf(self.keyword.toLowerCase()) < 0) continue;
+          cnt++;
+        }
+        return cnt;
+      }
+    };
+  };
+</script>
+{% endblock %}

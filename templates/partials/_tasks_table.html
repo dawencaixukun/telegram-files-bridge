@@ -1,0 +1,205 @@
+{% from "partials/_macros.html" import pill %}
+{% set _ACTIVE_STATUSES = ['download', 'upload', 'verify', 'pending', 'waiting_disk'] %}
+{% set _has_active = tasks | selectattr('status', 'in', _ACTIVE_STATUSES) | list | length %}
+<div id="tasksTable" data-refresh="{{ '1' if _has_active else '0' }}">
+  {% if submit_error %}
+  <div class="alert error" style="margin-bottom:16px;">
+    <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-alert"/></svg>
+    <div>提交失败：{{ submit_error }}</div>
+  </div>
+  {% elif submit_ok %}
+  <div class="alert ok" style="margin-bottom:16px;">
+    <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+    <div>已提交 {{ submit_ok }} 个文件到下载队列</div>
+  </div>
+  {% endif %}
+  <div class="card pad-lg">
+    <div class="card-head">
+      <h2 class="card-title">任务列表</h2>
+      <span class="card-sub">{{ tasks|length }} 条</span>
+    </div>
+    <div class="table-wrap">
+      {% if tasks %}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px;"><input type="checkbox" class="check" aria-label="全选" onclick="document.querySelectorAll('.task-check').forEach(c=>c.checked=this.checked)"></th>
+            <th>时间</th>
+            <th>来源</th>
+            <th>文件名</th>
+            <th>大小</th>
+            <th style="min-width:160px;">阶段</th>
+            <th style="width:120px;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tasks %}
+          <tr class="clickable-row" data-task-id="{{ t.id }}" onclick="window.__toggleTask(this)">
+            <td onclick="event.stopPropagation()"><input type="checkbox" class="check task-check" aria-label="选择任务 {{ t.id }}"></td>
+            <td>{{ t.time }}</td>
+            <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
+            <td><a class="link" href="/tasks/{{ t.id }}" onclick="event.stopPropagation()">{{ t.filename }}</a></td>
+            <td>{{ t.size }}</td>
+            <td>
+              {% if t.status in ('download', 'upload') %}
+                {# 进度条口径必须与状态一致：下载中显示下载进度，归档中显示上传进度。
+                   历史上这里恒写「已下载」，把归档上传的 6% 说成「已下载 6%」，
+                   用户会以为文件没下载完 / 下载失败。 #}
+                <div>
+                  <div class="progress {{ 'blue' if t.status=='download' else 'purple' }}">
+                    <span style="width:{{ t.progress }}%"></span>
+                  </div>
+                  <div class="progress-meta">
+                    {# progress_label 由后端按进度口径给出；未富化的渲染方（如预览服务器）
+                       回退为按状态推断，避免出现空标签或再次退化回「已下载」。 #}
+                    <span>{{ t.progress_label | default('已上传' if t.status == 'upload' else '已下载') }} {{ t.loaded }} · {{ t.size }}</span>
+                    <span>{% if t.speed_label %}<span class="tnum" title="实时下载速率（页面自动刷新）">{{ t.speed_label }}</span> · {% endif %}{{ t.progress }}%</span>
+                  </div>
+                </div>
+              {% elif t.status == 'waiting_disk' %}
+                <div>
+                  <span class="pill warn" title="{{ t.error_msg or '本地磁盘使用率超 85%，任务已安全挂起，回落至 75% 自动恢复调度' }}"><span class="p-dot"></span>磁盘挂起</span>
+                  <div class="sub" style="margin-top:4px;color:var(--wait);font-size:12px;">{{ t.error_msg or '等待磁盘空间释放' }}</div>
+                </div>
+              {% else %}
+                {{ pill(t.status) }}
+                {% if t.status == 'failed' %}<span class="sub" style="margin-top:4px;">{{ t.error_msg }}</span>{% endif %}
+              {% endif %}
+            </td>
+            <td>
+              <div class="row-actions" onclick="event.stopPropagation()">
+                {% if t.status in ('failed','isolated','pending','waiting_disk') %}
+                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
+                {% endif %}
+                {% if t.status in ('pending','download','upload','verify','waiting_disk') %}
+                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
+                {% endif %}
+                <a class="icon-btn xs" aria-label="详情" title="详情" href="/tasks/{{ t.id }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg></a>
+              </div>
+            </td>
+          </tr>
+          <tr id="task-{{ t.id }}" style="display:none;">
+            <td colspan="7" style="background:var(--hover-bg);">
+              <div style="padding:8px 12px;">
+                <div class="detail-grid" style="grid-template-columns:repeat(2,1fr);gap:16px;">
+                  <div><div class="plabel">本地路径</div><span class="pvalue" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.local_path }}</span></div>
+                  <div><div class="plabel">来源链接</div>{% if t.source_url %}<a class="link" href="{{ t.source_url }}" target="_blank" rel="noopener noreferrer" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.source_url }}</a>{% else %}<span class="pvalue">—</span>{% endif %}</div>
+                </div>
+                <div class="timeline" style="margin-top:16px;">
+                  {% for st in t.stages %}
+                  <div class="tl-item {% if st.state == 'idle' or (st.state is not defined and st.done == 'no') %}ghost{% endif %}{% if st.state == 'active' %} active{% endif %}">
+                    <div class="tl-title">{{ st.name }}</div>
+                    <div class="tl-time">{{ st.time }}<span class="tl-dur"> · {{ st.dur }}</span></div>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#ic-inbox"/></svg></div>
+        <h3>队列空闲</h3>
+        <p>当前没有匹配的任务，换个过滤条件试试。</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<script>
+  // 后端记录内部字段（uniqueId / telegramId），供重试/取消操作使用（htmx 局部刷新时同样生效）。
+  // 键用 _unique_id 字符串（稳定身份），避免 _stable_task_id 48 位哈希碰撞互相覆盖；
+  // 无 uniqueId 的记录退化为用显示 id 兜底，保持与历史行为兼容。
+  window.__TASK_META = window.__TASK_META || {};
+  {% for t in tasks %}
+  window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}] = { displayId: {{ t.id | tojson }}, uniqueId: {{ t._unique_id | tojson }}, telegramId: {{ t._telegram_id | tojson }} };
+  {% endfor %}
+</script>
+<script>
+  // 任务表格自动刷新（历史缺陷：下载速率/进度只在手动刷新整页时更新）。
+  // 策略：仅当本轮渲染存在进行中任务（data-refresh="1"）时启用 5s 轮询，
+  // 队列空闲自动停表，避免空转打后端。
+  // swap 前记录展开行与勾选项，swap 后恢复——否则每 5 秒用户的展开/勾选被重置。
+  (function () {
+    var box = document.getElementById('tasksTable');
+    if (!box) return;
+    var TIMER_KEY = '__tasksPollTimer';
+
+    function captureState() {
+      var open = [], checked = [];
+      document.querySelectorAll('tr[id^="task-"]').forEach(function (r) {
+        if (r.style.display !== 'none') open.push(r.id);
+      });
+      document.querySelectorAll('.task-check:checked').forEach(function (c) {
+        var row = c.closest('tr[data-task-id]');
+        if (row) checked.push(row.getAttribute('data-task-id'));
+      });
+      return { open: open, checked: checked };
+    }
+
+    function restoreState(st) {
+      (st.open || []).forEach(function (id) {
+        var r = document.getElementById(id);
+        if (r) r.style.display = '';
+      });
+      (st.checked || []).forEach(function (tid) {
+        var row = document.querySelector('tr[data-task-id="' + tid + '"]');
+        var cb = row && row.querySelector('.task-check');
+        if (cb) cb.checked = true;
+      });
+    }
+
+    function pollOnce() {
+      // 筛选表单走 htmx hx-get，不会写地址栏；轮询必须手动带上当前筛选值，
+      // 否则自动刷新一轮就把用户选的「状态/来源/日期」过滤清掉了。
+      var params = new URLSearchParams();
+      var form = document.querySelector('form[hx-get="/partials/tasks"]');
+      if (form) {
+        form.querySelectorAll('input[name], select[name]').forEach(function (el) {
+          if (!el.name) return;
+          if (el.type === 'checkbox' && !el.checked) return;
+          if (el.value) params.set(el.name, el.value);
+        });
+      }
+      var qs = params.toString();
+      var url = '/partials/tasks' + (qs ? '?' + qs : '');
+      var st = captureState();
+      if (window.htmx) {
+        htmx.ajax('GET', url, { target: '#tasksTable', swap: 'outerHTML' })
+          .then(function () { restoreState(st); });
+      }
+    }
+
+    function schedule() {
+      if (window[TIMER_KEY]) clearTimeout(window[TIMER_KEY]);
+      window[TIMER_KEY] = setTimeout(function () {
+        pollOnce();
+        // swap 完成后新容器重新评估是否继续轮询
+        schedule();
+      }, 5000);
+    }
+
+    // 启动入口：本容器声明有活跃任务才开表
+    if (box.getAttribute('data-refresh') === '1') {
+      schedule();
+    }
+    // htmx 局部刷新换了新容器：按新容器标记重置定时器（活跃→继续，空闲→停）
+    document.body.addEventListener('htmx:afterSwap', function (evt) {
+      var nb = document.getElementById('tasksTable');
+      if (!nb) return;
+      if (nb.getAttribute('data-refresh') === '1') {
+        schedule();
+      } else if (window[TIMER_KEY]) {
+        clearTimeout(window[TIMER_KEY]);
+        window[TIMER_KEY] = null;
+      }
+    });
+    // 离开页面停表
+    if (window.__pageOnLeave) window.__pageOnLeave(function () {
+      if (window[TIMER_KEY]) { clearTimeout(window[TIMER_KEY]); window[TIMER_KEY] = null; }
+    });
+  })();
+</script>

@@ -1,0 +1,81 @@
+{# ====================================================================
+   _archive_modal.html — 本地在存「一键归档到 OpenList」弹窗
+   目标目录 = 原生 select 风格下拉：点击路径框(或右侧 ▾)展开面板，
+   从 OpenList 根目录逐级浏览多个挂载网盘，面包屑可回跳；
+   「使用当前目录」确认，默认记住上次选择（localStorage）。
+   数据源 GET /openlist/dirs；提交 POST /archive/start（前端统一 CSRF）。
+   ==================================================================== #}
+<div class="modal-backdrop" id="archiveBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="归档到云端">
+    <div class="modal-head">
+      <h2>归档到云端</h2>
+      <button type="button" class="icon-btn xs" aria-label="关闭" onclick="window.__closeArchive()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <form id="archiveForm" onsubmit="window.__startArchive(event)">
+      <div class="field">
+        <label>文件</label>
+        <div id="archFileName" style="font-weight:600;font-size:14px;word-break:break-all;"></div>
+        <div class="hint" id="archFileMeta"></div>
+      </div>
+
+      <div class="field">
+        <label for="archDirInput">目标目录（OpenList）</label>
+        <div class="arch-dir-field">
+          <input class="input" id="archDirInput" readonly placeholder="点击选择目标目录"
+                 onclick="window.__archToggle()">
+          <button type="button" class="arch-dir-arrow" id="archDirArrow"
+                  aria-label="浏览目录" onclick="window.__archToggle()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
+          </button>
+          <div class="arch-dropdown" id="archDropdown" style="display:none;">
+            <div class="arch-crumb" id="archCrumb"></div>
+            <div class="arch-dir-list" id="archDirList"></div>
+            <div class="arch-drop-foot">
+              <span class="hint" id="archEmptyHint" style="display:none;">此目录下没有子目录</span>
+              <span style="flex:1;"></span>
+              <button type="button" class="btn sm primary" onclick="window.__archPick()">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+                使用当前目录
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="hint">点 ▾ 浏览各挂载网盘，逐级进入；会记住上次使用的位置</div>
+      </div>
+
+      <div class="field">
+        <label>重名处理</label>
+        <div class="row" style="gap:var(--space-4);">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="radio" name="archPolicy" value="overwrite" checked> 覆盖
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+            <input type="radio" name="archPolicy" value="skip"> 跳过已存在
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="archDeleteLocal" name="archDeleteLocal" class="check"
+                 onchange="window.__archDelLocalTouch(this)">
+          <span style="font-weight:600;">归档成功后自动删除本地原文件</span>
+        </label>
+        <div class="hint">云端转存成功后安全清理本地磁盘释放空间；归档失败或取消时保留本地文件。</div>
+      </div>
+
+      <div class="hint" id="archLoginState" style="margin-bottom:var(--space-3);">正在检查 OpenList 登录态…</div>
+
+      <div class="modal-foot">
+        <button type="button" class="btn ghost" onclick="window.__closeArchive()">取消</button>
+        <button type="submit" class="btn primary">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-cloud"/></svg>
+          开始归档
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,53 @@
+{# ====================================================================
+   _macros.html — Reusable Jinja snippets
+   ==================================================================== #}
+
+{% macro pill(status) -%}
+  {%- set map = {
+    'pending':    ('pending',    '待处理'),
+    'download':   ('download',   '下载中'),
+    'downloaded': ('downloaded', '已下载'),
+    'verify':     ('verify',     '校验中'),
+    'upload':     ('upload',     '归档中'),
+    'archived':   ('archived',   '已归档'),
+    'isolated':   ('isolated',   '隔离'),
+    'failed':     ('failed',     '失败'),
+  } -%}
+  {%- set m = map.get(status, ('pending', status)) -%}
+  <span class="pill {{ m[0] }}"><span class="p-dot"></span>{{ m[1] }}</span>
+{%- endmacro %}
+
+{% macro file_pill(status) -%}
+  {# FileRecord.downloadStatus 真实枚举：idle/downloading/paused/completed/error #}
+  {%- set map = {
+    'idle':       ('pending',  '未下载'),
+    'downloading':('download', '下载中'),
+    'paused':     ('paused',   '已暂停'),
+    'completed':  ('archived', '已完成'),
+    'error':      ('failed',   '失败'),
+  } -%}
+  {%- set m = map.get(status, ('pending', status)) -%}
+  <span class="pill {{ m[0] }}"><span class="p-dot"></span>{{ m[1] }}</span>
+{%- endmacro %}
+
+{% macro cluster_pill(status) -%}
+  {%- set map = {
+    'pending':      ('pending',  '待处理'),
+    'downloading':  ('download', '下载中'),
+    'verifying':    ('verify',   '校验中'),
+    'uploading':    ('upload',   '上传中'),
+    'downloaded':   ('verify',   '下载完成'),
+    'archived':     ('archived', '已归档'),
+    'isolated':     ('isolated', '隔离'),
+    'failed':       ('failed',   '失败'),
+  } -%}
+  {%- set m = map.get(status, ('pending', status)) -%}
+  <span class="pill {{ m[0] }}"><span class="p-dot"></span>{{ m[1] }}</span>
+{%- endmacro %}
+
+{% macro state_dot(status) -%}
+  {%- if status == 'ok' -%}<span class="pill ok" style="color:var(--ok);background:rgba(52,211,153,.16)"><span class="p-dot"></span>正常</span>
+  {%- elif status == 'warn' -%}<span class="pill" style="color:var(--wait);background:rgba(251,191,36,.16)"><span class="p-dot"></span>未登录</span>
+  {%- else -%}<span class="pill" style="color:var(--err);background:rgba(248,113,113,.16)"><span class="p-dot"></span>失效</span>
+  {%- endif -%}
+{%- endmacro %}

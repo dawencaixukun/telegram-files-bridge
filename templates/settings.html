@@ -1,0 +1,723 @@
+{% extends "base.html" %}
+{% block title %}设置 · TG 归档台{% endblock %}
+{% block page_id %}settings{% endblock %}
+{% block active_nav %}settings{% endblock %}
+{% block page_title %}设置{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">设置 · 配置热更新</span>{% endblock %}
+
+{% block content %}
+<div x-data="settingsForm()" x-init="init()" style="max-width:840px;">
+  <div class="page-header">
+    <div>
+      <h1>设置</h1>
+      <p>系统运行参数配置（写入后端数据库，实时生效）</p>
+    </div>
+  </div>
+
+  <!-- Download: real backend keys -->
+  <div class="card pad-lg mb-4">
+    <div class="card-head"><h2 class="card-title">下载</h2></div>
+    <div class="grid g-2">
+      <div class="field">
+        <label>自动下载并发上限（autoDownloadLimit）</label>
+        <input class="input num" type="number" min="1" max="20" x-model.number="form.autoDownloadLimit">
+        <div class="hint">单个 Telegram 账号同时进行的下载任务数</div>
+      </div>
+      <div class="field">
+        <label>仅下载唯一文件（uniqueOnly）</label>
+        <div class="row" style="gap:10px;">
+          <label class="row" style="gap:10px;">
+            <span class="switch"><input type="checkbox" x-model="form.uniqueOnly"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">跳过已存在的重复文件</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Display: real backend keys -->
+  <div class="card pad-lg mb-4">
+    <div class="card-head"><h2 class="card-title">显示与预览</h2></div>
+    <div class="grid g-2">
+      <div class="field">
+        <label>自动加载缩略图（thumbnailAutoLoad）</label>
+        <div class="row" style="gap:10px;">
+          <label class="row" style="gap:10px;">
+            <span class="switch"><input type="checkbox" x-model="form.thumbnailAutoLoad"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">文件列表直接显示预览图</span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>显示敏感内容标记（showSensitiveContent）</label>
+        <div class="row" style="gap:10px;">
+          <label class="row" style="gap:10px;">
+            <span class="switch"><input type="checkbox" x-model="form.showSensitiveContent"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">在列表中标记敏感媒体</span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>隐藏已删除媒体（alwaysHide）</label>
+        <div class="row" style="gap:10px;">
+          <label class="row" style="gap:10px;">
+            <span class="switch"><input type="checkbox" x-model="form.alwaysHide"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">始终隐藏已删除/敏感媒体</span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>平均速度统计窗口（avgSpeedInterval，秒）</label>
+        <input class="input num" type="number" min="30" max="3600" x-model.number="form.avgSpeedInterval">
+        <div class="hint">下载速度的平滑统计区间，默认 300 秒</div>
+      </div>
+      <div class="field">
+        <label>速度单位（speedUnits）</label>
+        <select class="select" x-model="form.speedUnits">
+          <option value="bits">bits（bit/s）</option>
+          <option value="bytes">bytes（B/s）</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password (real backend /auth/password) -->
+  <div class="card pad-lg mb-4">
+    <div class="card-head"><h2 class="card-title">修改管理台密码</h2></div>
+    <div class="field">
+      <label>旧密码</label>
+      <input class="input" type="password" x-model="pwd.old" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="grid g-2">
+      <div class="field"><label>新密码</label><input class="input" type="password" x-model="pwd.new" placeholder="至少 8 位" autocomplete="new-password"></div>
+      <div class="field"><label>确认新密码</label><input class="input" type="password" x-model="pwd.confirm" placeholder="再次输入" autocomplete="new-password"></div>
+    </div>
+  </div>
+
+  <!-- OpenList: 登录仅通过 OpenList API（服务端调 /api/auth/login 验证） -->
+  <div class="card pad-lg mb-4" x-data="openlistCard()" x-init="load()">
+    <div class="card-head" style="justify-content:space-between;">
+      <h2 class="card-title">OpenList 云端存储</h2>
+      <span class="pill" :class="st.loggedIn ? (st.verified ? 'archived' : 'failed') : 'pending'">
+        <span class="p-dot"></span>
+        <span x-text="st.loading ? '检查中…' : (st.loggedIn ? (st.verified ? '已连接' : '令牌失效') : '未登录')">检查中…</span>
+      </span>
+    </div>
+    <div class="grid g-3">
+      <div class="field">
+        <label for="openlistBaseUrl">服务器地址（URL）</label>
+        <input id="openlistBaseUrl" class="input" type="url" x-model="form.baseUrl" placeholder="http://127.0.0.1:5244" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="openlistUsername">用户名</label>
+        <input id="openlistUsername" class="input" type="text" x-model="form.username" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="openlistPassword">密码</label>
+        <input id="openlistPassword" class="input" type="password" x-model="form.password" placeholder="••••••••" autocomplete="new-password">
+      </div>
+    </div>
+    <div class="hint" x-show="st.loggedIn" style="margin-top:6px;">
+      当前连接：<b x-text="st.baseUrl || 'http://127.0.0.1:5244'"></b> · 账号：<b x-text="st.username"></b>
+      <span x-show="st.verified"> · 令牌已经 OpenList API 验证<span x-show="st.loggedAt">（登录于 <span x-text="fmtTime(st.loggedAt)"></span>）</span></span>
+      <span x-show="!st.verified" style="color:var(--err);"> · <span x-text="st.message || '令牌已失效'"></span></span>
+    </div>
+    <div class="row" style="gap:10px;margin-top:16px;">
+      <button class="btn primary" style="min-width:120px;height:38px;padding:9px 18px;display:inline-flex;align-items:center;justify-content:center;" :disabled="busy" @click="login()">
+        <span x-show="busy" class="spinner"></span>
+        <span x-text="st.loggedIn ? '重新验证并登录' : '连接并登录'">连接并登录</span>
+      </button>
+      <button class="btn ghost" style="height:38px;padding:9px 18px;" x-show="st.loggedIn" :disabled="busy" @click="logout()">退出登录</button>
+    </div>
+  </div>
+
+  <!-- Session 备份与还原：真实快照列表 + 一键还原 -->
+  <div class="card pad-lg mb-4" x-data="sessionBackupCard()" x-init="load()">
+    <div class="card-head" style="justify-content:space-between;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <h2 class="card-title">Session 备份与还原</h2>
+        <span class="pill" :class="st.dotClass || 'warn'">
+          <span class="p-dot"></span>
+          <span x-text="st.label || '检查中…'">检查中…</span>
+        </span>
+      </div>
+      <span class="sub tnum" style="font-size:12px;color:var(--text-3);" x-text="st.lastBackupTime ? ('最近备份: ' + st.lastBackupTime) : '尚无备份'"></span>
+    </div>
+    <div class="alert info" style="margin-top:10px;padding:10px 14px;font-size:12px;" x-show="st.message">
+      <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-info"/></svg>
+      <span x-text="st.message"></span>
+    </div>
+    <div class="alert warn" style="margin-top:8px;padding:10px 14px;font-size:12px;" x-show="st.lastRestoreTime">
+      <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-clock"/></svg>
+      <span x-text="'最近还原: ' + st.lastRestoreTime + (st.lastRestoreName ? (' · ' + st.lastRestoreName) : '')"></span>
+    </div>
+
+    <!-- 云端备份目录：留空自动推导；也可指定任意网盘/子目录 -->
+    <div class="field" style="margin-top:14px;">
+      <label for="cfgBackupDir">云端备份目录（OpenList 路径）</label>
+      <div class="row" style="gap:8px;margin-top:6px;align-items:center;">
+        <input id="cfgBackupDir" class="input" type="text" style="flex:1;min-width:220px;"
+               x-model="bkDir" @keydown.enter="saveDir()"
+               placeholder="留空自动判断；也可填 /网盘名/子目录，例如 /onedrive/TG-Backups"
+               autocomplete="off" spellcheck="false">
+        <button class="btn ghost sm" style="flex-shrink:0;" :disabled="savingDir" @click="saveDir()"
+                x-text="savingDir ? '保存中…' : '保存目录'"></button>
+      </div>
+      <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap;" x-show="mounts.length">
+        <span class="sub" style="font-size:12px;color:var(--text-3);">可选网盘：</span>
+        <template x-for="m in mounts" :key="m">
+          <button type="button" class="pill" style="cursor:pointer;border:1px solid var(--glass-border);"
+                  @click="bkDir = '/' + m + '/TG-Backups'"
+                  x-text="'/' + m"></button>
+        </template>
+      </div>
+      <div class="hint" style="margin-top:6px;font-size:12px;"
+           x-text="dirSource ? ('当前生效：' + (remoteDir || '未确定') + '（' + dirSource + '）') : ''"></div>
+      <div class="alert warn" style="padding:8px 12px;font-size:12px;margin-top:6px;" x-show="needsConfig">
+        <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-alert"/></svg>
+        <span>检测到多个网盘但尚未指定备份目录，为避免把备份写到非预期的网盘，上传功能会保持关闭。请在上方指定其一并保存。</span>
+      </div>
+    </div>
+
+    <!-- 本地备份目录：留空自动推导；可指定任意绝对路径（独立磁盘/挂载卷） -->
+    <div class="field" style="margin-top:14px;">
+      <label for="cfgLocalBackupDir">本地备份目录（绝对路径）</label>
+      <div class="row" style="gap:8px;margin-top:6px;align-items:center;">
+        <input id="cfgLocalBackupDir" class="input" type="text" style="flex:1;min-width:220px;"
+               x-model="localDirInput" @keydown.enter="saveLocalDir()"
+               placeholder="留空自动推导；也可填绝对路径，例如 /mnt/backup/tg-session"
+               autocomplete="off" spellcheck="false">
+        <button class="btn ghost sm" style="flex-shrink:0;" :disabled="savingLocalDir" @click="saveLocalDir()"
+                x-text="savingLocalDir ? '保存中…' : '保存目录'"></button>
+      </div>
+      <div class="hint" style="margin-top:6px;font-size:12px;"
+           x-text="localDirResolved ? ('当前生效：' + localDirResolved + (localSource ? '（' + localSource + '）' : '')) : ''"></div>
+      <div class="alert warn" style="padding:8px 12px;font-size:12px;margin-top:6px;"
+           x-show="localDirResolved && !localWritable">
+        <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-alert"/></svg>
+        <span>该目录当前不可写，备份会失败。请检查路径权限或换一个目录。</span>
+      </div>
+    </div>
+
+    <!-- 真实快照列表：本地加密包 + 本地每日明文包 + OpenList 云端包 -->
+    <div style="margin-top:14px;" x-show="!loading">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px;">
+        <span class="sub" style="font-size:12px;color:var(--text-3);"
+              x-text="'可还原快照 ' + list.length + ' 份 · 本地 ' + localCount + ' · 云端 ' + remoteCount"></span>
+        <span class="sub" style="font-size:12px;color:var(--text-3);" x-show="remoteDir"
+              x-text="'云端目录 ' + remoteDir"></span>
+      </div>
+      <div class="alert warn" style="padding:8px 12px;font-size:12px;" x-show="remoteError">
+        <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-alert"/></svg>
+        <span x-text="'云端目录不可用：' + remoteError + '（仍可用本地快照还原）'"></span>
+      </div>
+      <div class="alert info" style="padding:8px 12px;font-size:12px;" x-show="!list.length && !remoteError">
+        <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-inbox"/></svg>
+        <span>尚未发现任何快照，点击「立即备份」生成第一份。</span>
+      </div>
+      <template x-for="it in list" :key="it.origin + ':' + it.name">
+        <div class="row" style="justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--glass-border);border-radius:10px;margin-bottom:6px;background:var(--glass-bg);">
+          <div style="min-width:0;flex:1;">
+            <div class="tnum" style="font-size:12.5px;word-break:break-all;" x-text="it.name"></div>
+            <div style="font-size:11.5px;color:var(--text-3);margin-top:2px;">
+              <span class="tnum" x-text="it.mtimeStr"></span>
+              <span> · </span><span class="tnum" x-text="it.sizeStr"></span>
+              <span> · </span><span x-text="it.origin === 'remote' ? 'OpenList 云端' : '本地'"></span>
+              <span> · </span><span x-text="it.encrypted ? '加密包' : '明文快照'"></span>
+              <span x-show="it.origin === 'remote' && it.alsoLocal"> · 本地也有</span>
+            </div>
+          </div>
+          <button class="btn ghost sm" style="flex-shrink:0;" :disabled="busy || restoring"
+                  @click="restore(it)" x-text="'还原此份'"></button>
+        </div>
+      </template>
+    </div>
+
+    <div class="row" style="gap:10px;margin-top:16px;">
+      <button class="btn primary" style="min-width:140px;height:38px;padding:9px 18px;display:inline-flex;align-items:center;justify-content:center;" :disabled="busy || restoring || needsConfig" @click="triggerBackup()">
+        <span x-show="busy" class="spinner"></span>
+        <svg x-show="!busy" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-upload"/></svg>
+        <span x-text="busy ? '正在生成快照并上传…' : '立即备份并上传'">立即备份并上传</span>
+      </button>
+      <button class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="busy || restoring" @click="triggerLocalBackup()"
+              title="只生成本地加密快照，不联网上传（适合未配置网盘或想落自备磁盘）">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg>
+        <span>仅本地备份</span>
+      </button>
+      <button class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="busy || restoring" @click="load()" title="刷新状态">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+        刷新
+      </button>
+      <span class="sub" style="font-size:12px;color:var(--text-3);display:inline-flex;align-items:center;gap:6px;" x-show="restoring">
+        <span class="spinner"></span> 正在还原（会短暂停写下载后端）…
+      </span>
+    </div>
+  </div>
+
+  <!-- 归档与自动转存：默认归档目录、自动归档开关、目录选择器 -->
+  <div class="card pad-lg mb-4" x-data="archiveSettingsCard()" x-init="load()">
+    <div class="card-head" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+      <div style="min-width:0;">
+        <h2 class="card-title" style="margin-bottom:2px;">归档与自动转存</h2>
+        <div class="hint">配置下载完成后的默认归档位置（OpenList 网盘目录）与自动转存规则</div>
+      </div>
+      <span class="pill" style="flex-shrink:0;margin-top:2px;" :class="cfg.autoArchive ? (cfg.defaultDir ? 'archived' : 'pending') : 'failed'">
+        <span class="p-dot"></span>
+        <span x-text="cfg.autoArchive ? (cfg.defaultDir ? '自动归档已开启' : '未指定默认目录') : '自动归档已关闭'"></span>
+      </span>
+    </div>
+
+    <div class="grid g-2">
+      <div class="field">
+        <label>下载完成自动归档</label>
+        <div class="row" style="gap:10px;margin-top:6px;">
+          <label class="row" style="gap:10px;cursor:pointer;">
+            <span class="switch"><input type="checkbox" x-model="cfg.autoArchive"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">任务下载完成后，自动排队上传至 OpenList 网盘</span>
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>归档成功后自动删除本地文件</label>
+        <div class="row" style="gap:10px;margin-top:6px;">
+          <label class="row" style="gap:10px;cursor:pointer;">
+            <span class="switch"><input type="checkbox" x-model="cfg.deleteLocal"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">文件成功上传至网盘后自动清理本地磁盘，释放存储空间</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid g-2" style="margin-top:14px;">
+      <div class="field">
+        <label for="cfgDefaultDir">默认归档位置（OpenList 网盘目录）</label>
+        <div class="arch-dir-field" style="position:relative;">
+          <input id="cfgDefaultDir" class="input" type="text" x-model="cfg.defaultDir"
+                 placeholder="输入或点击右侧 ▾ 选择，如 /阿里云盘/tg-archive" autocomplete="off" spellcheck="false">
+          <button type="button" class="arch-dir-arrow" :class="{ 'open': dirOpen }"
+                  aria-label="浏览目录" @click="toggleDir()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
+          </button>
+          <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'block' : 'none' }">
+            <div class="arch-crumb">
+              <template x-for="(seg, idx) in crumbList" :key="idx">
+                <span>
+                  <a href="javascript:void(0)" class="crumb-link" :class="{ 'cur': idx === crumbList.length - 1 }"
+                     @click="loadDir(seg.path)" x-text="seg.label"></a>
+                  <span class="crumb-sep" x-show="idx < crumbList.length - 1">/</span>
+                </span>
+              </template>
+            </div>
+            <div class="arch-dir-list" style="max-height:220px;overflow-y:auto;">
+              <div class="arch-dir-row arch-up-row" x-show="browsePath && browsePath !== '/'"
+                   style="color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;"
+                   @click="goUpDir()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(90deg);"><use href="#ic-chevron"/></svg>
+                <span class="d-name">⮬ 返回上一级</span>
+              </div>
+              <template x-for="d in dirs" :key="d.path">
+                <div class="arch-dir-row" @click="loadDir(d.path)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+                  <span class="d-name" x-text="d.name"></span>
+                </div>
+              </template>
+              <div class="empty" x-show="!dirs.length && !loadingDirs" style="padding:12px 0;font-size:12px;">此目录下无子目录</div>
+              <div class="empty" x-show="loadingDirs" style="padding:12px 0;font-size:12px;">加载中…</div>
+            </div>
+            <div class="arch-drop-foot">
+              <span style="flex:1;"></span>
+              <button type="button" class="btn sm primary" @click="pickCurrentDir()">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+                使用当前目录
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="hint">未匹配特定「订阅规则」的任务完成下载后，将自动归档至此目录；点 ▾ 可浏览各挂载网盘选择</div>
+      </div>
+      <div class="field">
+        <label>同名冲突处理</label>
+        <select class="select" x-model="cfg.policy">
+          <option value="overwrite">覆盖（云端存在同名文件则覆盖）</option>
+          <option value="skip">跳过已存在（云端已有同名文件则直接标记完成）</option>
+        </select>
+        <div class="hint">若目标目录中已存在同名文件时的处理策略</div>
+      </div>
+    </div>
+
+    <div class="grid g-2" style="margin-top:14px;align-items:start;">
+      <div class="field">
+        <label>文件名广告清洗（Emby / Jellyfin 友好）</label>
+        <div class="row" style="gap:10px;margin-top:6px;">
+          <label class="row" style="gap:10px;cursor:pointer;">
+            <span class="switch"><input type="checkbox" x-model="cfg.cleanFilename"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">归档时自动去除文件名中的 @频道、推广群号、方括号广告标签</span>
+          </label>
+        </div>
+        <div class="hint" style="margin-top:2px;">仅清洗文件名显示，不影响文件内容</div>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>VPS 磁盘高低水位动态熔断保护与应急清理</label>
+        <div class="row" style="gap:10px;margin-top:6px;align-items:center;">
+          <label class="row" style="gap:8px;cursor:pointer;flex-shrink:0;">
+            <span class="switch"><input type="checkbox" x-model="cfg.diskAutoClean"><span class="track"></span></span>
+            <span style="font-size:13px;color:var(--text-2);">启用高水位被动应急清理（释放已归档文件）</span>
+          </label>
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">高水位熔断 &ge;</span>
+          <input class="input num" type="number" min="50" max="98" style="width:74px;height:34px;padding:4px 8px;flex-shrink:0;" x-model.number="cfg.diskHighWatermarkPercent">
+          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">% 拦截</span>
+          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">· 低水位唤醒 &le;</span>
+          <input class="input num" type="number" min="30" max="90" style="width:74px;height:34px;padding:4px 8px;flex-shrink:0;" x-model.number="cfg.diskLowWatermarkPercent">
+          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">% 恢复</span>
+        </div>
+        <div class="hint" style="margin-top:6px;">
+          当前 VPS 磁盘占用率：<b x-text="(cfg.diskUsagePercent || 0) + '%'"></b> ·
+          可用空间：<b x-text="(cfg.diskFreeGB || 0) + ' GB'"></b>
+          <span x-show="(cfg.diskUsagePercent || 0) >= (cfg.diskHighWatermarkPercent || 85)" style="color:var(--err);font-weight:700;">（⚠️ 已达到高水位熔断线，新下载已安全挂起）</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint" x-show="cfg.stats && (cfg.stats.enqueued > 0 || cfg.stats.done > 0)" style="margin-top:10px;">
+      默认规则统计：累计自动入队 <b x-text="cfg.stats.enqueued || 0"></b> 个文件 ·
+      已归档完成 <b x-text="cfg.stats.done || 0" style="color:var(--ok);"></b> 个
+      <span x-show="cfg.stats.failed > 0"> · 失败 <b x-text="cfg.stats.failed" style="color:var(--err);"></b> 个</span>
+    </div>
+
+    <div class="row" style="gap:10px;margin-top:16px;">
+      <button class="btn primary" style="min-width:120px;height:38px;padding:9px 18px;" :disabled="busy" @click="save()">
+        <span x-show="busy" class="spinner"></span>
+        <svg x-show="!busy" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+        保存归档设置
+      </button>
+      <button type="button" class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="sweeping" @click="triggerSweep()" title="立即检测所有已完成下载并归档">
+        <span x-show="sweeping" class="spinner"></span>
+        <svg x-show="!sweeping" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+        <span x-text="sweeping ? '正在扫描…' : '立即扫描归档'">立即扫描归档</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Telegram 消息通知外发引擎（Bot/收藏夹双通道） -->
+  <div class="card pad-lg mb-4" x-data="notifySettingsCard()" x-init="load()">
+    <div class="card-head" style="justify-content:space-between;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <h2 class="card-title">Telegram 消息通知外发</h2>
+        <span class="pill" :class="cfg.enabled ? 'archived' : 'pending'">
+          <span class="p-dot"></span>
+          <span x-text="cfg.enabled ? '外发引擎已开启' : '通知已停用'"></span>
+        </span>
+      </div>
+      <label class="row" style="gap:8px;cursor:pointer;">
+        <span class="switch"><input type="checkbox" x-model="cfg.enabled"><span class="track"></span></span>
+        <span style="font-size:13px;color:var(--text-2);">全局开启通知</span>
+      </label>
+    </div>
+
+    <div class="hint" style="margin-top:2px;">
+      支持通过 Telegram 独立 Bot 或用户登录态收藏夹（Saved Messages）双通道外发，卡片化推送下载完成、自动归档与磁盘水位预警。
+    </div>
+
+    <div class="grid g-2" style="margin-top:14px;">
+      <div class="field">
+        <label>外发通道模式</label>
+        <select class="select" x-model="cfg.channel">
+          <option value="both">双通道并行（Bot + 收藏夹）</option>
+          <option value="bot">仅 Telegram Bot</option>
+          <option value="saved_messages">仅收藏夹（Saved Messages 零配置免申请）</option>
+        </select>
+        <div class="hint">选择消息外发的通道形态</div>
+      </div>
+      <div class="field">
+        <label>大文件完成通知阈值（MB）</label>
+        <input class="input num" type="number" min="1" max="50000" x-model.number="cfg.minFileSizeMB">
+        <div class="hint">单文件下载大小达到该数值时才推送下载完成消息，默认 50MB</div>
+      </div>
+    </div>
+
+    <div class="grid g-2" style="margin-top:14px;" x-show="cfg.channel === 'bot' || cfg.channel === 'both'">
+      <div class="field">
+        <label for="notifyBotToken">Bot Token（从 @BotFather 获取）</label>
+        <input id="notifyBotToken" class="input" type="password" x-model="cfg.botToken"
+               placeholder="例如 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" autocomplete="off" spellcheck="false">
+        <div class="hint" x-show="cfg.hasBotToken && !cfg.botToken">已配置 Token（保存在受控配置文件，保持空则保留旧 Token）</div>
+      </div>
+      <div class="field">
+        <label for="notifyChatId">目标 Chat ID（个人/群组/频道 ID）</label>
+        <input id="notifyChatId" class="input" type="text" x-model="cfg.chatId"
+               placeholder="例如 12345678 或 -10012345678" autocomplete="off" spellcheck="false">
+        <div class="hint">消息接收方的 Telegram Chat ID</div>
+      </div>
+    </div>
+
+    <div class="field" style="margin-top:14px;">
+      <label>触发通知的事件模型</label>
+      <div class="row" style="gap:16px;flex-wrap:wrap;margin-top:6px;">
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" class="check" x-model="cfg.events.downloadCompleted">
+          <span>🎉 大文件下载完成</span>
+        </label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" class="check" x-model="cfg.events.archiveSuccess">
+          <span>☁️ 网盘归档成功</span>
+        </label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" class="check" x-model="cfg.events.archiveFailed">
+          <span>🚨 网盘归档失败告警</span>
+        </label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" class="check" x-model="cfg.events.diskWatermarkAlert">
+          <span>⚠️ 磁盘高低水位熔断告警</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="row" style="gap:10px;margin-top:18px;">
+      <button class="btn primary" style="min-width:120px;height:38px;padding:9px 18px;" :disabled="busy" @click="save()">
+        <span x-show="busy" class="spinner"></span>
+        <svg x-show="!busy" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+        保存通知配置
+      </button>
+      <button type="button" class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="testing" @click="testSend()" title="外发一条测试卡片消息">
+        <span x-show="testing" class="spinner"></span>
+        <svg x-show="!testing" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-send"/></svg>
+        <span x-text="testing ? '正在外发测试…' : '📨 一键测试推送'">📨 一键测试推送</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- System Doctor 全链路系统健康与自检看板 -->
+  <div class="card pad-lg mb-4" id="systemDoctorCard" x-data="doctorCard()" x-init="init()" style="margin-bottom:var(--space-5);">
+    <div class="card-head" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:22px;">🩺</span>
+        <div>
+          <h2 class="card-title" style="margin:0;">System Doctor 系统健康自检</h2>
+          <div class="card-sub">Java 后端、TDLib 会话、OpenList 网盘与本地存储 3 秒全链路并发体检</div>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;">
+        <span class="pill" :class="overallPillClass()">
+          <span class="p-dot"></span><span x-text="overallLabel()">检查中…</span>
+        </span>
+        <button type="button" class="btn sm primary" :disabled="checking" @click="runCheck()" title="执行全系统四组件并发自检">
+          <span x-show="checking" class="spinner"></span>
+          <svg x-show="!checking" class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+          <span x-text="checking ? '正在并发体检…' : '一键体检'">一键体检</span>
+        </button>
+        <button type="button" class="btn sm ghost" :disabled="!report" @click="copyReport()" title="复制脱敏体检报告">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-copy"/></svg>
+          复制脱敏报告
+        </button>
+      </div>
+    </div>
+
+    <!-- 总体诊断提示条 -->
+    <div style="margin-top:16px;" x-show="report">
+      <div :class="'alert ' + (report && report.overallStatus === 'healthy' ? 'ok' : (report && report.overallStatus === 'warning' ? 'warn' : 'error'))" style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use :href="report && report.overallStatus === 'healthy' ? '#ic-check' : '#ic-alert'"/></svg>
+          <span x-text="(report && report.summaryMessage) || '诊断完成'"></span>
+        </div>
+        <span style="font-size:12px;font-family:var(--font-mono);opacity:0.85;" x-text="'总延时 ' + ((report && report.totalLatencyMs) || 0) + 'ms'"></span>
+      </div>
+
+      <!-- 四大组件卡片网格 -->
+      <div class="grid g-2" style="gap:14px;" x-show="report && report.components">
+        <!-- 1. Java 后端 -->
+        <div class="doctor-comp-card" :class="'doctor-' + (report && report.components && report.components.javaBackend && report.components.javaBackend.status || 'unknown')">
+          <div class="doctor-comp-head">
+            <div class="doctor-comp-title">☕ Java 后端核心</div>
+            <div class="row" style="gap:6px;">
+              <span class="doctor-latency" x-text="(report && report.components && report.components.javaBackend && report.components.javaBackend.latencyMs || 0) + 'ms'"></span>
+              <span class="pill sm" :class="report && report.components && report.components.javaBackend && report.components.javaBackend.status === 'healthy' ? 'ok' : (report && report.components && report.components.javaBackend && report.components.javaBackend.status === 'warning' ? 'warn' : 'failed')">
+                <span class="p-dot"></span><span x-text="report && report.components && report.components.javaBackend && report.components.javaBackend.status === 'healthy' ? '正常' : (report && report.components && report.components.javaBackend && report.components.javaBackend.status === 'warning' ? '预警' : '异常')"></span>
+              </span>
+            </div>
+          </div>
+          <div class="doctor-comp-msg" x-text="report && report.components && report.components.javaBackend && report.components.javaBackend.message"></div>
+          <div class="doctor-comp-meta" style="font-size:11px;color:var(--text-3);margin-top:4px;">
+            端点: <code x-text="report && report.components && report.components.javaBackend && report.components.javaBackend.details && report.components.javaBackend.details.endpoint || 'http://backend-service:8123'"></code>
+          </div>
+          <template x-if="report && report.components && report.components.javaBackend && report.components.javaBackend.recommendation">
+            <div class="doctor-comp-fix" x-text="'💡 建议: ' + report.components.javaBackend.recommendation"></div>
+          </template>
+        </div>
+
+        <!-- 2. TDLib 会话 -->
+        <div class="doctor-comp-card" :class="'doctor-' + (report && report.components && report.components.tdlib && report.components.tdlib.status || 'unknown')">
+          <div class="doctor-comp-head">
+            <div class="doctor-comp-title">✈️ TDLib 会话</div>
+            <div class="row" style="gap:6px;">
+              <span class="doctor-latency" x-text="(report && report.components && report.components.tdlib && report.components.tdlib.latencyMs || 0) + 'ms'"></span>
+              <span class="pill sm" :class="report && report.components && report.components.tdlib && report.components.tdlib.status === 'healthy' ? 'ok' : (report && report.components && report.components.tdlib && report.components.tdlib.status === 'warning' ? 'warn' : 'failed')">
+                <span class="p-dot"></span><span x-text="report && report.components && report.components.tdlib && report.components.tdlib.status === 'healthy' ? '就绪' : (report && report.components && report.components.tdlib && report.components.tdlib.status === 'warning' ? '预警' : '异常')"></span>
+              </span>
+            </div>
+          </div>
+          <div class="doctor-comp-msg" x-text="report && report.components && report.components.tdlib && report.components.tdlib.message"></div>
+          <div class="doctor-comp-meta" style="font-size:11px;color:var(--text-3);margin-top:4px;">
+            账号: <span x-text="report && report.components && report.components.tdlib && report.components.tdlib.details && report.components.tdlib.details.activeAccount || '—'"></span> · 风控: <span x-text="report && report.components && report.components.tdlib && report.components.tdlib.details && report.components.tdlib.details.isFloodWait ? '冷却中' : '正常'"></span>
+          </div>
+          <template x-if="report && report.components && report.components.tdlib && report.components.tdlib.recommendation">
+            <div class="doctor-comp-fix" x-text="'💡 建议: ' + report.components.tdlib.recommendation"></div>
+          </template>
+        </div>
+
+        <!-- 3. OpenList 网盘 -->
+        <div class="doctor-comp-card" :class="'doctor-' + (report && report.components && report.components.openlist && report.components.openlist.status || 'unknown')">
+          <div class="doctor-comp-head">
+            <div class="doctor-comp-title">☁️ OpenList 网盘引擎</div>
+            <div class="row" style="gap:6px;">
+              <span class="doctor-latency" x-text="(report && report.components && report.components.openlist && report.components.openlist.latencyMs || 0) + 'ms'"></span>
+              <span class="pill sm" :class="report && report.components && report.components.openlist && report.components.openlist.status === 'healthy' ? 'ok' : (report && report.components && report.components.openlist && report.components.openlist.status === 'warning' ? 'warn' : 'failed')">
+                <span class="p-dot"></span><span x-text="report && report.components && report.components.openlist && report.components.openlist.status === 'healthy' ? '在线' : (report && report.components && report.components.openlist && report.components.openlist.status === 'warning' ? '预警' : '离线')"></span>
+              </span>
+            </div>
+          </div>
+          <div class="doctor-comp-msg" x-text="report && report.components && report.components.openlist && report.components.openlist.message"></div>
+          <div class="doctor-comp-meta" style="font-size:11px;color:var(--text-3);margin-top:4px;">
+            挂载云盘: <strong x-text="report && report.components && report.components.openlist && report.components.openlist.details && report.components.openlist.details.mountCount || 0"></strong> 个 · 令牌: <span x-text="report && report.components && report.components.openlist && report.components.openlist.details && report.components.openlist.details.tokenValid ? '有效' : '无效/未登录'"></span>
+          </div>
+          <template x-if="report && report.components && report.components.openlist && report.components.openlist.recommendation">
+            <div class="doctor-comp-fix" x-text="'💡 建议: ' + report.components.openlist.recommendation"></div>
+          </template>
+        </div>
+
+        <!-- 4. 本地存储与水位 -->
+        <div class="doctor-comp-card" :class="'doctor-' + (report && report.components && report.components.localStorage && report.components.localStorage.status || 'unknown')">
+          <div class="doctor-comp-head">
+            <div class="doctor-comp-title">💾 VPS 本地存储</div>
+            <div class="row" style="gap:6px;">
+              <span class="doctor-latency" x-text="(report && report.components && report.components.localStorage && report.components.localStorage.latencyMs || 0) + 'ms'"></span>
+              <span class="pill sm" :class="report && report.components && report.components.localStorage && report.components.localStorage.status === 'healthy' ? 'ok' : (report && report.components && report.components.localStorage && report.components.localStorage.status === 'warning' ? 'warn' : 'failed')">
+                <span class="p-dot"></span><span x-text="report && report.components && report.components.localStorage && report.components.localStorage.status === 'healthy' ? '健康' : (report && report.components && report.components.localStorage && report.components.localStorage.status === 'warning' ? '高水位' : '只读/满')"></span>
+              </span>
+            </div>
+          </div>
+          <div class="doctor-comp-msg" x-text="report && report.components && report.components.localStorage && report.components.localStorage.message"></div>
+          <div class="doctor-comp-meta" style="font-size:11px;color:var(--text-3);margin-top:4px;">
+            可用: <span x-text="report && report.components && report.components.localStorage && report.components.localStorage.details && report.components.localStorage.details.freeSpace || '—'"></span> / <span x-text="report && report.components && report.components.localStorage && report.components.localStorage.details && report.components.localStorage.details.totalSpace || '—'"></span> · 读写: <span x-text="report && report.components && report.components.localStorage && report.components.localStorage.details && report.components.localStorage.details.writable ? '正常' : '失败'"></span>
+          </div>
+          <template x-if="report && report.components && report.components.localStorage && report.components.localStorage.recommendation">
+            <div class="doctor-comp-fix" x-text="'💡 建议: ' + report.components.localStorage.recommendation"></div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="position:sticky;bottom:16px;justify-content:flex-end;z-index:10;">
+    <button class="btn primary" style="padding:13px 28px;" :disabled="saving" @click="save()">
+      <span x-show="saving" class="spinner"></span>
+      <svg x-show="!saving" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+      保存
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  function settingsForm() {
+    return {
+      form: {
+        autoDownloadLimit: 5,
+        uniqueOnly: false,
+        thumbnailAutoLoad: false,
+        showSensitiveContent: false,
+        alwaysHide: false,
+        avgSpeedInterval: 300,
+        speedUnits: 'bits'
+      },
+      pwd: { old: '', new: '', confirm: '' },
+      saving: false,
+      init: function () {
+        var self = this;
+        fetch('/settings/load', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d || typeof d !== 'object' || d.ok === false) {
+              window.__toast('设置读取失败，显示默认值', 'error', (d && d.message) || '后端不可达');
+              return;
+            }
+            // 后端返回 {key: value(字符串)} 平铺结构
+            if (d.autoDownloadLimit != null) self.form.autoDownloadLimit = Number(d.autoDownloadLimit) || self.form.autoDownloadLimit;
+            if (d.uniqueOnly != null) self.form.uniqueOnly = String(d.uniqueOnly) === 'true';
+            if (d.thumbnailAutoLoad != null) self.form.thumbnailAutoLoad = String(d.thumbnailAutoLoad) === 'true';
+            if (d.showSensitiveContent != null) self.form.showSensitiveContent = String(d.showSensitiveContent) === 'true';
+            if (d.alwaysHide != null) self.form.alwaysHide = String(d.alwaysHide) === 'true';
+            if (d.avgSpeedInterval != null) self.form.avgSpeedInterval = Number(d.avgSpeedInterval) || self.form.avgSpeedInterval;
+            if (d.speedUnits) self.form.speedUnits = String(d.speedUnits);
+          })
+          .catch(function () {
+            window.__toast('设置读取失败，显示默认值', 'error', '网络错误');
+          });
+      },
+      save: function () {
+        var self = this;
+        if (this.pwd.new && this.pwd.new !== this.pwd.confirm) {
+          window.__toast('两次输入的新密码不一致', 'error'); return;
+        }
+        this.saving = true;
+        // 数字键 NaN 防御：清空输入框时 Alpine 给 NaN，后端 Convert.toInt("NaN") 会落库坏值
+        var n = function (v, dflt) { var x = Number(v); return isFinite(x) ? x : dflt; };
+        // 后端 settings/create 是平铺键值表：直接以真实 SettingKey 为键写入
+        var payload = {};
+        payload.autoDownloadLimit = String(n(this.form.autoDownloadLimit, 5));
+        payload.uniqueOnly = String(this.form.uniqueOnly);
+        payload.thumbnailAutoLoad = String(this.form.thumbnailAutoLoad);
+        payload.showSensitiveContent = String(this.form.showSensitiveContent);
+        payload.alwaysHide = String(this.form.alwaysHide);
+        payload.avgSpeedInterval = String(n(this.form.avgSpeedInterval, 300));
+        payload.speedUnits = String(this.form.speedUnits);
+        fetch('/settings/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify(payload)
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          var savedOk = d && d.ok;
+          if (savedOk) {
+            window.__toast('保存成功', 'success', '配置已写入后端');
+          } else {
+            window.__toast('保存失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          // 只有设置保存成功后才允许继续改密，避免「设置失败但密码被改了」的困惑状态
+          return savedOk ? d : null;
+        }).catch(function (e) {
+          window.__toast('保存失败', 'error', '网络错误：' + e);
+          return null;
+        }).then(function (d) {
+          self.saving = false;
+          if (d && d.ok && self.pwd.new) return self.__changePassword();
+          return null;
+        });
+      },
+      __changePassword: function () {
+        var self = this;
+        return fetch('/auth/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          // 后端契约字段：currentPassword（bridge 侧兼容 oldPassword，统一用规范名）
+          body: JSON.stringify({ currentPassword: this.pwd.old, newPassword: this.pwd.new })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            window.__toast('密码修改成功', 'success', '3 秒后请用新密码重新登录');
+            setTimeout(function () { window.location.href = '/login'; }, 3000);
+            self.pwd = { old: '', new: '', confirm: '' };
+          } else {
+            window.__toast('密码修改失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          return null;
+        }).catch(function (e) {
+          window.__toast('密码修改失败', 'error', '网络错误');
+          return null;
+        });
+      }
+    };
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,653 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import pill %}
+{% block title %}云端归档 · TG 归档台{% endblock %}
+{% block page_id %}library-cloud{% endblock %}
+{% block active_nav %}library{% endblock %}
+{% block active_page %}cloud{% endblock %}
+{% block page_title %}云端归档{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">云端归档 · 共 {{ cloud_files|length }} 个文件</span>{% endblock %}
+
+{% block head %}
+<script>
+window.cloudLibrary = function cloudLibrary() {
+  return {
+    q: '',
+    drive: '',
+    remoteDir: '',
+    statusFilter: '',
+    showDomainModal: false,
+    openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
+    domainInput: '',
+    savingDomain: false,
+    totalCount: {{ cloud_files|length if cloud_files else 0 }},
+
+    init: function () {
+      if (!this.domainInput) {
+        this.domainInput = this.openlistBase;
+      }
+    },
+
+    openDomainModal: function () {
+      this.domainInput = this.openlistBase;
+      this.showDomainModal = true;
+    },
+
+    formatBase: function (raw) {
+      if (!raw) return '';
+      var s = String(raw).trim();
+      if (!s) return '';
+      if (!/^https?:\/\//i.test(s)) {
+        s = 'http://' + s;
+      }
+      return s.replace(/\/+$/, '');
+    },
+
+    displayDomain: function (raw) {
+      if (!raw) return '';
+      try {
+        var u = new URL(this.formatBase(raw));
+        return u.host;
+      } catch (e) {
+        return String(raw).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      }
+    },
+
+    saveDomain: async function () {
+      var formatted = this.formatBase(this.domainInput);
+      this.openlistBase = formatted;
+      if (formatted) {
+        localStorage.setItem('openlist_public_base', formatted);
+      } else {
+        localStorage.removeItem('openlist_public_base');
+      }
+      this.savingDomain = true;
+      try {
+        var csrfMatch = document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]*)/);
+        var csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : (window.__csrfToken ? window.__csrfToken() : '');
+        await fetch('/archive/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+          },
+          body: JSON.stringify({ publicBaseUrl: formatted })
+        });
+      } catch (e) {
+        console.warn('Sync publicBaseUrl to server failed:', e);
+      } finally {
+        this.savingDomain = false;
+        this.showDomainModal = false;
+      }
+      if (window.__toast) {
+        window.__toast(formatted ? ('OpenList 域名已设置为 ' + formatted) : 'OpenList 域名已清除', 'success');
+      }
+    },
+
+    resetDomain: async function () {
+      this.domainInput = '';
+      await this.saveDomain();
+    },
+
+    getOpenListUrl: function (cloudPath, fallbackUrl) {
+      var base = this.formatBase(this.openlistBase);
+      if (!base) {
+        return fallbackUrl || '';
+      }
+      if (!cloudPath || cloudPath === '—') return base;
+      var clean = String(cloudPath).replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+      return base + '/' + clean;
+    },
+
+    handleOpenListClick: function (cloudPath, fallbackUrl, evt) {
+      var targetUrl = this.getOpenListUrl(cloudPath, fallbackUrl);
+      if (!this.openlistBase && (!targetUrl || targetUrl.indexOf('127.0.0.1') !== -1 || targetUrl.indexOf('localhost') !== -1)) {
+        if (evt) evt.preventDefault();
+        this.openDomainModal();
+        if (window.__toast) {
+          window.__toast('检测到云端 OpenList 为内网地址，请先设置外部访问域名/公网IP', 'info');
+        }
+        return false;
+      }
+      return true;
+    },
+
+    matches: function (el) {
+      if (!el || !el.getAttribute) return true;
+      var term = (this.q || '').trim().toLowerCase();
+      var d = this.drive || '';
+      var rdir = this.remoteDir || '';
+      var st = this.statusFilter || '';
+      if (!term && !d && !rdir && !st) return true;
+      var fn = (el.getAttribute('data-filename') || '').toLowerCase();
+      var drv = el.getAttribute('data-drive') || '';
+      var itemDir = el.getAttribute('data-remotedir') || '';
+      var itemStatus = el.getAttribute('data-status') || '';
+      if (term && fn.indexOf(term) === -1) return false;
+      if (d && drv !== d) return false;
+      if (rdir && itemDir !== rdir) return false;
+      if (st && itemStatus !== st) return false;
+      return true;
+    },
+
+    visibleCount: function () {
+      var rows = document.querySelectorAll('[data-cloud-file]');
+      var d = this.drive || '';
+      var rdir = this.remoteDir || '';
+      var st = this.statusFilter || '';
+      if (!term && !d && !rdir && !st) return this.totalCount;
+      var rows = document.querySelectorAll('tbody tr[data-filename]');
+      var c = 0;
+      for (var i = 0; i < rows.length; i++) {
+        if (this.matches(rows[i])) c++;
+      }
+      return c;
+    }
+  };
+};
+</script>
+{% endblock %}
+
+{% block content %}
+<style>
+/* ---- 云端归档特定样式与响应式 ---- */
+.cloud-toolbar-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.cloud-filter-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 280px;
+  flex-wrap: wrap;
+}
+.cloud-actions-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.archived-folder {
+  margin: 0 0 var(--space-3);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-lg, 14px);
+  background: var(--glass-bg, rgba(20, 24, 38, 0.45));
+  overflow: hidden;
+}
+.archived-folder > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  user-select: none;
+  transition: background var(--dur-fast) var(--ease);
+}
+.archived-folder > summary::-webkit-details-marker { display: none; }
+.archived-folder > summary:hover { background: rgba(255, 255, 255, 0.04); }
+.archived-folder .af-icon { display: inline-flex; color: var(--text-3); }
+.archived-folder .af-icon svg { width: 16px; height: 16px; }
+.archived-folder .af-title { flex: 0 0 auto; }
+.archived-folder .af-count {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(124, 58, 237, 0.14);
+  color: var(--brand, #a78bfa);
+  border: 1px solid rgba(124, 58, 237, 0.28);
+}
+.archived-folder .af-size {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.archived-folder .af-chev {
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--text-3);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.archived-folder .af-chev svg { width: 16px; height: 16px; }
+.archived-folder[open] .af-chev { transform: rotate(180deg); }
+.archived-folder .af-body {
+  padding: 0 8px 8px;
+  border-top: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
+}
+.cloud-card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4);
+  padding: var(--space-2);
+}
+/* 卡片上的网盘名徽标：绝对定位到缩略图左下角（组头已标网盘名，卡片内是次要信息） */
+.cloud-drive-float {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  background: rgba(10, 12, 20, 0.68);
+  color: #fff;
+  border-color: transparent;
+}
+/* 云端路径：等宽小字，超长省略 */
+.cloud-card .cloud-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;          /* 长路径保住文件名一端（右侧）可见 */
+  text-align: left;
+  margin-bottom: var(--space-2);
+}
+/* 云端失效卡片整卡降饱和提示 */
+.cloud-card.is-missing .t-img { opacity: 0.55; }
+.cloud-card.is-missing .t-name { color: var(--err, #ef4444); }
+/* 卡片内删除按钮：危险色描边（icon-btn 无 danger 修饰类，这里补齐） */
+.cloud-card .icon-btn.danger { color: var(--err, #ef4444); }
+.cloud-card .icon-btn.danger:hover { background: rgba(239, 68, 68, 0.12); }
+.cloud-actions-cell .btn {
+  white-space: nowrap;
+}
+.cloud-drive-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--brand, #a78bfa);
+  border: 1px solid rgba(124, 58, 237, 0.25);
+}
+[data-theme="light"] .cloud-drive-badge {
+  background: rgba(124, 58, 237, 0.08);
+  color: #6d28d9;
+  border-color: rgba(124, 58, 237, 0.2);
+}
+@media (max-width: 768px) {
+  .cloud-toolbar-wrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cloud-filter-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+</style>
+
+<div class="cloud-library" x-data="cloudLibrary()" x-init="init()">
+<div class="page-header">
+  <div>
+    <h1>云端归档</h1>
+    <p>OpenList 已归档文件（从本地上传至云端挂载网盘，支持搜索、直达打开、删除与取回）</p>
+  </div>
+  <div class="row" style="gap:8px;align-items:center;">
+    <!-- 顶栏自定义 OpenList 域名配置按钮 -->
+    <button type="button" class="btn sm"
+            :class="openlistBase ? 'primary' : 'ghost'"
+            @click="openDomainModal()"
+            title="配置 OpenList 外部公网访问域名/IP与端口">
+      <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
+      </svg>
+      <span x-text="openlistBase ? ('OpenList: ' + displayDomain(openlistBase)) : '设置 OpenList 域名'"></span>
+    </button>
+    <button type="button" class="btn sm danger" onclick="window.__clearMissingCloudFiles()" title="清理云端已不存在的失效记录">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+      清理已失效
+    </button>
+    <button type="button" class="btn sm" onclick="window.location.reload()" title="从云端重新拉取最新记录">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+      刷新
+    </button>
+  </div>
+</div>
+
+{# 失效文件告警条 / 隔离提示 #}
+{% set missing_count = (cloud_files | selectattr('status', 'equalto', 'missing') | list | length) if cloud_files else 0 %}
+<div class="quarantine-bar" id="missingBanner"
+     style="margin-bottom:var(--space-5);background:rgba(239, 68, 68, 0.12);border-color:rgba(239, 68, 68, 0.32);{% if not missing_count %}display:none;{% endif %}">
+  <span class="q-dot" style="background:var(--err, #ef4444);"></span>
+  <span style="flex:1;">检测到 <strong id="missingCount">{{ missing_count }}</strong> 个云端失效记录（在 OpenList 网盘中已被删除或移动）</span>
+  <button type="button" class="btn sm danger" onclick="window.__clearMissingCloudFiles()">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+    清理已失效记录
+  </button>
+</div>
+
+{% if isolated_count %}
+<div class="quarantine-bar" style="margin-bottom:var(--space-5);">
+  <span class="q-dot"></span>
+  检测到 {{ isolated_count }} 个文件被隔离，需人工复核后处理
+  <span class="q-count">{{ isolated_count }} 个</span>
+</div>
+{% elif not missing_count %}
+<div class="alert info" style="margin-bottom:var(--space-5);">
+  <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-info"/></svg>
+  所有云端归档记录与 OpenList 挂载网盘同步正常。
+</div>
+{% endif %}
+
+{% if cloud_files %}
+{# 网盘分类选项：以 OpenList 真实挂载为准（路由层 openlist_mounts() 注入），
+   再并入归档记录里实际出现过的网盘，保证历史记录也能被筛到。
+   刻意不保留任何硬编码网盘名——旧版写死的 Google Drive/OneDrive/阿里云盘
+   与真实挂载（onedrive/ppan/quark/wopan/google）根本对不上，选项等同失效。 #}
+{% set all_drives = [] %}
+{% set _ = all_drives.extend(openlist_mounts | default([], true)) %}
+{% for f in cloud_files %}
+  {% if f.drive and f.drive not in all_drives %}
+    {% set _ = all_drives.append(f.drive) %}
+  {% endif %}
+{% endfor %}
+{% set archive_dirs = [] %}
+{% for f in cloud_files %}
+  {% if f.remote_dir and f.remote_dir not in archive_dirs %}
+    {% set _ = archive_dirs.append(f.remote_dir) %}
+  {% endif %}
+{% endfor %}
+
+{# 按网盘分组的文件夹数据：正常由路由注入 drive_groups（带体积聚合）；
+   兼容未注入的渲染方（如预览件），此处自行按 drive 兜底分组。 #}
+{% if not drive_groups %}
+{% set _by_drive = {} %}
+{% for f in cloud_files %}
+  {% set _k = f.drive or '默认网盘' %}
+  {% if _by_drive.update({_k: _by_drive.get(_k, []) + [f]}) %}{% endif %}
+{% endfor %}
+{% set drive_groups = [] %}
+{% for k, rows in _by_drive.items() %}
+  {% set _ = drive_groups.append({'drive': k, 'files': rows, 'count': rows|length,
+      'size_human': '', 'missing_count': rows|selectattr('status','equalto','missing')|list|length}) %}
+{% endfor %}
+{% endif %}
+
+<div>
+  <!-- 顶部搜索框与网盘分类筛选下拉框 -->
+  <div class="card" style="margin-bottom:var(--space-5);">
+    <div class="cloud-toolbar-wrap">
+      <div class="cloud-filter-form">
+        <div class="field" style="margin:0;flex:2;min-width:200px;">
+          <label for="cloudSearch">搜索文件名</label>
+          <div style="position:relative;">
+            <input class="input" id="cloudSearch" type="text"
+                   x-model="q" placeholder="输入文件名实时过滤…" aria-label="搜索文件名"
+                   style="padding-left:36px;">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-3);width:16px;height:16px;pointer-events:none;">
+              <use href="#ic-search"/>
+            </svg>
+            <button type="button" x-show="q" @click="q=''" class="icon-btn xs"
+                    style="position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;background:transparent;"
+                    aria-label="清空搜索">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><use href="#ic-x"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="field" style="margin:0;flex:1;min-width:160px;">
+          <label for="cloudDrive">网盘分类</label>
+          <select class="select" id="cloudDrive" x-model="drive" aria-label="网盘分类筛选">
+            <option value="">全部网盘</option>
+            {% for d in all_drives %}
+            <option value="{{ d }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+          {% if not openlist_mounts_ok %}
+          <div class="hint" style="color:var(--warn,#f59e0b);margin-top:4px;">
+            未能读取 OpenList 挂载，列表暂按归档记录聚合
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="field" style="margin:0;flex:1;min-width:150px;">
+          <label for="cloudStatus">存档分类</label>
+          <select class="select" id="cloudStatus" x-model="statusFilter" aria-label="存档状态分类筛选">
+            <option value="">全部状态</option>
+            <option value="archived">✅ 云端在存</option>
+            <option value="missing">⚠️ 云端失效</option>
+          </select>
+        </div>
+
+        <div class="field" style="margin:0;flex:1;min-width:180px;">
+          <label for="cloudRemoteDir">独立归档目录</label>
+          <select class="select" id="cloudRemoteDir" x-model="remoteDir" aria-label="独立归档目录筛选">
+            <option value="">全部归档目录</option>
+            {% for d in archive_dirs %}
+            <option value="{{ d }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="gap:8px;align-items:flex-end;">
+        <span class="delta flat" style="padding:7px 14px;">
+          显示 <strong class="tnum" x-text="visibleCount()">{{ cloud_files|length }}</strong> / 共 {{ cloud_files|length }} 个文件
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 云端归档数据：按「网盘」折叠为分组，组内是浏览页同款大图卡片网格。
+       历史缺陷：旧版嵌套 <table> 在窄屏横向溢出、操作按钮挤压换行，
+       且归档时间/云端路径整列平铺信息密度低；卡片化后与浏览下载页视觉统一。 -->
+  {% for g in drive_groups|default([], true) %}
+  <details class="archived-folder" data-drive-group="{{ g.drive }}">
+    <summary>
+      <span class="af-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+      </span>
+      <span class="af-title">{{ g.drive }}</span>
+      <span class="af-count tnum">{{ g.count }} 个</span>
+      <span class="af-size tnum">合计 {{ g.size_human }}</span>
+      {% if g.missing_count %}
+      <span class="pill failed" title="该网盘下有文件在云端已失效"><span class="p-dot"></span>失效 {{ g.missing_count }}</span>
+      {% endif %}
+      <span class="af-chev" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </span>
+    </summary>
+    <div class="af-body">
+      <div class="thumb-grid cloud-card-grid">
+        {% for f in g.files %}
+        <div class="thumb cloud-card{% if f.status == 'missing' %} is-missing{% endif %}"
+             data-cloud-file
+             data-filename="{{ f.filename }}" data-drive="{{ f.drive }}"
+             data-status="{{ f.status }}" data-remotedir="{{ f.remote_dir or '' }}"
+             x-show="matches($el)">
+          <div class="t-img">
+            {% if f.thumb_uid and f.telegramId %}
+            {# 全尺寸缩略图（320px 级，经 bridge /preview 代理 + 浏览器私有缓存一天）；
+               chat/msg 供 /preview 在缩略图未就绪时经 GetMessage 定位补下载 #}
+            <img src="/preview/{{ f.telegramId }}/{{ f.thumb_uid }}?chat={{ f.chatId }}&amp;msg={{ f.messageId }}{% if f.thumb_heal %}&amp;heal=1{% endif %}"
+                 alt="{{ f.filename }}" loading="lazy">
+            {% elif f.thumb %}
+            {# 兜底：无 thumbnailUniqueId 时退回 minithumbnail（40px 级，模糊但聊胜于无） #}
+            <img src="data:image/jpeg;base64,{{ f.thumb }}" alt="{{ f.filename }}" loading="lazy">
+            {% else %}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#ic-file"/></svg>
+            <span class="t-ext">{{ (f.filename.rsplit('.', 1)[-1] if '.' in f.filename else '文件') | upper }}</span>
+            {% endif %}
+            <span class="t-badge">
+              {% if f.status == 'missing' %}
+              <span class="badge danger" title="OpenList 目录里已找不到该文件（可能在云端被删除/移动）">
+                <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:2px;"><use href="#ic-alert"/></svg>云端失效
+              </span>
+              {% else %}
+              <span class="badge ok" title="云端正常在存：{{ f.cloud_path }}" style="color:var(--ok);background:rgba(52,211,153,.18);font-weight:600;">
+                <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:12px;height:12px;display:inline-block;vertical-align:-1px;margin-right:2px;"><use href="#ic-cloud"/></svg>已归档
+              </span>
+              {% endif %}
+            </span>
+            <span class="cloud-drive-badge cloud-drive-float">
+              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg>
+              {{ f.drive or '网盘' }}
+            </span>
+            {# 取回中状态胶囊（轮询 JS 控制显隐，与旧表格共用同一 data-ret-pill 契约） #}
+            <span class="pill pending" style="display:none;" data-ret-pill data-cloud-path="{{ f.cloud_path }}"><span class="p-dot"></span>取回中</span>
+          </div>
+          <div class="t-body">
+            <div class="t-name" title="{{ f.filename }}">{{ f.filename }}</div>
+            <div class="t-meta">
+              <span class="tnum">{{ f.size }}</span> ·
+              <span class="tnum">{{ f.archived_time }}</span>
+            </div>
+            <div class="cloud-path" title="{{ f.cloud_path }}">{{ f.cloud_path }}</div>
+            <div class="t-foot cloud-actions-cell">
+              <!-- 1. 在 OpenList 中打开直达链接 -->
+              {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
+              <a :href="getOpenListUrl('{{ f.cloud_path }}', '{{ f.openlist_url }}')"
+                 target="_blank" rel="noopener noreferrer"
+                 @click="handleOpenListClick('{{ f.cloud_path }}', '{{ f.openlist_url }}', $event)"
+                 class="btn sm ghost" title="在 OpenList 中直达打开此文件" aria-label="在 OpenList 中打开 {{ f.filename }}">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+                OpenList
+              </a>
+              {% else %}
+              <button type="button" class="btn sm ghost" disabled title="该文件暂无可用云端直达路径">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+                OpenList
+              </button>
+              {% endif %}
+
+              <!-- 2. 取回：从云端拉取下载回本地 -->
+              <button type="button" class="btn sm primary"
+                      data-retrieve-btn
+                      data-cloud-path="{{ f.cloud_path }}"
+                      data-job-id="{{ f.id }}"
+                      data-filename="{{ f.filename }}"
+                      {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法取回"{% else %}title="将该文件从云端下载取回到本地磁盘"{% endif %}
+                      onclick="window.__retrieveCloudFile(this)">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+                <span class="ret-text">取回</span>
+              </button>
+
+              <!-- 3. 云端删除 -->
+              <button type="button" class="icon-btn xs danger"
+                      data-cloud-delete-btn
+                      data-cloud-path="{{ f.cloud_path }}"
+                      data-job-id="{{ f.id }}"
+                      data-filename="{{ f.filename }}"
+                      title="从云端永久删除文件并清理本地日志记录"
+                      aria-label="从云端删除 {{ f.filename }}"
+                      onclick="window.__deleteCloudFile(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endfor %}
+
+  <!-- 无匹配筛选时的空态 -->
+  <div x-show="visibleCount() === 0" style="display:none;">
+    <div class="card pad-lg" style="text-align:center;padding:var(--space-8) var(--space-4);">
+      <div class="empty">
+        <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#ic-inbox"/></svg></div>
+        <h3>没有找到匹配的云端文件</h3>
+        <p>尝试调整搜索关键词或切换网盘分类</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="card pad-lg" style="text-align:center;padding:var(--space-8) var(--space-5);">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:44px;height:44px;color:var(--text-3);"><use href="#ic-cloud"/></svg>
+  <p style="margin:var(--space-4) 0 var(--space-2);font-weight:600;">还没有归档文件</p>
+  <p style="color:var(--text-3);font-size:13px;">到<a class="link" href="/library/local">本地在存</a>点击「立即归档」，文件上传到 OpenList 后会显示在这里</p>
+</div>
+{% endif %}
+
+<!-- 视频在线播放弹窗 -->
+<div class="modal-backdrop" id="cloudVideoModal" style="display:none;" onclick="if(event.target===this) window.__closeCloudVideo()">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="视频播放" style="max-width:860px;width:92vw;">
+    <div class="modal-head">
+      <h2 id="cloudVideoTitle" style="font-size:15px;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">视频播放</h2>
+      <button type="button" class="icon-btn xs" aria-label="关闭" onclick="window.__closeCloudVideo()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div id="cloudVideoLoading" style="text-align:center;padding:40px 0;color:var(--text-2);">
+        <span class="spinner" style="width:24px;height:24px;margin-bottom:8px;"></span>
+        <div>正在解析 OpenList 视频串流直链…</div>
+      </div>
+      <video id="cloudVideoPlayer" controls playsinline preload="metadata"
+             style="width:100%;max-height:60vh;background:#000;border-radius:8px;display:none;"></video>
+      <div id="cloudVideoErr" class="alert error" style="display:none;margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn sm ghost" id="btnCopyStreamUrl" onclick="window.__copyStreamUrl()" title="复制直链至剪贴板，可粘贴到 PotPlayer / VLC / IINA">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-copy"/></svg>
+          复制播放链接
+        </button>
+        <button type="button" class="btn sm ghost" id="btnOpenPotPlayer" onclick="window.__openExternalPlayer('potplayer')" title="直接调用 PotPlayer 播放">
+          PotPlayer
+        </button>
+        <button type="button" class="btn sm ghost" id="btnOpenVLC" onclick="window.__openExternalPlayer('vlc')" title="直接调用 VLC 播放">
+          VLC
+        </button>
+      </div>
+      <button type="button" class="btn primary sm" onclick="window.__closeCloudVideo()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 自定义 OpenList 外部访问域名设置弹窗 -->
+<div class="modal-backdrop" :class="{'show': showDomainModal}" x-show="showDomainModal" x-cloak style="display:none;" @click.self="showDomainModal = false">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px;width:92vw;">
+    <div class="modal-head">
+      <h2 style="font-size:16px;">配置 OpenList 外部访问域名</h2>
+      <button type="button" class="icon-btn xs" aria-label="关闭" @click="showDomainModal = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <div style="padding:16px 20px;">
+      <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;line-height:1.5;">
+        当 TG 项目与 OpenList 部署在云端 VPS 时，本地浏览器无法直接访问内网 <code>127.0.0.1</code>。请在此指定您的公网 IP 或域名，点击列表中所有「OpenList」直达按钮将自动以此地址打开。
+      </p>
+      <div class="field">
+        <label>OpenList 外部访问域名 / IP (端口可选)</label>
+        <input class="input" type="text" x-model="domainInput" placeholder="例如：http://pan.yourdomain.com:5244 或 pan.yourdomain.com">
+        <div class="hint">端口可自定义也可不填（默认自动补齐 http://）。支持：<code>http://IP:端口</code>、<code>https://域名</code>、<code>pan.xxx.com</code></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button type="button" class="btn sm ghost" @click="resetDomain()">清除 / 恢复默认</button>
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn sm ghost" @click="showDomainModal = false">取消</button>
+        <button type="button" class="btn sm primary" :disabled="savingDomain" @click="saveDomain()">
+          <span x-text="savingDomain ? '保存中…' : '保存域名'">保存域名</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+</div>{# /cloudLibrary #}
+
+{% endblock %}
+
+{% block js %}
+<script>
+if (window.__retrievePollStart && document.querySelector('[data-retrieve-btn], [data-ret-pill]')) {
+  window.__retrievePollStart();
+}
+</script>
+{% endblock %}

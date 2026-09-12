@@ -1,0 +1,125 @@
+{# ====================================================================
+   login.html — Full-screen centered glass card. Also serves /init variant
+   via `variant` ('login' | 'init') and `error` (optional message string).
+   ==================================================================== #}
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if variant == 'init' %}初始化管理员{% else %}登录 · TG 归档台{% endif %}</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('tg-archive-theme');
+        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <!-- 预加载主面板核心静态资源，在用户输入账号密码期间提前缓存至本地，登录后直开（0 延迟） -->
+  <link rel="prefetch" href="/static/js/vendor/chart.umd.min.js">
+  <link rel="prefetch" href="/static/js/vendor/htmx.min.js?v=20260902j">
+  <link rel="prefetch" href="/static/js/vendor/alpinejs.min.js?v=20260902j">
+  <link rel="prefetch" href="/static/js/app.js?v=20260910_v4">
+</head>
+<body data-page="auth">
+  <div class="app-bg" aria-hidden="true"></div>
+
+  <div class="auth-wrap" style="min-height:100vh;display:grid;place-items:center;padding:24px;">
+    <div class="card strong pad-lg" style="width:100%;max-width:420px;">
+      <div style="display:flex;align-items:center;gap:14px;justify-content:center;margin-bottom:28px;">
+        <span class="logo" style="width:46px;height:46px;border-radius:14px;background:var(--brand-grad);display:grid;place-items:center;color:#fff;box-shadow:0 6px 22px rgba(139,92,246,.5);">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+        </span>
+        <div>
+          <div style="font-size:20px;font-weight:700;">TG 归档台</div>
+          <div style="font-size:12px;color:var(--text-3);">v0.1.0 · 预览</div>
+        </div>
+      </div>
+
+      {% if variant == 'init' %}
+      <h1 style="font-size:20px;margin:0 0 4px;text-align:center;">初始化管理员</h1>
+      <p style="text-align:center;color:var(--text-2);font-size:13px;margin:0 0 24px;">首次运行，请设置管理员账号</p>
+      {% else %}
+      <h1 style="font-size:20px;margin:0 0 4px;text-align:center;">欢迎回来</h1>
+      <p style="text-align:center;color:var(--text-2);font-size:13px;margin:0 0 24px;">登录以继续管理你的归档</p>
+      {% endif %}
+
+      {% if error %}
+      <div class="alert error" style="margin-bottom:20px;">
+        <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#ic-alert"/></svg>
+        <span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      <form id="authForm" method="post" action="{% if variant == 'init' %}/init{% else %}/login{% endif %}" onsubmit="window.__onAuthSubmit(this)">
+        {% if variant == 'init' %}
+        <div class="field">
+          <label for="otp">服务器一次性码 <span class="hint">(One-Time Setup Key)</span></label>
+          <input class="input num" id="otp" name="otp" placeholder="例如 XXXX-XXXX-XXXX" autocomplete="one-time-code" style="letter-spacing:.2em;text-transform:uppercase;">
+          <div class="hint">一次性码由 VPS 安装脚本在首次启动时生成并打印，用于防止未授权人员抢注管理员。</div>
+        </div>
+        {% endif %}
+
+        <div class="field">
+          <label for="username">用户名</label>
+          <input class="input" id="username" name="username" autocomplete="username" placeholder="admin">
+        </div>
+
+        {% if variant == 'init' %}
+        <div class="field">
+          <label for="password">密码</label>
+          <input class="input" id="password" name="password" type="password" autocomplete="new-password" placeholder="至少 8 位">
+        </div>
+        <div class="field">
+          <label for="password2">确认密码</label>
+          <input class="input" id="password2" name="password2" type="password" autocomplete="new-password" placeholder="再次输入密码">
+        </div>
+        {% else %}
+        <div class="field">
+          <label for="password">密码</label>
+          <input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••">
+        </div>
+        {% endif %}
+
+        <button id="authBtn" type="submit" class="btn primary" style="width:100%;justify-content:center;padding:12px;">
+          {% if variant == 'init' %}开始初始化{% else %}登 录{% endif %}
+        </button>
+      </form>
+
+      <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--text-3);">
+        {% if variant == 'init' %}
+        一次性码来源见上方说明 · 初始化后自动创建管理员并跳转登录
+        {% else %}
+        {% if not initialized %}<a href="/init" style="color:var(--text-2);">首次运行？进入初始化 →</a>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+  <script src="/static/js/app.js"></script>
+  <script>
+    window.__onAuthSubmit = function(form) {
+      var btn = document.getElementById('authBtn');
+      if (btn && !btn.getAttribute('data-busy')) {
+        btn.setAttribute('data-busy', '1');
+        var label = {% if variant == 'init' %}'正在初始化…'{% else %}'正在登录…'{% endif %};
+        btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;margin-right:8px;display:inline-block;vertical-align:-2px;"></span>' + label;
+        btn.style.opacity = '0.85';
+        btn.style.cursor = 'wait';
+      }
+    };
+  </script>
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <defs>
+      <symbol id="ic-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+      <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+      <symbol id="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+      <symbol id="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></symbol>
+    </defs>
+  </svg>
+</body>
+</html>

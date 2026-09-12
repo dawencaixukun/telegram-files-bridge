@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import pill %}
+{% block title %}账号健康 · TG 归档台{% endblock %}
+{% block page_id %}account{% endblock %}
+{% block active_nav %}account{% endblock %}
+{% block page_title %}账号健康{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">账号健康 · {{ tg_label }}</span>{% endblock %}
+
+{% block head %}
+<script src="/static/js/vendor/apexcharts.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>账号健康</h1>
+    <p>下载错误与任务量监控</p>
+  </div>
+</div>
+
+{% set _err_seq = (stats.get('trend_errors') or [])[-7:] if stats else [] %}
+{% set _task_seq = (stats.get('trend_tasks') or [])[-7:] if stats else [] %}
+{% set total_errors = _err_seq | sum %}
+{% set total_tasks_7d = _task_seq | sum %}
+<div class="grid g-2" style="margin-bottom:var(--space-5);">
+  <div class="card pad-lg">
+    <div class="card-head">
+      <h2 class="card-title">下载错误（近 7 日）</h2>
+      <span class="pill" style="color:var(--err);background:rgba(248,113,113,.16);">{{ total_errors }} 次</span>
+    </div>
+    <div id="floodChart" style="height:260px;"></div>
+  </div>
+  <div class="card pad-lg">
+    <div class="card-head">
+      <h2 class="card-title">任务量（近 7 日）</h2>
+      <span class="pill" style="color:var(--info);background:rgba(96,165,250,.16);">{{ total_tasks_7d }} 个</span>
+    </div>
+    <div id="reqChart" style="height:260px;"></div>
+  </div>
+</div>
+
+<!-- FloodWait 智能风控冷却监控卡片 -->
+<div class="card pad-lg mb-4" id="accountFloodWaitCard" x-data="floodWaitAccountCard()" x-init="init()" style="margin-bottom:var(--space-5);">
+  <div class="card-head" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:20px;">⏳</span>
+      <div>
+        <h2 class="card-title" style="margin:0;">Telegram FloodWait 智能冷却监控</h2>
+        <div class="card-sub">TDLib 420/429 限流捕获与账号排队自愈调度</div>
+      </div>
+    </div>
+    <span :class="'pill ' + (st.isCooling ? 'warn' : 'ok')">
+      <span class="p-dot"></span><span x-text="st.isCooling ? ('风控冷却中 ' + st.formattedRemaining) : '状态正常 · 无限流'"></span>
+    </span>
+  </div>
+  <div style="margin-top:16px;">
+    <template x-if="st.isCooling">
+      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:var(--radius-md);padding:14px 16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div>
+            <div style="font-weight:600;font-size:14px;color:var(--wait);">⏳ 触发风控冷却保护</div>
+            <div style="font-size:12px;color:var(--text-2);margin-top:4px;">
+              触发原因: <code x-text="st.reason || 'FLOOD_WAIT'"></code> · 挂起排队任务: <strong x-text="st.suspendedTasksCount || 0"></strong> 个
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:24px;font-weight:800;font-family:var(--font-mono);color:var(--wait);" x-text="st.formattedRemaining">00:00</div>
+            <div style="font-size:11px;color:var(--text-3);">倒计时归零后全自动续跑</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;justify-content:flex-end;">
+          <button type="button" class="btn xs ghost" @click="resetCooldown()" :disabled="busy">强制重置冷却状态</button>
+        </div>
+      </div>
+    </template>
+    <template x-if="!st.isCooling">
+      <div style="color:var(--text-2);font-size:13px;display:flex;align-items:center;gap:8px;">
+        <svg class="icon xs" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--ok);width:16px;height:16px;min-width:16px;max-width:16px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>当前 Telegram 账号请求速率平稳，未触发服务端 FloodWait 冷却限制。</span>
+      </div>
+    </template>
+  </div>
+</div>
+
+<div class="grid g-2">
+  <!-- Session health -->
+  <div class="card pad-lg">
+    <div class="card-head"><h2 class="card-title">Session 健康</h2></div>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span class="dot {{ tg_dot_class }}" style="width:14px;height:14px;border-radius:50%;{% if tg_state == 'ok' %}background:var(--ok);box-shadow:0 0 12px var(--ok);{% elif tg_state == 'pending' %}background:var(--wait);box-shadow:0 0 12px var(--wait);{% elif tg_state == 'err' %}background:var(--err);box-shadow:0 0 12px var(--err);{% else %}background:var(--text-3);{% endif %}"></span>
+      <div>
+        <div style="font-weight:700;">{{ tg_label }}</div>
+        <div class="sub" style="color:var(--text-2);">{{ tg_sub }}</div>
+      </div>
+    </div>
+    {% if tg_accounts %}
+    <div style="display:grid;gap:10px;margin-top:16px;">
+      {% for a in tg_accounts %}
+      <div class="card" style="padding:12px 14px;display:flex;align-items:center;gap:12px;background:var(--glass-bg-strong);">
+        <span class="avatar" style="width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--brand-grad);color:#fff;font-weight:700;">{{ (a.name or 'T')[:1] }}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;font-size:13px;">{{ a.name or 'Telegram 账号' }}</div>
+          <div class="sub tnum" style="color:var(--text-3);font-size:12px;">{{ a.phone[:3] if a.phone and a.phone|length > 7 else (a.phone or '') }}****{{ a.phone[-4:] if a.phone and a.phone|length > 7 else '' }}{% if a.id %} · ID {{ a.id }}{% endif %}</div>
+        </div>
+        <span class="pill ok" style="color:var(--ok);background:rgba(52,211,153,.16);"><span class="p-dot"></span>已授权</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty" style="padding:20px 0;">
+      <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#ic-user"/></svg></div>
+      <h3>未绑定 Telegram 账号</h3>
+      <p>绑定后即可在此查看账号授权状态。</p>
+    </div>
+    {% endif %}
+    <div class="row mt-4">
+      <a class="btn ghost" href="/tg-login">{% if tg_state == 'ok' %}前往登录向导{% else %}前往绑定 / 继续登录{% endif %}</a>
+    </div>
+  </div>
+
+  <!-- Risk advice -->
+  <div class="card pad-lg">
+    <div class="card-head"><h2 class="card-title">风控建议</h2></div>
+    {% if tg_state == 'ok' %}
+    <div class="alert ok">
+      <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+      账号状态正常
+    </div>
+    {% else %}
+    <div class="alert warn">
+      <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-alert"/></svg>
+      TG 账号尚未完成登录，请先在登录向导中完成授权后再查看风控状态。
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Session 异地冷备与秒级自愈 -->
+<div class="card pad-lg" x-data="sessionBackupCard()" x-init="load()" style="margin-top:var(--space-5);">
+  <div class="card-head" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <h2 class="card-title">Session 异地冷备与自愈</h2>
+      <span class="pill" :class="st.dotClass || 'warn'">
+        <span class="p-dot"></span>
+        <span x-text="st.label || '检查中…'">检查中…</span>
+      </span>
+    </div>
+    <span class="sub tnum" style="font-size:12px;color:var(--text-3);" x-text="st.lastBackupTime ? ('最近冷备: ' + st.lastBackupTime) : '尚未备份'"></span>
+  </div>
+  <p style="font-size:13px;color:var(--text-2);margin:8px 0 14px;">
+    TDLib 核心会话与应用凭据采用 <b style="color:var(--text-1);">AES-256-GCM</b> 强对称加密，自动推送到 OpenList 异地冷备目录 <code style="font-size:12px;color:var(--brand);font-weight:600;">/TG-Backups/</code>，支持 1 分钟秒级解密解包极速自愈。
+  </p>
+  <div class="alert info" style="margin-bottom:14px;padding:10px 14px;font-size:12px;" x-show="st.message">
+    <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+    <span x-text="st.message"></span>
+    <span x-show="st.lastBackupSize"> · 快照大小 <b x-text="st.lastBackupSize"></b></span>
+    <span x-show="st.backupCount"> · 本地历史快照保留 <b x-text="st.backupCount"></b> 份</span>
+  </div>
+  <div class="row" style="gap:12px;">
+    <button type="button" class="btn primary" :disabled="busy" @click="triggerBackup()">
+      <span x-show="busy" class="spinner"></span>
+      <svg x-show="!busy" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+      <span x-text="busy ? '正在加密并上传…' : '⚡ 手动生成即时备份'">⚡ 手动生成即时备份</span>
+    </button>
+    <button type="button" class="btn ghost" :disabled="busy" @click="load()" title="刷新状态">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+      刷新
+    </button>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  (function () {
+    function isLight() { return document.documentElement.getAttribute('data-theme') === 'light'; }
+    var charts = [];
+    function renderAll() {
+      charts.forEach(function (c) { c.destroy(); });
+      charts = [];
+      var light = isLight();
+      var lbl = light ? 'rgba(40,40,90,.5)' : 'rgba(255,255,255,.42)';
+      var grid = light ? 'rgba(40,40,90,.1)' : 'rgba(255,255,255,.08)';
+      var tooltipBg = light ? 'rgba(255,255,255,.9)' : 'rgba(20,20,32,.82)';
+      var tooltipColor = light ? '#141428' : '#fff';
+      var days = {{ (stats.get('trend_labels') or [])[-7:] | tojson if stats else [] }};
+      var errors = {{ (stats.get('trend_errors') or [])[-7:] | tojson if stats else [] }};
+      var taskCounts = {{ (stats.get('trend_tasks') or [])[-7:] | tojson if stats else [] }};
+
+      if (window.ApexCharts) {
+        // 注意：render() 返回 Promise，charts 数组必须存实例而不是 Promise，
+        // 否则主题切换/清理时的 c.destroy() 会因 undefined 而抛错
+        var fc = new ApexCharts(document.getElementById('floodChart'), {
+          chart: { type: 'bar', height: 260, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+          series: [{ name: '下载错误', data: errors }],
+          xaxis: { categories: days, labels: { style: { colors: lbl } }, axisBorder: { show: false }, axisTicks: { show: false } },
+          yaxis: { labels: { style: { colors: lbl } } },
+          grid: { borderColor: grid, strokeDashArray: 4 },
+          plotOptions: { bar: { borderRadius: 6, columnWidth: '45%' } },
+          dataLabels: { enabled: false },
+          colors: ['#fb7185'],
+          tooltip: { theme: light ? 'light' : 'dark', background: tooltipBg, style: { color: tooltipColor } }
+        });
+        fc.render();
+
+        var rc = new ApexCharts(document.getElementById('reqChart'), {
+          chart: { type: 'area', height: 260, toolbar: { show: false }, background: 'transparent', fontFamily: 'inherit' },
+          series: [{ name: '任务量', data: taskCounts }],
+          xaxis: { categories: days, labels: { style: { colors: lbl } }, axisBorder: { show: false }, axisTicks: { show: false } },
+          yaxis: { labels: { style: { colors: lbl } } },
+          grid: { borderColor: grid, strokeDashArray: 4 },
+          stroke: { curve: 'smooth', width: 2.5 },
+          fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: .5, opacityTo: 0 } },
+          colors: ['#60a5fa'],
+          dataLabels: { enabled: false },
+          tooltip: { theme: light ? 'light' : 'dark', background: tooltipBg, style: { color: tooltipColor } }
+        });
+        rc.render();
+        charts.push(fc, rc);
+      }
+    }
+    renderAll();
+    window.addEventListener('themechange', renderAll);
+    // hx-boost 切页不整页刷新：离开本页时销毁图表并解绑监听
+    if (window.__pageOnLeave) window.__pageOnLeave(function () {
+      window.removeEventListener('themechange', renderAll);
+      charts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
+      charts = [];
+    });
+  })();
+</script>
+{% endblock %}

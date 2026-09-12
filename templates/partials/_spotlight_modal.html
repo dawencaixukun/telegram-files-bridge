@@ -1,0 +1,63 @@
+{# ====================================================================
+   _spotlight_modal.html — 全局跨库聚合搜索面板 (Ctrl+K Command Palette)
+   ==================================================================== #}
+<div class="modal-backdrop spotlight-backdrop" id="spotlightModalBackdrop" onclick="if(event.target===this) window.__closeSpotlightSearch()">
+  <div class="modal spotlight-modal" role="dialog" aria-modal="true" aria-label="全局跨库聚合搜索">
+    <div class="spotlight-input-wrap">
+      <svg class="spotlight-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      <input type="text" id="spotlightInput" class="spotlight-input"
+             placeholder="跨库聚合搜索（任务、本地在存、云端归档）..."
+             autocomplete="off" spellcheck="false"
+             oninput="window.__onSpotlightInput(this.value)"
+             onkeydown="window.__onSpotlightKeydown(event)">
+      <span class="spotlight-spinner" id="spotlightSpinner" style="display:none;"></span>
+      <kbd class="spotlight-esc-kbd" onclick="window.__closeSpotlightSearch()">ESC</kbd>
+    </div>
+
+    <!-- 分类标签过滤器 -->
+    <div class="spotlight-tabs" id="spotlightTabs">
+      <button type="button" class="spotlight-tab active" data-tab="all" onclick="window.__setSpotlightTab('all')">
+        全部 <span class="spotlight-tab-badge" id="tabCountAll">0</span>
+      </button>
+      <button type="button" class="spotlight-tab" data-tab="tasks" onclick="window.__setSpotlightTab('tasks')">
+        任务队列 <span class="spotlight-tab-badge" id="tabCountTasks">0</span>
+      </button>
+      <button type="button" class="spotlight-tab" data-tab="local" onclick="window.__setSpotlightTab('local')">
+        本地在存 <span class="spotlight-tab-badge" id="tabCountLocal">0</span>
+      </button>
+      <button type="button" class="spotlight-tab" data-tab="cloud" onclick="window.__setSpotlightTab('cloud')">
+        云端网盘 <span class="spotlight-tab-badge" id="tabCountCloud">0</span>
+      </button>
+    </div>
+
+    <!-- 结果区域 -->
+    <div class="spotlight-results" id="spotlightResults">
+      <div class="spotlight-placeholder" id="spotlightPlaceholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:40px;height:40px;opacity:0.4;margin-bottom:8px;">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <div>输入任意关键词实时跨库检索</div>
+        <small style="color:var(--text-3);margin-top:4px;">支持中英文、文件名模糊匹配与快捷操作</small>
+      </div>
+
+      <!-- 动态搜索结果流 -->
+      <div id="spotlightContent" style="display:none;"></div>
+    </div>
+
+    <!-- 底部快捷提示 -->
+    <div class="spotlight-foot">
+      <div class="spotlight-hints">
+        <span><kbd>↑</kbd> <kbd>↓</kbd> 切换选项</span>
+        <span><kbd>↵</kbd> 直达操作</span>
+        <span><kbd>Esc</kbd> 退出</span>
+      </div>
+      <div class="spotlight-brand">
+        TG 归档台 · 全局聚合搜索
+      </div>
+    </div>
+  </div>
+</div>

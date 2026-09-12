@@ -1,0 +1,33 @@
+{# ====================================================================
+   _submit_modal.html — glass modal + real queue submit (fetch / htmx)
+   ==================================================================== #}
+<div class="modal-backdrop" id="submitBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="提交下载">
+    <div class="modal-head">
+      <h2>提交下载</h2>
+      <button class="icon-btn xs" aria-label="关闭" onclick="window.__closeSubmit()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <form id="submitForm" onsubmit="window.__submitLinks(event)">
+      <div class="field">
+        <label for="submitLinks">粘贴消息链接</label>
+        <textarea class="textarea" id="submitLinks" name="links"
+          placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456"
+          style="min-height:150px;"></textarea>
+        <div class="hint">每行一条，支持公开 / 私密频道两种格式</div>
+      </div>
+
+      <!-- 提交统一走 __submitLinks 的 fetch（JSON + CSRF）；原先的 htmx 分支
+           是死代码且触发时会把 JSON 结果 swap 进 DOM，已移除 -->
+
+      <div class="modal-foot">
+        <button type="button" class="btn ghost" onclick="window.__closeSubmit()">取消</button>
+        <button type="submit" class="btn primary">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
+          加入队列
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

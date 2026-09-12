@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import pill %}
+{% block title %}总览 · TG 归档台{% endblock %}
+{% block page_id %}dashboard{% endblock %}
+{% block active_nav %}dashboard{% endblock %}
+{% block page_title %}总览{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">总览 · 刷新于 {{ now_fmt }}</span>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>总览</h1>
+    <p>归档管线运行概览 · 实时数据</p>
+  </div>
+</div>
+
+<!-- KPI row：实时下载/上传速率（双色区分：下载青色、上传紫色），前端每 2s 轮询 /api/speeds -->
+<div class="grid g-4" style="margin-bottom:var(--space-5);">
+  {% for k in (stats.get('kpis') if stats else []) %}
+  <div class="card kpi">
+    <div class="k-head">
+      <span class="k-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#{{ k.icon }}"/></svg></span>
+      {{ k.label }}
+    </div>
+    <div class="k-value tnum"{% if k.id %} id="{{ k.id }}"{% endif %}{% if k.value_color %} style="color:{{ k.value_color }};"{% endif %}>{{ k.value }}<small>{{ k.unit }}</small></div>
+    <div class="k-foot">
+      <span class="delta {{ k.d }}" style="{% if not k.delta %}display:none;{% endif %}">{{ k.delta }}</span>
+      <svg class="spark" width="90" height="30" viewBox="0 0 92 32" fill="none" aria-hidden="true">
+        <polyline points="{{ k.points }}" stroke="{{ k.spark }}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card pad-lg" style="margin-bottom:var(--space-5);">
+  <div class="card-head">
+    <h2 class="card-title">实时速率</h2>
+    <div style="display:flex;gap:16px;">
+      {% for ln in ((stats.get('summary') or [{}])[0].get('lines') if stats and stats.get('summary') else []) %}
+      <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;">
+        <span style="width:10px;height:10px;border-radius:50%;background:{{ ln.color }};display:inline-block;"></span>
+        <span style="color:var(--text-2);">{{ ln.label }}</span>
+        <b style="color:{{ ln.color }};font-variant-numeric:tabular-nums;" id="summary-speed-{{ ln.speed_key }}">{{ ln.value }}</b>
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+  {# 双折线实时图：上传（紫 #a78bfa）+ 下载（青 #22d3ee）同图，全宽展开且两线相互交替高低 #}
+  <svg id="speed-chart" width="100%" height="130" viewBox="0 0 460 130" preserveAspectRatio="none"
+       fill="none" aria-hidden="true" style="display:block;width:100%;overflow:visible;">
+    <defs>
+      <linearGradient id="grad-speed-download" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.0"/>
+      </linearGradient>
+      <linearGradient id="grad-speed-upload" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.22"/>
+        <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.0"/>
+      </linearGradient>
+    </defs>
+    <!-- 背景参考标线（水平刻度虚线） -->
+    <line x1="8" y1="32" x2="452" y2="32" stroke="currentColor" stroke-opacity="0.07" stroke-dasharray="4 4" stroke-width="1"/>
+    <line x1="8" y1="68" x2="452" y2="68" stroke="currentColor" stroke-opacity="0.07" stroke-dasharray="4 4" stroke-width="1"/>
+    <line x1="8" y1="104" x2="452" y2="104" stroke="currentColor" stroke-opacity="0.07" stroke-dasharray="4 4" stroke-width="1"/>
+
+    <!-- 渐变面积图层：下载与上传相互高低层叠 -->
+    <polygon id="speed-area-download" fill="url(#grad-speed-download)" points=""/>
+    <polygon id="speed-area-upload" fill="url(#grad-speed-upload)" points=""/>
+
+    {% set s0 = ((stats.get('summary') or [None])[0] if stats else None) %}
+    {% if s0 %}
+    {% for ln in (s0.get('lines') or []) %}
+    <path id="speed-line-{{ ln.speed_key }}"
+          data-speed-key="{{ ln.speed_key }}"
+          data-color="{{ ln.color }}"
+          data-points="{{ ln.points }}"
+          data-raw="{{ ln.raw | join(' ') }}"
+          d="{{ ln.path }}"
+          stroke="{{ ln.color }}" stroke-width="1.8"
+          stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    {% endfor %}
+    {% endif %}
+  </svg>
+</div>
+
+
+<!-- Recent tasks -->
+<div class="card pad-lg">
+  <div class="card-head" style="justify-content:space-between;">
+    <div>
+      <h2 class="card-title">任务动态</h2>
+      <div class="card-sub">进行中优先 · 前 8 条</div>
+    </div>
+    <a class="btn sm ghost" href="/tasks">查看全部 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg></a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>时间</th><th>来源</th><th>文件名</th><th>大小</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+        {% for t in recent_tasks %}
+        <tr>
+          <td>{{ t.time }}</td>
+          <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
+          <td><a class="link" href="/tasks/{{ t.id }}">{{ t.filename }}</a></td>
+          <td>{{ t.size }}</td>
+          <td>{{ pill(t.status) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  // 实时速率双平滑曲线：每 2s 轮询 /api/speeds，在同一 SVG（460×130 视区）内
+  // 同时重绘上传（紫 #a78bfa）与下载（青 #22d3ee）两条 Catmull-Rom 平滑曲线
+  // （替代 polyline 生硬尖角）。曲线只反映真实速率，空闲为贴底平线且静止。
+  // 服务端经 data-raw 下发原始 bps 序列，首屏与轮询共用同一套联合峰值归一化
+  // 几何 + 平滑算法（前后端一致，无跳变）。hx-boost 切页离开时停表防泄漏。
+  (function () {
+    var W = 460, H = 130, PAD_X = 8, PAD_Y = 14;
+    var MAX_PTS = 14;
+
+    var lines = [
+      { key: 'upload',   color: '#a78bfa',
+        speedEl: document.getElementById('summary-speed-upload'),
+        pathEl: document.getElementById('speed-line-upload'),
+        area: document.getElementById('speed-area-upload') },
+      { key: 'download', color: '#22d3ee',
+        speedEl: document.getElementById('summary-speed-download'),
+        pathEl: document.getElementById('speed-line-download'),
+        area: document.getElementById('speed-area-download') },
+    ].filter(function (l) { return l.pathEl; });
+    if (!lines.length) return;
+
+    // 初始化：直接使用服务端下发的原始 bps 序列（与首屏 path 一一对应）
+    lines.forEach(function (l) {
+      var raw = (l.pathEl.getAttribute('data-raw') || '').trim();
+      l.series = raw ? raw.split(/\s+/).map(parseFloat) : [];
+      while (l.series.length < MAX_PTS) l.series.unshift(0); // 满窗补 0
+      l.series = l.series.slice(-MAX_PTS);
+    });
+
+    // Catmull-Rom → 三次贝塞尔（张力 1/6，与后端 _speed_chart_smooth_path 一致）
+    function smoothPath(coords) {
+      if (coords.length < 2) return '';
+      var d = 'M ' + coords[0][0].toFixed(1) + ' ' + coords[0][1].toFixed(1);
+      for (var i = 0; i < coords.length - 1; i++) {
+        var p0 = coords[i - 1] || coords[i];
+        var p1 = coords[i], p2 = coords[i + 1];
+        var p3 = coords[i + 2] || p2;
+        var c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+        var c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+        d += ' C ' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' '
+                   + c2x.toFixed(1) + ' ' + c2y.toFixed(1) + ' '
+                   + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1);
+      }
+      return d;
+    }
+
+    function redraw() {
+      // 联合峰值归一化：两条线共用同一峰值，保证同量纲可比
+      var joint = 0;
+      lines.forEach(function (l) {
+        l.series.forEach(function (v) { if (v > joint) joint = v; });
+      });
+      var usableH = H - 2 * PAD_Y;
+      var step = (W - 2 * PAD_X) / (MAX_PTS - 1);
+
+      lines.forEach(function (l) {
+        var coords = l.series.map(function (v, i) {
+          return [PAD_X + i * step, (H - PAD_Y) - (v / joint) * usableH];
+        });
+        var d = smoothPath(coords);
+        l.pathEl.setAttribute('d', d);
+        if (l.area && coords.length > 1) {
+          var baseBottom = (H - 4).toFixed(1);
+          var ptStr = coords.map(function (c) {
+            return c[0].toFixed(1) + ',' + c[1].toFixed(1);
+          }).join(' ');
+          l.area.setAttribute('points',
+            coords[0][0].toFixed(1) + ',' + baseBottom + ' ' + ptStr + ' '
+            + coords[coords.length - 1][0].toFixed(1) + ',' + baseBottom);
+        }
+      });
+    }
+    redraw(); // 首屏渲染（与轮询重绘同几何同算法，无跳变）
+
+    function push(key, bps) {
+      var l = lines.find(function (x) { return x.key === key; });
+      if (!l) return;
+      l.series.push(Math.max(0, bps));
+      if (l.series.length > MAX_PTS) l.series.splice(0, l.series.length - MAX_PTS);
+    }
+
+    var timer = null;
+    async function poll() {
+      try {
+        var r = await fetch('/api/speeds', { headers: { 'X-Requested-With': 'fetch' } });
+        if (!r.ok) return;
+        var d = await r.json();
+        if (d.upload && typeof d.upload.bps === 'number') {
+          push('upload', d.upload.bps);
+          var el = document.getElementById('summary-speed-upload');
+          if (el) el.textContent = d.upload.label || '0 B/s';
+        }
+        if (d.download && typeof d.download.bps === 'number') {
+          push('download', d.download.bps);
+          var el2 = document.getElementById('summary-speed-download');
+          if (el2) el2.textContent = d.download.label || '0 B/s';
+        }
+        redraw();
+      } catch (e) { /* 忽略瞬时网络波动 */ }
+    }
+
+    function start() {
+      if (timer) return;
+      poll();
+      timer = setInterval(poll, 2000);
+    }
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+    }
+
+    start();
+    if (window.__pageOnLeave) window.__pageOnLeave(stop);
+  })();
+</script>
+{% endblock %}

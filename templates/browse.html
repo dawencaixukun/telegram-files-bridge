@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+{% block title %}浏览下载 · TG 归档台{% endblock %}
+{% block page_id %}browse{% endblock %}
+{% block active_nav %}browse{% endblock %}
+{% block page_title %}浏览下载{% endblock %}
+{% block ctx_chip %}
+{# 聊天搜索直接放顶栏（仅本页出现）：输入实时过滤左侧会话列表 #}
+<div class="topbar-search" role="search">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#ic-search"/></svg>
+  <input class="input" type="search" placeholder="搜索聊天…" aria-label="搜索聊天"
+         id="browseSearchInput"
+         oninput="window.__browseFilterChats(this.value)">
+</div>
+<span class="ctx-chip">浏览下载 · <span class="tnum" id="browseTopCount">{{ browse_count }}</span> 个文件</span>
+{% endblock %}
+
+{% block content %}
+<div class="browse-layout" id="browseLayout">
+
+  {# ---------------- 聊天侧栏（Jinja2 服务端直出，彻底免疫客户端组件切页竞态） ---------------- #}
+  <aside class="card browse-side" id="browseSide">
+    {% for acc in tree %}
+    <div class="acc-group" data-tg="{{ acc.telegramId }}">
+      <div class="group-label">{{ acc.name }}</div>
+      {% for c in acc.chats %}
+      <button type="button" class="chat-item {% if sel_tg == (acc.telegramId|string) and sel_chat == (c.chatId|string) %}active{% endif %}"
+              data-tg="{{ acc.telegramId }}"
+              data-chat="{{ c.chatId }}"
+              data-title="{{ c.title }}"
+              onclick="window.__browseSelectChat(this)">
+        {% if c.saved %}
+        <svg class="star" viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+        {% endif %}
+        <span class="t">{{ c.title }}</span>
+      </button>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="side-empty" id="browseSideEmpty" style="{% if tree and (tree|map(attribute='chats')|map('length')|sum > 0) %}display:none;{% endif %}">没有匹配的聊天</div>
+  </aside>
+
+  {# ---------------- 文件列表 ---------------- #}
+  <section class="browse-main">
+    <div class="card pad-lg">
+      <div class="card-head browse-toolbar">
+        <div class="browse-toolbar-title" style="min-width:0;">
+          <h2 class="card-title" id="browseCurTitle">{{ cur_title }}</h2>
+          <span class="card-sub"><span class="tnum" id="browseCount">{{ browse_count }}</span> 个文件 · 点卡片勾选，一键加入下载队列</span>
+        </div>
+        <div class="browse-tools">
+          <div class="type-chips" role="tablist" aria-label="文件类型筛选">
+            {% for val, label in browse_types %}
+            <button type="button" class="type-chip {% if sel_type == val %}active{% endif %}"
+                    data-type="{{ val }}"
+                    onclick="window.__browseSetType('{{ val }}')">{{ label }}</button>
+            {% endfor %}
+          </div>
+          <label class="selall" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;" title="隐藏已经归档到网盘的文件">
+            <input type="checkbox" class="check" id="browseHideArchived" {% if hide_archived %}checked{% endif %} onchange="window.__browseToggleHideArchived(this)">
+            <span style="font-size:12px;">隐藏已归档</span>
+          </label>
+          <label class="selall"><input type="checkbox" class="check" onchange="window.__browseSelAll(this)"> 全选</label>
+          <button type="button" class="btn primary" onclick="window.__browseDownloadSelected()">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+            下载所选
+          </button>
+        </div>
+      </div>
+      <div class="thumb-grid" id="browse-rows">
+        {% include "partials/_browse_files.html" %}
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  window.__BROWSE_TREE = {{ tree | tojson }};
+  window.__BROWSE_STATE = {
+    tg: {{ sel_tg | tojson }},
+    chat: {{ sel_chat | tojson }},
+    type: {{ sel_type | tojson }},
+    /* 「隐藏已归档」必须进全局状态：切类型/切聊天/加载下一页都要把该
+       筛选传给服务端。历史缺陷：此筛选是纯前端 display:none，只对当前
+       DOM 里的卡片生效 —— 重拉网格后新卡片不再应用筛选，归档件又冒出来。 */
+    hideArchived: {{ 'true' if hide_archived else 'false' }}
+  };
+
+  /* 切换聊天 */
+  window.__browseSelectChat = function (btn) {
+    if (!btn) return;
+    var tg = String(btn.dataset.tg || '');
+    var chat = String(btn.dataset.chat || '');
+    var title = btn.dataset.title || '聊天';
+    window.__BROWSE_STATE.tg = tg;
+    window.__BROWSE_STATE.chat = chat;
+    document.querySelectorAll('.browse-side .chat-item').forEach(function (el) {
+      el.classList.toggle('active', el === btn);
+    });
+    var titleEl = document.getElementById('browseCurTitle');
+    if (titleEl) titleEl.textContent = title;
+    window.__browseReload();
+  };
+
+  /* 切换文件类型 */
+  window.__browseSetType = function (t) {
+    if (window.__BROWSE_STATE.type === t) return;
+    window.__BROWSE_STATE.type = t;
+    document.querySelectorAll('.browse-tools .type-chip').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.type === t);
+    });
+    window.__browseReload();
+  };
+
+  /* 重新拉取文件网格片段 */
+  /* 重新拉取文件网格片段（携带 hideArchived 服务端过滤） */
+  window.__browseReload = function () {
+    var s = window.__BROWSE_STATE || {};
+    var url = '/partials/browse-files?tg=' + encodeURIComponent(s.tg || '')
+            + '&chat=' + encodeURIComponent(s.chat || '')
+            + '&type=' + encodeURIComponent(s.type || 'document')
+            + '&cursor=0'
+            + '&hide_archived=' + (s.hideArchived ? '1' : '0');
+    if (window.htmx) htmx.ajax('GET', url, { target: '#browse-rows', swap: 'innerHTML' });
+  };
+
+  /* 聊天侧栏搜索过滤 */
+  window.__browseFilterChats = function (query) {
+    var q = (query || '').trim().toLowerCase();
+    var groups = document.querySelectorAll('.browse-side .acc-group');
+    var totalVisible = 0;
+    groups.forEach(function (grp) {
+      var items = grp.querySelectorAll('.chat-item');
+      var grpVisible = 0;
+      items.forEach(function (item) {
+        var t = (item.dataset.title || item.textContent || '').toLowerCase();
+        var match = !q || t.indexOf(q) !== -1;
+        item.style.display = match ? '' : 'none';
+        if (match) grpVisible++;
+      });
+      grp.style.display = grpVisible > 0 ? '' : 'none';
+      totalVisible += grpVisible;
+    });
+    var emptyEl = document.getElementById('browseSideEmpty');
+    if (emptyEl) emptyEl.style.display = totalVisible === 0 ? '' : 'none';
+  };
+
+  /* 监听顶栏自定义事件与数量同步 */
+  window.addEventListener('browse-q', function (evt) {
+    window.__browseFilterChats(evt.detail);
+  });
+  window.addEventListener('browse-count', function (evt) {
+    var cnt = evt.detail;
+    if (typeof cnt === 'undefined') return;
+    var el = document.getElementById('browseCount');
+    if (el) el.textContent = cnt;
+    var topEl = document.getElementById('browseTopCount');
+    if (topEl) topEl.textContent = cnt;
+  });
+
+  /* 兜底兼容旧调用 */
+  window.browsePage = function () {
+    return {
+      accounts: window.__BROWSE_TREE || [],
+      reload: window.__browseReload
+    };
+  };
+
+  /* ---- 勾选 / 下载动作（fragment 重新插入后由内联 onclick 触发，无需重新绑定） ---- */
+  window.__browseToggleHideArchived = function (cb) {
+    var hide = !!(cb && cb.checked);
+    window.__BROWSE_STATE.hideArchived = hide;
+    // 服务端过滤为主：重拉网格（cursor=0），归档卡片从源头不渲染。
+    // 这比纯前端 display:none 可靠 —— 历史缺陷是重拉/翻页后筛选丢失。
+    window.__browseReload();
+  };
+  window.__browseSelAll = function (cb) {
+    document.querySelectorAll('.browse-card').forEach(function (card) {
+      if (card.style.display === 'none') return;
+      var c = card.querySelector('.browse-check:not([disabled])');
+      if (c) c.checked = cb.checked;
+    });
+  };
+  window.__browseChecked = function () {
+    var seenUid = {}, seenKey = {}, out = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.browse-check:checked'), function (c) {
+      var card = c.closest('.browse-card');
+      if (!card) return;
+      /* 转发副本按 uniqueId 去重：同一底层文件只提交一次 */
+      var uid = card.dataset.uid || '';
+      if (uid) {
+        if (seenUid[uid]) return;
+        seenUid[uid] = 1;
+      } else {
+        var k = card.dataset.tg + ':' + card.dataset.chat + ':' + card.dataset.msg;
+        if (seenKey[k]) return;
+        seenKey[k] = 1;
+      }
+      out.push({
+        telegramId: card.dataset.tg, chatId: card.dataset.chat,
+        messageId: card.dataset.msg, fileId: card.dataset.file,
+        uniqueId: uid
+      });
+    });
+    return out;
+  };
+  /* 整卡点击切换勾选（已归档/本地在存点击则呼出资产详情抽屉） */
+  window.__browseCardClick = function (evt, card) {
+    if (evt.target.closest('button, a, label, input')) return;
+    if (card.dataset.archived === '1' || card.dataset.downloaded === '1') {
+      window.__openBrowseAssetDrawer(card);
+      return;
+    }
+    var cb = card.querySelector('.browse-check');
+    if (cb && !cb.disabled) cb.checked = !cb.checked;
+  };
+
+  /* ---- OpenList 直达（已归档卡片旁按钮）----
+     卡片 dataset.openlistUrl 由后端 _openlist_direct_url 生成，通常是
+     内网地址（http://127.0.0.1:5244/...）。用户浏览器打不开内网地址，
+     所以这里优先用「自定义公网域名」(localStorage / 服务端 publicBaseUrl)
+     重拼路径；既没有域名、地址又是内网的，引导去云端页设置域名，
+     而不是甩一个必定打不开的链接给用户。 */
+  window.__BROWSE_OPENLIST_BASE = window.__BROWSE_OPENLIST_BASE ||
+    (localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '');
+  window.__browseFormatBase = function (raw) {
+    var s = String(raw || '').trim();
+    if (!s) return '';
+    if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+    return s.replace(/\/+$/, '');
+  };
+  window.__browseOpenListUrl = function (cloudPath, fallbackUrl) {
+    var base = window.__browseFormatBase(window.__BROWSE_OPENLIST_BASE);
+    if (!base) return fallbackUrl || '';
+    var p = String(cloudPath || '').trim();
+    if (!p || p === '—') return base;
+    var clean = p.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+    return base + '/' + clean;
+  };
+  window.__browseOpenOpenList = function (btn) {
+    var card = btn && btn.closest ? btn.closest('.browse-card') : null;
+    if (!card) return;
+    var cloudPath = card.dataset.cloudPath || '';
+    var fallback = card.dataset.openlistUrl || '';
+    var target = window.__browseOpenListUrl(cloudPath, fallback);
+    var isInternal = !target || /(^https?:\/\/)?(127\.0\.0\.1|localhost|0\.0\.0\.0)/i.test(target);
+    if (isInternal && !window.__BROWSE_OPENLIST_BASE) {
+      // 未配置公网域名且目标是内网：明确告知并带去配置，不打开死链
+      if (window.__toast) {
+        window.__toast('无法打开 OpenList', 'info',
+          '当前是内网地址，请先到「云端归档」页设置 OpenList 外部访问域名/公网 IP');
+      }
+      window.location.href = '/library/cloud';
+      return;
+    }
+    if (!target) {
+      if (window.__toast) window.__toast('缺少 OpenList 地址', 'error', '该记录没有云端路径');
+      return;
+    }
+    window.open(target, '_blank', 'noopener');
+  };
+  window.__browsePost = function (files, okMsg, force) {
+    fetch('/browse/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+      body: JSON.stringify({ files: files, force: !!force })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        window.__toast(okMsg, 'success', '已加入下载队列');
+        // 历史缺陷（恶性循环）：提交成功后曾调 __browseReload() 强制
+        // cursor=0 重拉第一页并 innerHTML 替换整个网格 —— 用户点一次
+        // 下载就跳回第一页、无限滚动哨兵被换掉，后面的文件必须一页页
+        // 重新滚。现改为原地更新已提交的卡片状态，网格与滚动位置不动。
+        window.__browseMarkSubmitted(files);
+      } else if (d && d.code === 'DUPLICATE_ASSET') {
+        window.__showDedupInterceptDrawer(d, files);
+      } else {
+        window.__toast('提交失败', 'error', (d && d.message) || '后端返回错误');
+      }
+      return null;
+    }).catch(function (e) {
+      window.__toast('提交失败', 'error', '网络错误：' + e);
+    });
+  };
+  /* 提交下载成功后原地更新对应卡片：t-badge 变「下载中」、
+     底部按钮变禁用态（复用与模板一致的 class），不触碰网格结构。 */
+  window.__browseMarkSubmitted = function (files) {
+    if (!Array.isArray(files)) return;
+    var keys = files.map(function (f) {
+      return (f.chatId || '') + ':' + (f.messageId || '');
+    });
+    document.querySelectorAll('.browse-card').forEach(function (card) {
+      var k = (card.dataset.chat || '') + ':' + (card.dataset.msg || '');
+      if (keys.indexOf(k) === -1) return;
+      card.classList.add('done', 'is-downloaded');
+      card.dataset.downloaded = '1';
+      // 缩略图徽章 → 下载中
+      var badge = card.querySelector('.t-badge');
+      if (badge) {
+        badge.innerHTML = '<span class="badge accent">下载中</span>';
+      }
+      // 底部按钮 → 禁用下载图标（提交中状态，任务队列页可看进度）
+      var foot = card.querySelector('.t-foot');
+      if (foot) {
+        foot.innerHTML = '<span class="badge" title="已加入下载队列，进度见任务队列页" style="font-size:11px;color:var(--text-3);background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.25);border-radius:var(--radius-sm);padding:2px 6px;">已提交</span>';
+      }
+    });
+  };
+  window.__browseDownloadSelected = function () {
+    var checked = document.querySelectorAll('.browse-check:checked').length;
+    var files = window.__browseChecked();
+    if (!files.length) { window.__toast('请先勾选文件', 'error'); return; }
+    var dropped = checked - files.length;
+    var msg = '已提交 ' + files.length + ' 个下载任务' + (dropped > 0 ? '（' + dropped + ' 条重复转发已忽略）' : '');
+    window.__browsePost(files, msg);
+  };
+  window.__browseDownloadOne = function (btn) {
+    var card = btn.closest('.browse-card');
+    if (!card) return;
+    window.__browsePost([{
+      telegramId: card.dataset.tg, chatId: card.dataset.chat,
+      messageId: card.dataset.msg, fileId: card.dataset.file,
+      uniqueId: card.dataset.uid || ''
+    }], '已提交 1 个下载任务');
+  };
+  window.__browseForceDownloadOne = function (card) {
+    if (!card) return;
+    window.__browsePost([{
+      telegramId: card.dataset.tg, chatId: card.dataset.chat,
+      messageId: card.dataset.msg, fileId: card.dataset.file,
+      uniqueId: card.dataset.uid || ''
+    }], '已强制提交 1 个下载任务', true);
+  };
+
+  /* ---- 滚动到底部自动加载下一页 ----
+     实现：观察「加载更多」哨兵行（#browse-more-row），进入视口即以编程方式
+     click 兜底按钮，复用 htmx 既有的 outerHTML 链路——新片段会带回新卡片、
+     新游标和新哨兵，观察器随后自动换绑到新哨兵。
+     防抖要点：加载期间（htmx 请求在途）不再触发，避免重复请求。 */
+  (function () {
+    if (!('IntersectionObserver' in window)) return;  // 老浏览器退化为手动点击
+    var io = null;
+    var inflight = false;
+
+    function arm() {
+      var row = document.getElementById('browse-more-row');
+      if (!row) { io && io.disconnect && io.disconnect(); return; }   // 已加载完
+      if (io) io.disconnect();
+      io = new IntersectionObserver(function (entries) {
+        var e = entries && entries[0];
+        if (!e || !e.isIntersecting) return;
+        if (inflight) return;                     // 上一页还在拉取
+        inflight = true;
+        var spin = document.getElementById('browseMoreSpin');
+        var btn = document.getElementById('browseMoreBtn');
+        if (spin) spin.style.display = 'inline-block';
+        if (btn) btn.style.opacity = '0.6';
+        // 直接点按钮：复用 htmx 的请求链路与 swap 逻辑，不另造一套 fetch
+        if (btn) btn.click();
+      }, { rootMargin: '240px 0px' });            // 提前 240px 预加载，滚动更顺滑
+      io.observe(row);
+    }
+
+    // 任何涉及文件网格的 htmx swap 之后都要重挂观察器。
+    // 关键：加载下一页的 swap 目标是 #browse-more-row（outerHTML 自替换），
+    // 旧实现只认 #browse-rows，导致第一页加载完后观察器仍挂在已被移除的
+    // 旧哨兵上——之后滚动永远不再触发（用户报告「滚动刷新不生效」）。
+    // arm() 自身会检查哨兵是否存在（末页自动断开），所以这里可以放心无条件重挂。
+    function resetInflightUi() {
+      var spin = document.getElementById('browseMoreSpin');
+      var btn = document.getElementById('browseMoreBtn');
+      if (spin) spin.style.display = 'none';
+      if (btn) btn.style.opacity = '';
+    }
+    document.body.addEventListener('htmx:afterSwap', function () {
+      inflight = false;
+      resetInflightUi();
+      arm();
+    });
+    // 请求失败也要放开防抖，否则一次网络错误就永久卡住
+    document.body.addEventListener('htmx:responseError', function () {
+      inflight = false;
+      resetInflightUi();
+      arm();
+    });
+    document.body.addEventListener('htmx:sendError', function () {
+      inflight = false;
+      resetInflightUi();
+      arm();
+    });
+    // 兜底：极少数情况下 swap 事件未触发（如超时被浏览器掐断），
+    // 3 秒后强制复位，保证滚动加载不会永久卡死。
+    function scheduleSafetyReset() {
+      setTimeout(function () {
+        if (inflight) {
+          inflight = false;
+          resetInflightUi();
+          arm();
+        }
+      }, 3000);
+    }
+    // 首页渲染（未经过 htmx swap）也要挂上
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { arm(); scheduleSafetyReset(); });
+    } else {
+      arm();
+      scheduleSafetyReset();
+    }
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}TG 登录向导 · TG 归档台{% endblock %}
+{% block page_id %}tg-login{% endblock %}
+{% block active_nav %}account{% endblock %}
+{% block page_title %}TG 登录向导{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">TG Session · 需要登录</span>{% endblock %}
+
+{% block content %}
+<div x-data="tgWizard()" x-init="init()" style="max-width:720px;margin:0 auto;">
+  <div class="page-header">
+    <div>
+      <h1>TG 登录向导</h1>
+      <p>使用你的 Telegram 账号授权下载（通过后端 TDLib 真实登录）</p>
+    </div>
+  </div>
+
+  <div class="card pad-lg">
+    <!-- Steps indicator -->
+    <div class="steps">
+      <div class="step" :class="{'active': step>=1, 'done': step>1}">
+        <span class="s-dot" x-text="step>1?'✓':'1'"></span>手机号
+        <span class="s-bar"></span>
+      </div>
+      <div class="step" :class="{'active': step>=2, 'done': step>2}">
+        <span class="s-dot" x-text="step>2?'✓':'2'"></span>验证码
+        <span class="s-bar"></span>
+      </div>
+      <div class="step" :class="{'active': step>=3}">
+        <span class="s-dot">3</span>两步验证
+      </div>
+    </div>
+
+    <template x-if="step===1">
+      <div>
+        <div class="field">
+          <label>手机号</label>
+          <div class="row" style="gap:8px;">
+            <select class="select" style="width:170px;" x-model="country">
+              <optgroup label="美洲">
+                <option value="+1">+1 美国/加拿大</option>
+                <option value="+54">+54 阿根廷</option>
+                <option value="+55">+55 巴西</option>
+                <option value="+52">+52 墨西哥</option>
+                <option value="+56">+56 智利</option>
+                <option value="+57">+57 哥伦比亚</option>
+                <option value="+51">+51 秘鲁</option>
+                <option value="+58">+58 委内瑞拉</option>
+              </optgroup>
+              <optgroup label="亚洲">
+                <option value="+86">+86 中国</option>
+                <option value="+852">+852 香港</option>
+                <option value="+853">+853 澳门</option>
+                <option value="+886">+886 台湾</option>
+                <option value="+81">+81 日本</option>
+                <option value="+82">+82 韩国</option>
+                <option value="+65">+65 新加坡</option>
+                <option value="+60">+60 马来西亚</option>
+                <option value="+66">+66 泰国</option>
+                <option value="+84">+84 越南</option>
+                <option value="+63">+63 菲律宾</option>
+                <option value="+62">+62 印尼</option>
+                <option value="+91">+91 印度</option>
+                <option value="+92">+92 巴基斯坦</option>
+                <option value="+880">+880 孟加拉</option>
+                <option value="+90">+90 土耳其</option>
+              </optgroup>
+              <optgroup label="欧洲">
+                <option value="+44">+44 英国</option>
+                <option value="+33">+33 法国</option>
+                <option value="+49">+49 德国</option>
+                <option value="+39">+39 意大利</option>
+                <option value="+34">+34 西班牙</option>
+                <option value="+351">+351 葡萄牙</option>
+                <option value="+31">+31 荷兰</option>
+                <option value="+32">+32 比利时</option>
+                <option value="+41">+41 瑞士</option>
+                <option value="+43">+43 奥地利</option>
+                <option value="+48">+48 波兰</option>
+                <option value="+380">+380 乌克兰</option>
+                <option value="+7">+7 俄罗斯/哈萨克</option>
+              </optgroup>
+              <optgroup label="中东/非洲">
+                <option value="+971">+971 阿联酋</option>
+                <option value="+966">+966 沙特</option>
+                <option value="+972">+972 以色列</option>
+                <option value="+20">+20 埃及</option>
+                <option value="+212">+212 摩洛哥</option>
+                <option value="+27">+27 南非</option>
+                <option value="+234">+234 尼日利亚</option>
+              </optgroup>
+              <optgroup label="大洋洲">
+                <option value="+61">+61 澳大利亚</option>
+                <option value="+64">+64 新西兰</option>
+              </optgroup>
+            </select>
+            <input class="input num" style="flex:1;" type="tel" x-model="phone" placeholder="请输入手机号（不含区号）" @keydown.enter="step1()">
+          </div>
+        </div>
+        <div class="row" style="justify-content:flex-end;">
+          <button class="btn primary" :disabled="loading" @click="step1()">
+            <span x-show="loading" class="spinner"></span>
+            <svg x-show="!loading" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
+            发送验证码
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="step===2">
+      <div>
+        <div class="alert info" style="margin-bottom:20px;">
+          <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-info"/></svg>
+          验证码已发送至 <b x-text="country + ' ' + phone"></b>，请查收 Telegram。
+        </div>
+        <div class="otp-row">
+          <template x-for="i in 5" :key="i">
+            <input class="otp-box" maxlength="1" inputmode="numeric" autocomplete="one-time-code"
+                   :data-otp="i" @input="otpInput(i, $event)" @keydown.backspace="otpBack(i, $event)" @paste="otpPaste($event)">
+          </template>
+        </div>
+        <div class="otp-note">5 格验证码 · 备用码可在 TG 安全设置中查看</div>
+        <div class="row mt-4" style="justify-content:space-between;">
+          <button class="btn ghost" @click="step=1">返回</button>
+          <button class="btn primary" :disabled="loading" @click="step2()">
+            <span x-show="loading" class="spinner"></span>
+            <svg x-show="!loading" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
+            下一步
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="step===3">
+      <div>
+        <div class="field">
+          <label>两步验证密码（可选）</label>
+          <input class="input" type="password" x-model="tfa" placeholder="留空则跳过（若账号已开启两步验证则必填）">
+          <div class="hint">若账号未开启两步验证，可留空直接完成。</div>
+        </div>
+        <div class="row mt-4" style="justify-content:space-between;">
+          <button class="btn ghost" @click="step=2">返回</button>
+          <button class="btn primary" :disabled="loading" @click="complete()">
+            <span x-show="loading" class="spinner"></span>
+            <svg x-show="!loading" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+            完成登录
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="step===4">
+      <div>
+        <div class="alert ok" style="margin-bottom:20px;">
+          <svg class="a-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+          登录成功，Session 已保存。
+        </div>
+        <div class="card" style="display:flex;align-items:center;gap:16px;background:var(--glass-bg-strong);">
+          <span class="avatar" style="width:56px;height:56px;font-size:24px;border-radius:16px;" x-text="(account.name || '?').trim().charAt(0) || '?'"></span>
+          <div>
+            <div style="font-weight:700;font-size:17px;" x-text="account.name || 'TG 账号'"></div>
+            <div class="sub" style="color:var(--text-2);font-size:13px;">ID: <span class="tnum" x-text="account.id || '—'"></span> · <a class="link" href="/account">账号健康</a></div>
+            <span class="pill" style="color:var(--ok);background:rgba(52,211,153,.16);margin-top:6px;"><span class="p-dot"></span>已连接</span>
+          </div>
+        </div>
+        <div class="row mt-4" style="justify-content:flex-end;">
+          <a class="btn primary" href="/">前往总览</a>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  function tgWizard() {
+    return {
+      step: 1,
+      loading: false,
+      country: '+86',
+      phone: '',
+      otp: ['', '', '', '', ''],
+      tfa: '',
+      account: { name: '', id: '' },
+      init: function () {},
+      _post: function (url, payload) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify(payload)
+        }).then(function (r) { return r.json(); });
+      },
+      step1: function () {
+        var self = this;
+        if (!this.phone) { window.__toast('请输入手机号', 'error'); return; }
+        this.loading = true;
+        this._post('/tg-login/step1', { country: this.country, phone: this.phone })
+          .then(function (res) {
+            self.loading = false;
+            if (res && res.ok && res.done) { self.step = 4; window.__toast('TG 登录成功', 'success'); }
+            else if (res && res.ok && res.skipCode) { self.step = 3; window.__toast('该号码无需验证码', 'info', res.state || ''); }
+            else if (res && res.ok) { self.step = 2; window.__toast('验证码已发送', 'info'); }
+            else { window.__toast((res && res.message) || '发送验证码失败', 'error'); }
+          })
+          .catch(function () { self.loading = false; window.__toast('网络错误，请重试', 'error'); });
+      },
+      _otpBox: function (i) {
+        // x-for 内不能用 $refs 动态名（拿到的是 undefined），按 data-otp 属性查 DOM
+        return document.querySelector('input[data-otp="' + i + '"]');
+      },
+      otpInput: function (i, e) {
+        var v = (e.target.value || '').replace(/\D/g, '');
+        if (v.length > 1) { this.otpPaste(e); return; }
+        this.otp[i - 1] = v.slice(0, 1);
+        e.target.value = this.otp[i - 1];
+        if (this.otp[i - 1] && i < 5) { var n = this._otpBox(i + 1); if (n) n.focus(); }
+        this.__maybeAutoSubmit();
+      },
+      otpBack: function (i, e) {
+        if (this.otp[i - 1]) {
+          this.otp[i - 1] = '';
+        } else if (i > 1) {
+          var p = this._otpBox(i - 1);
+          if (p) { p.focus(); p.value = ''; }
+          this.otp[i - 2] = '';
+        }
+      },
+      otpPaste: function (e) {
+        // 支持「49741」或「4974-1」整段粘贴
+        var text = ((e.clipboardData || window.clipboardData) || {}).getData;
+        var raw = text ? e.clipboardData.getData('text') : '';
+        var digits = String(raw || '').replace(/\D/g, '').slice(0, 5);
+        if (!digits) return;
+        e.preventDefault();
+        for (var k = 0; k < 5; k++) {
+          this.otp[k] = digits.charAt(k) || '';
+          var box = this._otpBox(k + 1);
+          if (box) box.value = this.otp[k];
+        }
+        var last = this._otpBox(Math.min(digits.length, 5));
+        if (last) last.focus();
+        this.__maybeAutoSubmit();
+      },
+      __maybeAutoSubmit: function () {
+        if (this.otp.join('').length === 5 && !this.loading) this.step2();
+      },
+      step2: function () {
+        var self = this;
+        if (this.otp.join('').length < 5) { window.__toast('请输入完整的 5 位验证码', 'error'); return; }
+        this.loading = true;
+        this._post('/tg-login/step2', { code: this.otp.join('') })
+          .then(function (res) {
+            self.loading = false;
+            if (res && res.ok) {
+              if (res.done) { self.step = 4; self.__fetchAccount(); window.__toast('TG 登录成功', 'success'); }
+              else if (res.needPassword) { self.step = 3; }
+              else { self.step = 4; self.__fetchAccount(); window.__toast('TG 登录成功', 'success'); }
+            } else { window.__toast((res && res.message) || '验证码校验失败', 'error'); }
+          })
+          .catch(function () { self.loading = false; window.__toast('网络错误，请重试', 'error'); });
+      },
+      __fetchAccount: function () {
+        var self = this;
+        fetch('/tg-login/account', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.name) self.account = { name: d.name, id: d.id ? String(d.id) : '' };
+            return null;
+          })
+          .catch(function () { return null; });
+      },
+      complete: function () {
+        var self = this;
+        this.loading = true;
+        this._post('/tg-login/step3', { password: this.tfa })
+          .then(function (res) {
+            self.loading = false;
+            if (res && res.ok && res.done) { self.step = 4; window.__toast('TG 登录成功', 'success'); }
+            else { window.__toast((res && res.message) || '两步验证失败', 'error'); }
+          })
+          .catch(function () { self.loading = false; window.__toast('网络错误，请重试', 'error'); });
+      }
+    };
+  }
+</script>
+{% endblock %}

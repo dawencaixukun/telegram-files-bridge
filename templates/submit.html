@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}提交下载 · TG 归档台{% endblock %}
+{% block page_id %}submit{% endblock %}
+{% block active_nav %}submit{% endblock %}
+{% block page_title %}提交下载{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">提交下载 · 进行中 {{ running_count }}</span>{% endblock %}
+
+{% block content %}
+<div x-data="submitForm()" style="max-width:760px;">
+  <div class="page-header">
+    <div>
+      <h1>提交下载</h1>
+      <p>粘贴 Telegram 消息链接，支持批量（每行一条）</p>
+    </div>
+  </div>
+
+  <div class="card pad-lg">
+    <div class="field">
+      <label for="submitLinks">消息链接</label>
+      <textarea class="textarea" id="submitLinks" name="links"
+        x-ref="text" @input="parse()"
+        placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456"></textarea>
+      <div class="hint">支持两种格式：公开频道 <code>https://t.me/channel/消息ID</code> 与私密频道 <code>https://t.me/c/频道ID/消息ID</code></div>
+    </div>
+
+    <!-- validation summary -->
+    <div class="card" style="padding:14px 16px;margin-bottom:var(--space-4);background:var(--glass-bg-strong);">
+      <div class="row between">
+        <span style="font-weight:600;font-size:13px;">格式校验</span>
+        <span style="font-size:13px;color:var(--text-2);">
+          <span class="tnum" x-text="validCount">0</span> 合法 · <span class="tnum" style="color:var(--err);" x-text="invalidCount">0</span> 非法
+        </span>
+      </div>
+      <div style="display:grid;gap:4px;margin-top:10px;max-height:160px;overflow-y:auto;">
+        <template x-for="row in rows" :key="row.line">
+          <div class="fmt-row" :class="row.valid ? 'ok' : 'bad'">
+            <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <template x-if="row.valid"><polyline points="20 6 9 17 4 12"/></template>
+              <template x-if="!row.valid"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></template>
+            </svg>
+            <span x-text="row.line" style="word-break:break-all;"></span>
+          </div>
+        </template>
+        <div x-show="rows.length===0" style="color:var(--text-3);font-size:13px;padding:8px 0;">尚未输入，输入后实时显示每行的合法性。</div>
+      </div>
+    </div>
+
+    <div class="row" style="justify-content:flex-end;">
+      <button class="btn primary" @click="submit()" :disabled="validCount===0">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
+        加入队列
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+  function submitForm() {
+    return {
+      rows: [],
+      get validCount() { return this.rows.filter(function(r){ return r.valid; }).length; },
+      get invalidCount() { return this.rows.filter(function(r){ return !r.valid; }).length; },
+      parse: function () {
+        var text = (this.$refs.text && this.$refs.text.value) || '';
+        var seen = 0;
+        var self = this;
+        this.rows = text.split(/\n+/).filter(function (l) { return l.trim(); }).map(function (l) {
+          seen++;
+          return { line: l.trim(), valid: self.__isValid(l.trim()) };
+        });
+      },
+      __isValid: function (l) {
+        var pub = /^https:\/\/t\.me\/[A-Za-z0-9_]{4,32}\/\d{1,12}$/;
+        var priv = /^https:\/\/t\.me\/c\/\d{5,20}\/\d{1,12}$/;
+        return pub.test(l) || priv.test(l);
+      },
+      submit: function () {
+        var self = this;
+        if (this.validCount === 0) { window.__toast('没有合法链接', 'error'); return; }
+        var links = this.rows.filter(function (r) { return r.valid; }).map(function (r) { return r.line; });
+        fetch('/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify({ links: links })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            window.__toast('已提交 ' + links.length + ' 条链接', 'success', '已加入下载队列');
+            self.rows = [];
+            if (self.$refs.text) self.$refs.text.value = '';
+          } else {
+            window.__toast('提交失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          return null;
+        }).catch(function (e) {
+          window.__toast('提交失败', 'error', '网络错误：' + e);
+          return null;
+        });
+      }
+    };
+  }
+</script>
+{% endblock %}

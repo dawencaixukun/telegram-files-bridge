@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+{% block title %}订阅归档 · TG 归档台{% endblock %}
+{% block page_id %}subscriptions{% endblock %}
+{% block active_nav %}subscriptions{% endblock %}
+{% block page_title %}订阅归档{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">自动归档 · 每 {{ (auto_archive_interval // 60) or 1 }} 分钟扫描</span>{% endblock %}
+
+{% block content %}
+<div x-data="subsPage()" style="max-width:1080px;">
+  <div class="page-header">
+    <div>
+      <h1>订阅归档</h1>
+      <p>命中规则的聊天：下载完成后自动归档到网盘，并按规则清理本地（失败自动重试，最多 3 次）</p>
+    </div>
+    <button class="btn ghost" @click="runNow()" :disabled="running">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+      <span x-text="running ? '扫描中…' : '立即运行一轮'"></span>
+    </button>
+  </div>
+
+  <div class="card pad-md mb-4" style="background:rgba(124,58,237,.06);border-color:rgba(124,58,237,.22);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <div style="font-size:13px;color:var(--text-1);line-height:1.6;">
+      <span style="font-weight:600;color:var(--brand);">💡 全局默认归档：</span>未单独添加在下方规则列表中的聊天，下载完成后将自动使用全局默认位置归档到 OpenList 网盘。
+    </div>
+    <a href="/settings" class="btn sm ghost" style="flex-shrink:0;">
+      <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
+      前往设置默认目录与自动归档
+    </a>
+  </div>
+
+  <!-- 新建规则 -->
+  <div class="card pad-lg mb-4">
+    <div class="card-head"><h2 class="card-title">新建规则</h2></div>
+    <div class="grid g-2">
+      <div class="field">
+        <label>来源聊天</label>
+        <select class="select" x-model="form.chatKey">
+          <option value="">请选择账号下的聊天…</option>
+          <template x-for="s in chatSources" :key="String(s.telegramId) + ':' + String(s.chatId)">
+            <option :value="String(s.telegramId) + ':' + String(s.chatId)" x-text="s.title"></option>
+          </template>
+        </select>
+        <div class="hint" x-show="!chatSources.length">未读到聊天列表：请确认后端已登录且 TG 账号在线</div>
+      </div>
+      <div class="field">
+        <label>目标目录模板</label>
+        <input class="input" x-model="form.dirTemplate" placeholder="/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}/{resolution}">
+        <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px;">
+          <span style="font-size:11px;color:var(--text-3);align-self:center;">快捷变量芯片：</span>
+          <button type="button" class="btn xs ghost" @click="insertVar('{resolution}')" title="插入视频分辨率，如 1080p、4k">{resolution}</button>
+          <button type="button" class="btn xs ghost" @click="insertVar('{ext}')" title="插入文件后缀名，如 mp4、mkv">{ext}</button>
+          <button type="button" class="btn xs ghost" @click="insertVar('{chat_title}')" title="插入频道标题">{chat_title}</button>
+          <button type="button" class="btn xs ghost" @click="insertVar('{source}')" title="插入来源名称">{source}</button>
+          <button type="button" class="btn xs ghost" @click="insertVar('{YYYY-MM}')" title="插入年月">{YYYY-MM}</button>
+          <button type="button" class="btn xs ghost" @click="insertVar('{type}')" title="插入文件类型">{type}</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>优先级权重（数字越大越先判定）</label>
+        <input class="input num" type="number" x-model.number="form.priority" placeholder="0">
+        <div class="hint">多规则冲突时优先命中权重高者（首个命中即止）</div>
+      </div>
+      <div class="field">
+        <label>同名冲突策略</label>
+        <select class="select" x-model="form.policy">
+          <option value="skip">跳过（云端已有同名文件则不再上传）</option>
+          <option value="overwrite">覆盖（同名文件直接替换）</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>归档成功后</label>
+        <label class="row" style="gap:10px;">
+          <span class="switch"><input type="checkbox" x-model="form.deleteLocal"><span class="track"></span></span>
+          <span style="font-size:13px;color:var(--text-2);">删除本地文件，释放磁盘（默认开启）</span>
+        </label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px;gap:10px;align-items:center;">
+      <button class="btn primary" @click="addRule()" :disabled="adding">
+        <span x-text="adding ? '添加中…' : '添加规则'"></span>
+      </button>
+      <span class="hint" x-text="'实时预览：' + previewDir()"></span>
+    </div>
+  </div>
+
+  <!-- 规则列表 -->
+  <div class="card pad-lg">
+    <div class="card-head"><h2 class="card-title">规则列表（<span x-text="rules.length"></span>）</h2></div>
+    <div class="empty" x-show="!rules.length">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-archive"/></svg>
+      </div>
+      <h3>暂无订阅规则</h3>
+      <p>添加规则后，该聊天下载完成的文件将自动归档到目标目录</p>
+    </div>
+    <div class="table-wrap" x-show="rules.length">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:100px;">优先级</th>
+            <th style="min-width:140px;">来源聊天</th>
+            <th>目标目录模板</th>
+            <th style="width:110px;">冲突策略</th>
+            <th style="width:80px;">删本地</th>
+            <th style="width:120px;">自动归档</th>
+            <th style="width:70px;">启用</th>
+            <th style="width:80px;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="r in rules" :key="r.id">
+            <tr>
+              <td>
+                <div class="row" style="gap:4px;align-items:center;">
+                  <input class="input num" style="width:50px;padding:4px;text-align:center;font-weight:700;"
+                         type="number" x-model.number="r.priority" @change="saveRule(r)" :disabled="r._saving">
+                  <div style="display:flex;flex-direction:column;gap:2px;">
+                    <button type="button" class="icon-btn xs" style="width:18px;height:18px;padding:0;font-size:10px;" title="增加优先级" @click="bumpPriority(r, 10)">▲</button>
+                    <button type="button" class="icon-btn xs" style="width:18px;height:18px;padding:0;font-size:10px;" title="降低优先级" @click="bumpPriority(r, -10)">▼</button>
+                  </div>
+                </div>
+              </td>
+              <td>
+                <strong style="font-weight:600;" x-text="r.chatTitle"></strong>
+                <div class="hint" x-text="'归档目录：' + (r.previewDir || '—')"></div>
+              </td>
+              <td>
+                <input class="input" style="min-width:260px;font-family:var(--font-mono);font-size:12px;"
+                       x-model="r.dirTemplate" @change="saveRule(r)" :disabled="r._saving">
+              </td>
+              <td>
+                <select class="select" x-model="r.policy" @change="saveRule(r)" :disabled="r._saving">
+                  <option value="skip">跳过</option>
+                  <option value="overwrite">覆盖</option>
+                </select>
+              </td>
+              <td>
+                <span class="switch"><input type="checkbox" x-model="r.deleteLocal" @change="saveRule(r)"><span class="track"></span></span>
+              </td>
+              <td class="tnum">
+                <span style="color:var(--ok);" x-text="'成功 ' + r.stats.done"></span>
+                <span style="color:var(--text-3);"> · </span>
+                <span :style="r.stats.failed ? 'color:var(--err);' : 'color:var(--text-3);'" x-text="'失败 ' + r.stats.failed"></span>
+              </td>
+              <td>
+                <span class="switch"><input type="checkbox" x-model="r.enabled" @change="toggleRule(r)"><span class="track"></span></span>
+              </td>
+              <td>
+                <button type="button" class="btn sm danger" @click="removeRule(r)" :disabled="r._saving">删除</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function subsPage() {
+  return {
+    chatSources: {{ sub_chat_sources | tojson }},
+    rules: {{ sub_rules | tojson }},
+    form: { chatKey: '', dirTemplate: '/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}/{resolution}', policy: 'skip', deleteLocal: true, priority: 0 },
+    adding: false,
+    running: false,
+
+    insertVar(v) {
+      this.form.dirTemplate = (this.form.dirTemplate || '') + v;
+    },
+
+    async bumpPriority(r, delta) {
+      r.priority = (parseInt(r.priority, 10) || 0) + delta;
+      await this.saveRule(r);
+      this.rules.sort(function (a, b) {
+        return (b.priority || 0) - (a.priority || 0);
+      });
+    },
+
+    async api(url, body) {
+      try {
+        var resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify(body || {})
+        });
+        return await resp.json();
+      } catch (e) {
+        return { ok: false, message: '网络错误：' + e };
+      }
+    },
+
+    previewDir() {
+      var tpl = this.form.dirTemplate || '';
+      if (!tpl.startsWith('/')) return '（需以 / 开头）';
+      var src = '频道名';
+      if (this.form.chatKey) {
+        var hit = this.chatSources.find(function (s) {
+          return String(s.telegramId) + ':' + String(s.chatId) === this.form.chatKey;
+        }, this);
+        if (hit) src = hit.title;
+      }
+      var d = new Date();
+      var mm = String(d.getMonth() + 1).padStart(2, '0');
+      return tpl.replace(/\{chat_title\}/g, src)
+                .replace(/\{source\}/g, src)
+                .replace(/\{resolution\}/g, '1080p')
+                .replace(/\{ext\}/g, 'mp4')
+                .replace(/\{type\}/g, 'video')
+                .replace(/\{YYYY-MM\}/g, d.getFullYear() + '-' + mm)
+                .replace(/\{YYYY\}/g, String(d.getFullYear()))
+                .replace(/\{MM\}/g, mm).replace(/\{DD\}/g, String(d.getDate()).padStart(2, '0'));
+    },
+
+    async addRule() {
+      if (!this.form.chatKey) { window.__toast('请选择来源聊天', 'error'); return; }
+      var parts = this.form.chatKey.split(':');
+      this.adding = true;
+      var res = await this.api('/api/subscriptions', {
+        telegramId: parts[0], chatId: parts[1],
+        dirTemplate: this.form.dirTemplate, policy: this.form.policy, deleteLocal: this.form.deleteLocal,
+        priority: this.form.priority || 0
+      });
+      this.adding = false;
+      if (!res.ok) { window.__toast(res.message || '添加失败', 'error'); return; }
+      this.rules.unshift(res.rule);
+      this.rules.sort(function (a, b) {
+        return (b.priority || 0) - (a.priority || 0);
+      });
+      this.form.chatKey = '';
+      window.__toast('规则已添加，存量已完成文件将自动归位');
+    },
+
+    async saveRule(r) {
+      r._saving = true;
+      var res = await this.api('/api/subscriptions/update', {
+        id: r.id, dirTemplate: r.dirTemplate, policy: r.policy, deleteLocal: r.deleteLocal,
+        priority: r.priority || 0
+      });
+      r._saving = false;
+      if (!res.ok) { window.__toast(res.message || '保存失败', 'error'); return; }
+      Object.assign(r, res.rule);
+      window.__toast('已保存');
+    },
+
+    async toggleRule(r) {
+      var res = await this.api('/api/subscriptions/update', { id: r.id, enabled: r.enabled });
+      if (!res.ok) { r.enabled = !r.enabled; window.__toast(res.message || '操作失败', 'error'); return; }
+      window.__toast(r.enabled ? '规则已启用，立即补扫一轮' : '规则已停用', 'info');
+    },
+
+    async removeRule(r) {
+      if (!window.confirm('删除「' + r.chatTitle + '」的订阅规则？进行中的归档任务不受影响。')) return;
+      var res = await this.api('/api/subscriptions/delete', { id: r.id });
+      if (!res.ok) { window.__toast(res.message || '删除失败', 'error'); return; }
+      this.rules = this.rules.filter(function (x) { return x.id !== r.id; });
+      window.__toast('规则已删除');
+    },
+
+    async runNow() {
+      this.running = true;
+      var res = await this.api('/api/subscriptions/run', {});
+      this.running = false;
+      if (!res.ok) { window.__toast(res.message || '扫描失败', 'error'); return; }
+      window.__toast(res.message, res.enqueued ? 'success' : 'info');
+    }
+  };
+}
+</script>
+{% endblock %}
