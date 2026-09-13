@@ -31,6 +31,44 @@ TRUSTED_PROXIES = [s.strip() for s in os.environ.get("BRIDGE_TRUSTED_PROXIES", "
 _LOGIN_FAILURE_MAX = 10000
 
 APP_ROOT_DIR = os.environ.get("TG_DATA_DIR", "/root/tg-files/app-data")
+
+# ---------------------------------------------------------------------
+# 测试进程护栏：测试运行绝不允许写生产 app-data
+# ---------------------------------------------------------------------
+# 背景：本模块的 APP_ROOT_DIR 是导入期一次性求值的常量，一旦被导入就固化。
+# `unittest discover -s tests` 会把测试模块当作**顶层模块**按字母序导入，
+# 因此 tests/__init__.py 与 tests/conftest.py 都不会执行（unittest 不读 conftest，
+# 顶层导入也不走包 __init__）。于是字母序靠前的测试模块（如 test_account_health_page）
+# 先 `import bridge_server` → `import core.config`，把 APP_ROOT_DIR 固化为生产目录；
+# 之后 test_subscriptions_e2e 再设置 TG_DATA_DIR 临时目录就完全失效，
+# 它的 _subs_save()/_archive_save() 会直接写生产 app-data（曾造成 mock 残留，
+# 以及近 5000 条 f<N>.mp4 测试条目把 /library/cloud 撑到 19.5MB）。
+#
+# 判据：unittest 的测试运行进程必定已导入 unittest 模块；生产服务进程
+# （uvicorn 启动 bridge_server）不会导入它。该判据在测试模块导入期采样，
+# 所以必须写在本模块顶部、紧随 APP_ROOT_DIR 定义之后。
+#
+# 策略（安全优先且不破坏测试）：
+#   * 测试进程中若 TG_DATA_DIR 未指定 → 自动改用独立临时目录（进程退出清理）。
+#   * 测试进程中若 TG_DATA_DIR 明确指向生产目录 → 直接报错中止。
+import sys as _sys
+
+_PROD_DATA_DIR = "/root/tg-files/app-data"
+if "unittest" in _sys.modules:
+    if os.path.abspath(APP_ROOT_DIR) == os.path.abspath(_PROD_DATA_DIR):
+        if os.environ.get("TG_DATA_DIR"):
+            # 显式指定成了生产目录 —— 宁可失败也不许写真实数据
+            raise RuntimeError(
+                "测试隔离失败：TG_DATA_DIR 指向生产数据目录 "
+                f"{_PROD_DATA_DIR!r}。测试会覆盖真实数据，已中止。"
+            )
+        # 未指定：自动落到独立临时目录，保护生产数据
+        import tempfile as _tempfile
+
+        _test_data_dir = _tempfile.mkdtemp(prefix="tg-bridge-tests-")
+        os.environ["TG_DATA_DIR"] = _test_data_dir
+        APP_ROOT_DIR = _test_data_dir
+
 OPENLIST_URL = os.environ.get("OPENLIST_URL", "http://127.0.0.1:5244").rstrip("/")
 
 # ---------------------------------------------------------------------

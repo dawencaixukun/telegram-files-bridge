@@ -91,12 +91,18 @@ class TestArchiveClassification(unittest.TestCase):
         self.assertEqual(resp_part.status_code, 200)
 
     def test_library_cloud_dedicated_directory_filter(self):
-        """测试 /library/cloud 页面包含独立归档目录筛选控件与数据属性"""
-        resp = self.client.get("/library/cloud", cookies=self.cookies)
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn('id="cloudRemoteDir"', resp.text)
-        self.assertIn('独立归档目录', resp.text)
-        self.assertIn('data-remotedir=', resp.text)
+        """测试 /library/cloud 页面包含独立归档目录筛选控件与数据属性
+
+        注意：必须像同类用例那样注入受控归档记录（_render_cloud），
+        data-remotedir 属性是渲染在真实归档卡片上的。此前本用例直接请求页面、
+        依赖生产数据目录里恰好残存的归档记录才通过 —— 一旦测试数据隔离生效
+        （归档为 0 条），它就会假失败。
+        """
+        html = self._render_cloud(
+            [self._row("onedrive")], {"ok": True, "mounts": ["onedrive"], "message": ""})
+        self.assertIn('id="cloudRemoteDir"', html)
+        self.assertIn('独立归档目录', html)
+        self.assertIn('data-remotedir=', html)
 
     def _row(self, drive, status="archived", fname="v.mp4", rdir=None):
         rdir = rdir if rdir is not None else ("/%s/tg-archive" % drive)

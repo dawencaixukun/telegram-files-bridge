@@ -96,7 +96,11 @@ async def browse_download(request: Request):
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
-    raw = body.get("files") if isinstance(body, dict) else None
+    # 请求体可能是合法 JSON 但不是对象（列表/字符串/数字）。下方多处按 dict 取值，
+    # 不归一化就会 AttributeError → HTTP 500。归一化为 dict 后再处理。
+    if not isinstance(body, dict):
+        body = {}
+    raw = body.get("files")
     seen = set()
     payload_files: List[Dict[str, Any]] = []
     skipped_dup = 0
