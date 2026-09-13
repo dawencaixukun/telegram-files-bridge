@@ -21,6 +21,11 @@ from services.openlist_service import (
     _openlist_ready, openlist_dirs
 )
 
+# 单个探针的总时间预算（秒）。四大探针并发执行，整个 doctor 的 SLA 是 < 3.0s，
+# 因此每个探针内部的多步串联调用必须共享同一预算，不能各自独立设置超时叠加。
+# （曾因 OpenList 探针 2.5s + 2.5s 串行、TDLib 探针 2.5s + 1.0s 串行而击穿 SLA。）
+_DOCTOR_PROBE_BUDGET = 2.5
+
 
 async def _doctor_probe_java_backend() -> Dict[str, Any]:
     start = time.perf_counter()
@@ -81,8 +86,11 @@ async def _doctor_probe_tdlib() -> Dict[str, Any]:
         td_err_msg = ""
 
         # 主探针：telegram_api("getAuthorizationState")
+        # 与兜底探针共享同一时间预算，避免 2.5s + 1.0s 串行叠加击穿 3.0s SLA。
+        td_deadline = time.perf_counter() + _DOCTOR_PROBE_BUDGET
         try:
-            td_res = await asyncio.wait_for(BACKEND.telegram_api("getAuthorizationState"), timeout=2.5)
+            td_budget = max(0.05, td_deadline - time.perf_counter())
+            td_res = await asyncio.wait_for(BACKEND.telegram_api("getAuthorizationState"), timeout=td_budget)
             if isinstance(td_res, dict):
                 state_type = str(td_res.get("@type") or td_res.get("constructor") or "")
                 if state_type in ("authorizationStateReady", "READY", "-1834871737"):
@@ -99,9 +107,10 @@ async def _doctor_probe_tdlib() -> Dict[str, Any]:
                 # 未知异常维持旧行为：向上抛，走 critical 兜底
                 raise
 
-        # 兜底信号：账号列表授权状态
+        # 兜底信号：账号列表授权状态（仅使用主探针剩余预算）
         try:
-            telegrams = await asyncio.wait_for(BACKEND.list_telegrams(), timeout=1.0)
+            fb_budget = max(0.05, td_deadline - time.perf_counter())
+            telegrams = await asyncio.wait_for(BACKEND.list_telegrams(), timeout=fb_budget)
             if isinstance(telegrams, list) and telegrams:
                 acc_count = len(telegrams)
                 for t in telegrams:
@@ -160,18 +169,33 @@ async def _doctor_probe_tdlib() -> Dict[str, Any]:
 
 
 async def _doctor_probe_openlist() -> Dict[str, Any]:
+    # SLA：整个 doctor 必须 < 3.0s。原实现先 wait_for(_openlist_ready, 2.5) 再
+    # wait_for(openlist_dirs, 2.5)，两个超时**串行**叠加成 5.0s，一旦 OpenList
+    # 慢或不可达就直接击穿 SLA。改为共享同一个总预算：先做就绪探测，剩余预算
+    # 才用于列目录，总耗时不超过 _DOCTOR_PROBE_BUDGET。
     start = time.perf_counter()
     user_masked = _mask_secret(_OPENLIST.get("username", ""))
+    deadline = start + _DOCTOR_PROBE_BUDGET
     try:
         has_token = bool(_OPENLIST.get("token"))
-        verified = await asyncio.wait_for(_openlist_ready(), timeout=2.5) if has_token else False
+        verified = False
+        if has_token:
+            remaining = max(0.05, deadline - time.perf_counter())
+            try:
+                verified = await asyncio.wait_for(_openlist_ready(), timeout=remaining)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                verified = False
         mount_count = 0
         if verified:
-            dirs_res = await asyncio.wait_for(openlist_dirs("/"), timeout=2.5)
-            if isinstance(dirs_res, dict) and dirs_res.get("ok"):
-                mount_count = len(dirs_res.get("dirs") or [])
-            elif isinstance(dirs_res, list):
-                mount_count = len(dirs_res)
+            remaining = max(0.05, deadline - time.perf_counter())
+            try:
+                dirs_res = await asyncio.wait_for(openlist_dirs("/"), timeout=remaining)
+                if isinstance(dirs_res, dict) and dirs_res.get("ok"):
+                    mount_count = len(dirs_res.get("dirs") or [])
+                elif isinstance(dirs_res, list):
+                    mount_count = len(dirs_res)
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                mount_count = 0
         lat = round((time.perf_counter() - start) * 1000, 1)
         status = "healthy" if (verified and mount_count > 0) else ("warning" if verified else "critical")
         msg = f"网盘引擎在线，已挂载 {mount_count} 个云端存储" if (verified and mount_count > 0) else ("网盘服务在线但尚未挂载任何云盘" if verified else "OpenList 未登录或令牌失效")
