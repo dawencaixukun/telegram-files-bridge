@@ -188,7 +188,8 @@ async def browse_download(request: Request):
         low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
         enqueued_count = _enqueue_waiting_disk_files(raw, payload_files, cur_pct, high_threshold, low_threshold)
         global _TASKS_CACHE
-        _TASKS_CACHE = {"expire": 0.0, "value": None}
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None
         msg = f"本地磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），新提交的 {enqueued_count} 个任务已安全置入 waiting_disk 挂起队列，等待磁盘回落至 {low_threshold:.1f}% 以下自动恢复调度"
         log.warning("磁盘水位熔断拦截 [/browse/download]：%s", msg)
         return JSONResponse({
@@ -202,7 +203,8 @@ async def browse_download(request: Request):
 
     try:
         await BACKEND.start_download_multiple({"files": payload_files})
-        _TASKS_CACHE = {"expire": 0.0, "value": None}  # 任务页/角标立即可见新任务
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None  # 任务页/角标立即可见新任务
         # 关键：/files 在 BackendClient._cached 还有独立 TTL 缓存，不清的话
         # 任务重建拿到的是提交前的旧数据 —— 新任务既进不了任务列表，也触发不了告警
         BACKEND._cache.clear()

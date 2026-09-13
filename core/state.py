@@ -208,7 +208,8 @@ def _trigger_flood_wait(account: str = "default", wait_seconds: int = 30, reason
     _ensure_flood_wait_timer()
 
     global _TASKS_CACHE
-    _TASKS_CACHE = {"expire": 0.0, "value": None}
+    _TASKS_CACHE["expire"] = 0.0
+    _TASKS_CACHE["value"] = None
     return new_until
 
 
@@ -255,7 +256,8 @@ def _reset_flood_wait(account: str = "default") -> None:
     _FLOOD_WAIT_STATE["suspended_tasks"] = {}
     _flood_wait_save()
     global _TASKS_CACHE
-    _TASKS_CACHE = {"expire": 0.0, "value": None}
+    _TASKS_CACHE["expire"] = 0.0
+    _TASKS_CACHE["value"] = None
     log.info("管理员已强制清除 Telegram FloodWait 冷却状态")
 
 
@@ -264,7 +266,8 @@ async def _wake_flood_wait_tasks() -> int:
     _FLOOD_WAIT_STATE["suspended_tasks"].clear()
     _flood_wait_save()
     global _TASKS_CACHE
-    _TASKS_CACHE = {"expire": 0.0, "value": None}
+    _TASKS_CACHE["expire"] = 0.0
+    _TASKS_CACHE["value"] = None
     woken = len(suspended)
     if woken > 0:
         log.info("已自动唤醒 %d 条 FloodWait 挂起任务", woken)

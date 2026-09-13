@@ -173,7 +173,8 @@ async def library_local_delete(request: Request):
     if deleted:
         BACKEND._cache.clear()
         global _TASKS_CACHE
-        _TASKS_CACHE = {"expire": 0.0, "value": None}
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None
 
     if not deleted and errors:
         return {"ok": False, "deleted": 0, "errors": errors, "message": errors[0]["message"]}

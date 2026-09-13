@@ -180,13 +180,15 @@ async def task_cancel(request: Request):
         _WAITING_DISK_TASKS.pop(unique_id, None)
         _waiting_disk_save()
         global _TASKS_CACHE
-        _TASKS_CACHE = {"expire": 0.0, "value": None}
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None
         return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
     for tid, w in list(_WAITING_DISK_TASKS.items()):
         if str(w.get("uniqueId")) == unique_id or str(w.get("id")) == unique_id:
             _WAITING_DISK_TASKS.pop(tid, None)
             _waiting_disk_save()
-            _TASKS_CACHE = {"expire": 0.0, "value": None}
+            _TASKS_CACHE["expire"] = 0.0
+            _TASKS_CACHE["value"] = None
             return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
 
     rec = _find_task_by_uid(await tasks_all(force=True), unique_id)

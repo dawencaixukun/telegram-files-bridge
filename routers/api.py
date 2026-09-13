@@ -526,7 +526,8 @@ async def api_tg_quick_download(request: Request):
         low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
         enqueued_count = _enqueue_waiting_disk_files(raw_files or recs, payload_files, cur_pct, high_threshold, low_threshold)
         global _TASKS_CACHE
-        _TASKS_CACHE = {"expire": 0.0, "value": None}
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None
         msg = f"本地磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），已将 {enqueued_count} 个任务安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复"
         log.warning("磁盘水位熔断拦截 [quick-download]：%s", msg)
         return JSONResponse({
@@ -571,7 +572,8 @@ async def api_tg_quick_download(request: Request):
             for f in payload_files
         ]
         await BACKEND.start_download_multiple({"files": backend_files})
-        _TASKS_CACHE = {"expire": 0.0, "value": None}
+        _TASKS_CACHE["expire"] = 0.0
+        _TASKS_CACHE["value"] = None
         BACKEND._cache.clear()
 
         log.info("直投下载成功提交 %d 个文件 (auto_archive=%s, dir=%s)", len(payload_files), auto_archive, archive_dir)
