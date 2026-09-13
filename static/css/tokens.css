@@ -8,6 +8,21 @@
   --radius-card: 20px;
   --radius-control: 12px;
   --radius-pill: 999px;
+  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+
+  /* ---- Surface layers (alias of glass tokens, for panel/drawer fills) ---- */
+  --surface-1: rgba(255, 255, 255, 0.06);
+  --surface-2: rgba(255, 255, 255, 0.09);
+  --surface-3: rgba(255, 255, 255, 0.13);
+  --border: rgba(255, 255, 255, 0.15);
+  --border-subtle: rgba(255, 255, 255, 0.09);
+
+  /* ---- Brand alias (single-hue fallback for flat fills) ---- */
+  --brand: #8b5cf6;
+  --gradient-brand: linear-gradient(135deg, var(--brand-a) 0%, var(--brand-b) 100%);
+  --warn: #f59e0b;
 
   /* ---- Spacing (4px base) ---- */
   --space-1: 4px;
@@ -97,6 +112,13 @@
   --glass-border-strong: rgba(40, 40, 90, 0.24);
   --glass-shadow: 0 8px 32px rgba(40, 40, 90, 0.14);
   --glass-shadow-soft: 0 4px 18px rgba(40, 40, 90, 0.08);
+
+  /* Surface 层在亮色主题下反转为淡灰填充，避免深色主题的白色半透明叠在浅底上"发灰" */
+  --surface-1: rgba(255, 255, 255, 0.72);
+  --surface-2: rgba(40, 40, 90, 0.05);
+  --surface-3: rgba(40, 40, 90, 0.09);
+  --border: rgba(40, 40, 90, 0.16);
+  --border-subtle: rgba(40, 40, 90, 0.10);
 
   --text-1: rgba(20, 22, 40, 0.92);
   --text-2: rgba(20, 22, 40, 0.6);

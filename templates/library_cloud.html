@@ -130,12 +130,12 @@ window.cloudLibrary = function cloudLibrary() {
     },
 
     visibleCount: function () {
-      var rows = document.querySelectorAll('[data-cloud-file]');
+      var term = (this.q || '').trim().toLowerCase();
       var d = this.drive || '';
       var rdir = this.remoteDir || '';
       var st = this.statusFilter || '';
       if (!term && !d && !rdir && !st) return this.totalCount;
-      var rows = document.querySelectorAll('tbody tr[data-filename]');
+      var rows = document.querySelectorAll('[data-cloud-file]');
       var c = 0;
       for (var i = 0; i < rows.length; i++) {
         if (this.matches(rows[i])) c++;
