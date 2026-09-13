@@ -79,7 +79,8 @@ def _arch_button_view(f: Dict[str, Any], openlist_ready: bool, local_exists: boo
     return {"enabled": True, "label": "立即归档", "title": "上传到 OpenList 云端归档"}
 
 
-def _enrich_archive(f: Dict[str, Any], openlist_ready: bool) -> Dict[str, Any]:
+def _enrich_archive(f: Dict[str, Any], openlist_ready: bool,
+                    arch_index: Optional[Any] = None) -> Dict[str, Any]:
     uid = f.get("_unique_id")
     uid_str = str(uid) if uid else ""
     f["unique_id"] = uid_str
@@ -88,7 +89,11 @@ def _enrich_archive(f: Dict[str, Any], openlist_ready: bool) -> Dict[str, Any]:
     f["local_exists"] = local_exists
     f["can_delete_local"] = local_exists or (str(f.get("_download_status") or "") == "completed" and uid_str not in _DELETED_LOCAL_UIDS)
     f["archivable"] = bool(uid) and str(f.get("_download_status") or "") == "completed" and local_exists
-    f["archive"] = _archive_state_of(uid_str) if uid_str else None
+    if arch_index is not None:
+        latest_view = arch_index.latest_of(uid_str) if uid_str else None
+        f["archive"] = _archive_public(latest_view) if latest_view else None
+    else:
+        f["archive"] = _archive_state_of(uid_str) if uid_str else None
     f["arch_btn"] = _arch_button_view(f, openlist_ready, local_exists)
     return f
 

@@ -24,7 +24,8 @@ async def library_local(request: Request, category: str = ""):
     # 「立即归档」亮起总开关：OpenList 已挂载（登录且令牌验证通过）
     openlist_ready = await _openlist_ready()
     # 本地在存：所有文件记录经过严格在盘门禁过滤，已归档且本地已删除的文件自动隐藏
-    all_files = [_enrich_archive(f, openlist_ready) for f in _dedup_files([_to_local_file_from_task(t) for t in tasks_list])]
+    _ai = _archive_index_snapshot()
+    all_files = [_enrich_archive(f, openlist_ready, _ai) for f in _dedup_files([_to_local_file_from_task(t) for t in tasks_list])]
     in_stock_files = [f for f in all_files if _is_local_in_stock(f)]
     unarchived_count = sum(1 for f in in_stock_files if not (f.get("archive") and f.get("archive", {}).get("state") == "done"))
     archived_count = sum(1 for f in in_stock_files if f.get("archive") and f.get("archive", {}).get("state") == "done")
@@ -92,7 +93,8 @@ async def partial_local_files(request: Request, source: str = "", type: str = ""
     """本地在存结果区局部刷新（htmx），与 /partials/tasks 同款模式。"""
     tasks_list = await tasks_all()
     openlist_ready = await _openlist_ready()
-    all_files = [_enrich_archive(f, openlist_ready) for f in _dedup_files([_to_local_file_from_task(t) for t in tasks_list])]
+    _ai = _archive_index_snapshot()
+    all_files = [_enrich_archive(f, openlist_ready, _ai) for f in _dedup_files([_to_local_file_from_task(t) for t in tasks_list])]
     files = [f for f in all_files if _is_local_in_stock(f)]
     filtered = _filter_local_files(files, source=source, ftype=type, fsize=size, archive_status=category)
     return templates.TemplateResponse("partials/_local_files.html", {

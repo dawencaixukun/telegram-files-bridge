@@ -749,6 +749,102 @@ def _archive_latest_raw_of(unique_id: str) -> Optional[Dict[str, Any]]:
     return latest
 
 
+# ---------------------------------------------------------------------
+# 归档查询的「单次遍历」加速器
+# ---------------------------------------------------------------------
+# 背景：_archive_latest_raw_of / _archive_registry_lookup 都是 O(n) 全表扫描，
+# 而它们被放在**逐文件渲染循环**里调用（task_service 每任务一次、
+# browse_service 每行一次）。归档到 5000 条时，单次查询实测 9.1 ms，
+# 2000 个任务一次渲染就要跑十几秒。
+#
+# 设计取舍（重要）：这里刻意**不使用跨请求的持久缓存**。
+# 曾尝试用模块级 dict 缓存 + len() 失效，但 _ARCHIVE_JOBS 存在「长度不变而内容变更」
+# 的写入模式（测试/业务都会 clear() 后重新填充），导致脏读，已被回退。
+# 改为「一次扫描，本次遍历内复用」：调用方在循环前 build 一次，
+# 循环内 O(1) 查询，循环结束即丢弃 —— 天然无失效问题，语义与逐个全表扫描严格等价。
+class _ArchiveIndex:
+    """一次性归档索引：一次遍历建立，供同一批渲染复用。
+
+    语义与逐个全表扫描严格等价：
+    - latest_of(uid)：扫描语义「unique_id 相同且 created_at 最大」→ 直接映射到最新那条。
+    - registry_lookup(uid, fn, sz)：反向扫描语义「谁先命中就返回谁」→
+      为 uid 命中与文件名命中分别记录其在反序中的位置，取位置更早者。
+    """
+
+    __slots__ = ("by_uid", "_reg_uid", "_reg_fn")
+
+    def __init__(self, jobs: Dict[str, Dict[str, Any]]) -> None:
+        by_uid: Dict[str, Dict[str, Any]] = {}
+        for j in jobs.values():
+            # 与慢路径 str(j.get("unique_id") or "") 完全一致（含空串键）
+            uid = str(j.get("unique_id") or "")
+            cur = by_uid.get(uid)
+            if cur is None or (j.get("created_at") or 0) > (cur.get("created_at") or 0):
+                by_uid[uid] = j
+        self.by_uid = by_uid
+
+
+        # 反序一次性构建，同时记录位置（位置只统计可查询状态，与慢路径的
+        # 「跳过不可查询者」一致，故相对先后关系保持）
+        reg_uid: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+        reg_fn: Dict[str, List[Tuple[int, Dict[str, Any]]]] = {}
+        pos = 0
+        for j in reversed(list(jobs.values())):
+            if j.get("state") not in ("done", "uploading", "queued"):
+                continue
+            j_uid = str(j.get("unique_id") or "").strip()
+            if j_uid and j_uid not in reg_uid:
+                reg_uid[j_uid] = (pos, j)
+            j_fn = str(j.get("filename") or j.get("raw_filename") or "").strip().lower()
+            if j_fn:
+                reg_fn.setdefault(j_fn, []).append((pos, j))
+            pos += 1
+        self._reg_uid = reg_uid
+        self._reg_fn = reg_fn
+
+    def latest_of(self, unique_id: Any) -> Optional[Dict[str, Any]]:
+        # 与慢路径严格一致：不因 uid 为空而提前返回 None（原实现空串/None 也能匹配
+        # 到 unique_id 为空的那批 job，取 created_at 最大者）
+        return self.by_uid.get(str(unique_id or ""))
+
+    def registry_lookup(self, unique_id: str = "", filename: str = "",
+                        size_bytes: Any = None) -> Optional[Dict[str, Any]]:
+        uid = str(unique_id or "").strip()
+        norm_fn = str(filename or "").strip().lower()
+        sz = None
+        if isinstance(size_bytes, (int, float)) and size_bytes > 0:
+            sz = int(size_bytes)
+
+        uid_hit = self._reg_uid.get(uid) if uid else None
+        fn_list = self._reg_fn.get(norm_fn) if norm_fn else None
+        if fn_list is None and norm_fn:
+            # 一方缺扩展名时 _same_file_name 退化为「主干相等」
+            stem = norm_fn.rsplit(".", 1)[0] if "." in norm_fn else norm_fn
+            fn_list = self._reg_fn.get(stem)
+        fn_hit = None
+        if fn_list:
+            for _, j in fn_list:
+                if sz is None or j.get("size_bytes") == sz:
+                    fn_hit = (_, j)
+                    break
+
+        # 复刻「谁先命中返回谁」：取位置更早者
+        if uid_hit is None and fn_hit is None:
+            return None
+        if uid_hit is None:
+            return fn_hit[1]
+        if fn_hit is None:
+            return uid_hit[1]
+        return uid_hit[1] if uid_hit[0] <= fn_hit[0] else fn_hit[1]
+
+
+
+def _archive_index_snapshot() -> "_ArchiveIndex":
+    """为一批只读渲染建立一次性索引（循环前调用，循环内 O(1) 查询）。"""
+    return _ArchiveIndex(_ARCHIVE_JOBS)
+
+
+
 def _archive_registry_lookup(unique_id: str = "", filename: str = "", size_bytes: Any = None) -> Optional[Dict[str, Any]]:
     if not _ARCHIVE_JOBS:
         return None

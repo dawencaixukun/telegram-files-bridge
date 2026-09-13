@@ -25,7 +25,7 @@ from core.state import (
     _format_waiting_disk_task, _format_flood_wait_task,
     _is_flood_wait_active, _get_flood_wait_status,
     _DELETED_LOCAL_UIDS, _alert_state, _ALERT_EVENT_LIMIT, _ALERTS_MAX,
-    _archive_latest_raw_of, _ARCHIVE_JOBS
+    _archive_latest_raw_of, _ARCHIVE_JOBS, _archive_index_snapshot
 )
 from core.backend import BACKEND, chat_sources
 from core.logging import log, LOG_STORE
@@ -104,12 +104,18 @@ def _chat_title(rec: Dict[str, Any]) -> str:
     return str(_pick(rec, "chatTitle", "chat_title", "chatName", "channel", default=""))
 
 
-def _to_task(rec: Dict[str, Any], index: int, chat_titles: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def _to_task(rec: Dict[str, Any], index: int, chat_titles: Optional[Dict[str, str]] = None,
+             arch_index: Optional[Any] = None) -> Dict[str, Any]:
     dl_status = str(rec.get("downloadStatus") or "").strip().lower()
     unique_id = _pick_id(rec)
     uid_str = str(unique_id or "")
 
-    arch_job = _archive_latest_raw_of(uid_str) if uid_str else None
+    # arch_index：调用方在逐文件循环前建立的一次性索引（避免每个任务都全表扫归档表）。
+    # 未传入时回退到原来的全表扫描，保证单独调用 _to_task 的行为不变。
+    if arch_index is not None:
+        arch_job = arch_index.latest_of(uid_str)
+    else:
+        arch_job = _archive_latest_raw_of(uid_str) if uid_str else None
     cloud_path = "—"
     if arch_job and arch_job.get("remote_path"):
         cloud_path = str(arch_job.get("remote_path"))
@@ -308,11 +314,12 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
                     break
                 records.extend(page)
         titles = await _chat_title_map()
+        arch_index = _archive_index_snapshot()
         for i, rec in enumerate(records):
             try:
                 if rec.get("downloadStatus") not in _TASK_STATUSES:
                     continue
-                tasks.append(_to_task(rec, i + 1, titles))
+                tasks.append(_to_task(rec, i + 1, titles, arch_index))
             except Exception as e:  # noqa: BLE001
                 log.warning("to_task 跳过期 record: %s", e)
         return tasks
@@ -329,6 +336,9 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
         return tasks
     idx = 0
     titles = {s.get("chatId") and str(s["chatId"]): s["title"] for s in sources}
+    # 一次性归档索引：本分支会在嵌套循环里逐文件调用 _to_task，逐个全表扫描归档表
+    # 在归档量大时是主要开销
+    arch_index = _archive_index_snapshot()
     for s in sources:
         try:
             files = await BACKEND.list_files_all_pages(s["telegramId"], s["chatId"], force=force)
@@ -342,7 +352,7 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
                 if rec.get("downloadStatus") not in _TASK_STATUSES:
                     continue
                 idx += 1
-                t = _to_task(rec, idx, titles)
+                t = _to_task(rec, idx, titles, arch_index)
                 if t.get("_chat_id") is None:
                     t["_chat_id"] = s["chatId"]
                 if t.get("_telegram_id") is None:

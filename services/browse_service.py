@@ -8,7 +8,7 @@ import time
 import asyncio
 from typing import Any, Dict, List, Tuple
 from core.config import _pick, _fmt_size, _fmt_time, _human_name
-from core.state import _archive_registry_lookup
+from core.state import _archive_registry_lookup, _archive_index_snapshot
 from core.backend import BACKEND
 from core.logging import log
 from services.openlist_service import _openlist_direct_url
@@ -160,6 +160,8 @@ async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
 
 def _browse_rows(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
+    # 一次性归档索引：下面逐条记录都要查归档表，逐个全表扫描在归档量大时是主要开销
+    _ai = _archive_index_snapshot()
     for rec in files:
         try:
             date_str = ""
@@ -176,7 +178,7 @@ def _browse_rows(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         name = _human_name(rec)
         ext = name.rsplit(".", 1)[-1][:4] if "." in name else "file"
         uid_str = str(rec.get("uniqueId") or "")
-        arch_job = _archive_registry_lookup(uid_str, name, rec.get("size"))
+        arch_job = _ai.registry_lookup(uid_str, name, rec.get("size"))
         is_archived = bool(arch_job and arch_job.get("state") == "done")
         is_archiving = bool(arch_job and arch_job.get("state") in ("queued", "uploading"))
         cloud_path = str(arch_job.get("remote_path") or "") if arch_job else ""
@@ -220,6 +222,8 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
                         cursor: int = 0, limit: int = 30, hide_archived: bool = False) -> tuple:
     if not tg_id or not chat_id:
         return [], 0, 0, {"collapsed": 0, "loaded": 0}
+    # 一次性归档索引：补页循环里逐文件查归档表（hide_archived 时）
+    _ai = _archive_index_snapshot()
     if type_ not in {t for t, _ in _BROWSE_TYPES}:
         type_ = "document"
     params: Dict[str, Any] = {"type": type_, "limit": limit}
@@ -277,7 +281,7 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
                 seen_uids.add(uid)
             if not _is_video(f):
                 continue
-            if hide_archived and _archive_registry_lookup(str(f.get("uniqueId") or ""), _human_name(f), f.get("size")):
+            if hide_archived and _ai.registry_lookup(str(f.get("uniqueId") or ""), _human_name(f), f.get("size")):
                 continue
             collected.append(f)
         # 凑够一屏，或后端没有更多（游标不前进/空页）→ 停止补页
