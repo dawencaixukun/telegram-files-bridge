@@ -102,6 +102,8 @@ async def init_submit(request: Request):
     password2 = str(form.get("password2", ""))
     if password != password2:
         return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "两次输入的密码不一致"})
+    if len(password) < 12 or len(password) > 256:
+        return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "密码长度必须在 12 到 256 位之间"})
     if not otp:
         return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "请输入初始化一次性码"})
     # 后端用户名规则：[a-z0-9][a-z0-9._-]{2,63}
@@ -149,6 +151,8 @@ async def auth_password(request: Request):
     new_password = str((body or {}).get("newPassword", "") or (body or {}).get("new", ""))
     if not old_password or not new_password:
         return {"ok": False, "message": "请填写旧密码与新密码"}
+    if len(new_password) < 12 or len(new_password) > 256:
+        return {"ok": False, "message": "新密码长度必须在 12 到 256 位之间"}
     try:
         await BACKEND.auth_password(old_password, new_password)
         # 凭据先更新，再清失效会话，再自愈重登（顺序不可颠倒）

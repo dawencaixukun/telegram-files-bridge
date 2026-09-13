@@ -77,6 +77,8 @@ class BackendClient:
                     json={"username": self._username, "password": self._password},
                 )
                 if resp.status_code < 400:
+                    for c in self.client.cookies.jar:
+                        c.secure = False
                     log.info("后端会话已自动重登")
                     self._cache.clear()
                     return True
@@ -95,6 +97,10 @@ class BackendClient:
         retry_on_401: bool = True,
     ) -> Any:
         headers = {}
+        # 显式透传已认证的后端 Cookie，防止因后端设置 Secure 属性而导致 httpx 在 http 链路上默认过滤
+        cookie_header = "; ".join(f"{k}={v}" for k, v in self.client.cookies.items() if v)
+        if cookie_header:
+            headers["Cookie"] = cookie_header
         m = method.upper()
         is_state_changing = m not in ("GET", "HEAD", "OPTIONS")
         if is_state_changing and path not in CSRF_WHITELIST:

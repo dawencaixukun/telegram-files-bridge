@@ -34,66 +34,44 @@
       <div>
         <div class="field">
           <label>手机号</label>
-          <div class="row" style="gap:8px;">
-            <select class="select" style="width:170px;" x-model="country">
-              <optgroup label="美洲">
-                <option value="+1">+1 美国/加拿大</option>
-                <option value="+54">+54 阿根廷</option>
-                <option value="+55">+55 巴西</option>
-                <option value="+52">+52 墨西哥</option>
-                <option value="+56">+56 智利</option>
-                <option value="+57">+57 哥伦比亚</option>
-                <option value="+51">+51 秘鲁</option>
-                <option value="+58">+58 委内瑞拉</option>
-              </optgroup>
-              <optgroup label="亚洲">
-                <option value="+86">+86 中国</option>
-                <option value="+852">+852 香港</option>
-                <option value="+853">+853 澳门</option>
-                <option value="+886">+886 台湾</option>
-                <option value="+81">+81 日本</option>
-                <option value="+82">+82 韩国</option>
-                <option value="+65">+65 新加坡</option>
-                <option value="+60">+60 马来西亚</option>
-                <option value="+66">+66 泰国</option>
-                <option value="+84">+84 越南</option>
-                <option value="+63">+63 菲律宾</option>
-                <option value="+62">+62 印尼</option>
-                <option value="+91">+91 印度</option>
-                <option value="+92">+92 巴基斯坦</option>
-                <option value="+880">+880 孟加拉</option>
-                <option value="+90">+90 土耳其</option>
-              </optgroup>
-              <optgroup label="欧洲">
-                <option value="+44">+44 英国</option>
-                <option value="+33">+33 法国</option>
-                <option value="+49">+49 德国</option>
-                <option value="+39">+39 意大利</option>
-                <option value="+34">+34 西班牙</option>
-                <option value="+351">+351 葡萄牙</option>
-                <option value="+31">+31 荷兰</option>
-                <option value="+32">+32 比利时</option>
-                <option value="+41">+41 瑞士</option>
-                <option value="+43">+43 奥地利</option>
-                <option value="+48">+48 波兰</option>
-                <option value="+380">+380 乌克兰</option>
-                <option value="+7">+7 俄罗斯/哈萨克</option>
-              </optgroup>
-              <optgroup label="中东/非洲">
-                <option value="+971">+971 阿联酋</option>
-                <option value="+966">+966 沙特</option>
-                <option value="+972">+972 以色列</option>
-                <option value="+20">+20 埃及</option>
-                <option value="+212">+212 摩洛哥</option>
-                <option value="+27">+27 南非</option>
-                <option value="+234">+234 尼日利亚</option>
-              </optgroup>
-              <optgroup label="大洋洲">
-                <option value="+61">+61 澳大利亚</option>
-                <option value="+64">+64 新西兰</option>
-              </optgroup>
-            </select>
-            <input class="input num" style="flex:1;" type="tel" x-model="phone" placeholder="请输入手机号（不含区号）" @keydown.enter="step1()">
+          <div class="row" style="gap:10px;align-items:flex-start;">
+            <div style="position:relative;width:200px;flex-shrink:0;" @click.outside="countryOpen=false" @keydown.escape.window="countryOpen=false">
+              <!-- Trigger button -->
+              <button type="button" class="input" @click="countryOpen=!countryOpen"
+                      style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:6px;height:42px;padding:0 12px;user-select:none;"
+                      :style="countryOpen ? 'border-color:var(--focus-ring);box-shadow:0 0 0 3px var(--focus-ring);' : ''">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;" x-text="currentCountryLabel()"></span>
+                <svg style="width:14px;height:14px;color:var(--text-2);flex-shrink:0;transition:transform 0.2s;" :style="countryOpen ? 'transform:rotate(180deg);' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
+              </button>
+
+              <!-- Custom glassmorphic country dropdown -->
+              <div x-show="countryOpen" x-cloak
+                   style="position:absolute;top:calc(100% + 6px);left:0;width:280px;max-height:340px;background:var(--glass-bg-strong);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);border:1px solid var(--glass-border-strong);border-radius:var(--radius-card);box-shadow:var(--glass-shadow);z-index:99;display:flex;flex-direction:column;overflow:hidden;">
+                <!-- Quick filter search -->
+                <div style="padding:8px 10px;border-bottom:1px solid var(--glass-border);">
+                  <input type="text" class="input" x-model="countrySearch" placeholder="🔍 搜索国家或区号..."
+                         style="height:32px;font-size:12px;padding:0 10px;border-radius:var(--radius-sm);background:rgba(0,0,0,0.12);"
+                         @click.stop>
+                </div>
+                <!-- Countries scroll list -->
+                <div style="overflow-y:auto;flex:1;padding:4px;">
+                  <template x-for="item in filteredCountries()" :key="item.code + item.name">
+                    <button type="button" class="dd-item"
+                            style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;border:none;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;text-align:left;"
+                            :style="country === item.code ? 'background:rgba(124,58,237,0.22);color:var(--text-1);font-weight:600;' : ''"
+                            @click="country=item.code; countryOpen=false; countrySearch='';">
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <span x-text="item.flag" style="font-size:16px;"></span>
+                        <span x-text="item.name"></span>
+                      </div>
+                      <span style="color:var(--text-3);font-family:var(--font-mono);font-size:12px;" x-text="item.code"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <input class="input num" style="flex:1;height:42px;" type="tel" x-model="phone" placeholder="请输入手机号（不含区号）" @keydown.enter="step1()">
           </div>
         </div>
         <div class="row" style="justify-content:flex-end;">
@@ -178,6 +156,55 @@
       step: 1,
       loading: false,
       country: '+86',
+      countryOpen: false,
+      countrySearch: '',
+      countries: [
+        { code: '+86', name: '中国', flag: '🇨🇳' },
+        { code: '+852', name: '香港', flag: '🇭🇰' },
+        { code: '+853', name: '澳门', flag: '🇲🇴' },
+        { code: '+886', name: '台湾', flag: '🇹🇼' },
+        { code: '+1', name: '美国/加拿大', flag: '🇺🇸' },
+        { code: '+44', name: '英国', flag: '🇬🇧' },
+        { code: '+81', name: '日本', flag: '🇯🇵' },
+        { code: '+82', name: '韩国', flag: '🇰🇷' },
+        { code: '+65', name: '新加坡', flag: '🇸🇬' },
+        { code: '+60', name: '马来西亚', flag: '🇲🇾' },
+        { code: '+66', name: '泰国', flag: '🇹🇭' },
+        { code: '+84', name: '越南', flag: '🇻🇳' },
+        { code: '+63', name: '菲律宾', flag: '🇵🇭' },
+        { code: '+62', name: '印尼', flag: '🇮🇩' },
+        { code: '+91', name: '印度', flag: '🇮🇳' },
+        { code: '+90', name: '土耳其', flag: '🇹🇷' },
+        { code: '+7', name: '俄罗斯/哈萨克', flag: '🇷🇺' },
+        { code: '+49', name: '德国', flag: '🇩🇪' },
+        { code: '+33', name: '法国', flag: '🇫🇷' },
+        { code: '+39', name: '意大利', flag: '🇮🇹' },
+        { code: '+34', name: '西班牙', flag: '🇪🇸' },
+        { code: '+31', name: '荷兰', flag: '🇳🇱' },
+        { code: '+41', name: '瑞士', flag: '🇨🇭' },
+        { code: '+380', name: '乌克兰', flag: '🇺🇦' },
+        { code: '+55', name: '巴西', flag: '🇧🇷' },
+        { code: '+52', name: '墨西哥', flag: '🇲🇽' },
+        { code: '+54', name: '阿根廷', flag: '🇦🇷' },
+        { code: '+61', name: '澳大利亚', flag: '🇦🇺' },
+        { code: '+64', name: '新西兰', flag: '🇳🇿' },
+        { code: '+971', name: '阿联酋', flag: '🇦🇪' },
+        { code: '+966', name: '沙特', flag: '🇸🇦' },
+        { code: '+20', name: '埃及', flag: '🇪🇬' },
+        { code: '+27', name: '南非', flag: '🇿🇦' }
+      ],
+      currentCountryLabel: function() {
+        var self = this;
+        var found = this.countries.find(function(c) { return c.code === self.country; });
+        return found ? (found.flag + ' ' + found.code + ' ' + found.name) : this.country;
+      },
+      filteredCountries: function() {
+        var q = this.countrySearch.trim().toLowerCase();
+        if (!q) return this.countries;
+        return this.countries.filter(function(c) {
+          return c.code.toLowerCase().indexOf(q) !== -1 || c.name.toLowerCase().indexOf(q) !== -1;
+        });
+      },
       phone: '',
       otp: ['', '', '', '', ''],
       tfa: '',
