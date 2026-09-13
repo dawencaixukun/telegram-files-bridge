@@ -279,6 +279,19 @@ async def openlist_login(request: Request):
             parsed = urlparse(base_url)
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
                 return {"ok": False, "message": "服务器地址格式不正确，必须以 http:// 或 https:// 开头"}
+            # SSRF 防护：拒绝指向云元数据端点与 bridge/后端自身的地址。
+            # 该 URL 会被服务端主动请求（登录验证 + 归档上传），若不限制，
+            # 攻击者可借它探测内网（如 169.254.169.254 取云凭据、127.0.0.1:8123 打后端）。
+            host = (parsed.hostname or "").lower()
+            blocked_hosts = {
+                "169.254.169.254",           # AWS/GCP/Azure 云元数据
+                "metadata.google.internal",
+                "100.100.100.200",           # 阿里云元数据
+            }
+            if host in blocked_hosts:
+                return {"ok": False, "message": "该服务器地址不被允许（云元数据端点）"}
+            if host in ("127.0.0.1", "localhost", "::1") and parsed.port in (None, 8000, 8123):
+                return {"ok": False, "message": "该服务器地址指向本机服务，不被允许"}
         except Exception:
             return {"ok": False, "message": "服务器地址格式不正确，必须以 http:// 或 https:// 开头"}
 
@@ -334,6 +347,18 @@ async def settings_load():
 
 @router.post("/settings/save")
 async def settings_save(request: Request):
+    # 后端 settings/create 是平铺键值表，只接受这些真实 SettingKey（与 settings.html save() 提交的字段一致）。
+    # 注意：此前这里引用了从未定义的 _SETTING_KEYS，导致每次保存都抛 NameError，
+    # 又被下方 except 吞成「保存设置失败」，设置页永远无法保存。
+    setting_keys = {
+        "autoDownloadLimit",
+        "uniqueOnly",
+        "thumbnailAutoLoad",
+        "showSensitiveContent",
+        "alwaysHide",
+        "avgSpeedInterval",
+        "speedUnits",
+    }
     try:
         body = await request.json()
         if not isinstance(body, dict):
@@ -341,7 +366,7 @@ async def settings_save(request: Request):
         # 键白名单 + 值必须是标量（后端平铺字符串表）
         filtered = {}
         for k, v in body.items():
-            if k in _SETTING_KEYS and isinstance(v, (str, int, float, bool)):
+            if k in setting_keys and isinstance(v, (str, int, float, bool)):
                 filtered[k] = str(v).lower() if isinstance(v, bool) else str(v)
         if not filtered:
             return {"ok": False, "message": "没有合法的设置键"}

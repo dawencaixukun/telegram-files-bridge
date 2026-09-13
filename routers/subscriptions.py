@@ -123,7 +123,11 @@ async def api_subscriptions_reorder(request: Request):
         for idx, item in enumerate(orders):
             if isinstance(item, dict):
                 rid = str(item.get("id") or "")
-                prio = int(item.get("priority", 0) or 0)
+                # priority 来自客户端，非数字（如 "abc" / 嵌套结构）会让 int() 抛异常 → HTTP 500
+                try:
+                    prio = int(item.get("priority", 0) or 0)
+                except (TypeError, ValueError):
+                    prio = 0
             else:
                 rid = str(item)
                 prio = (len(orders) - idx) * 10

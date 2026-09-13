@@ -77,9 +77,12 @@ app.add_middleware(SelectiveGZipMiddleware, minimum_size=500)
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
 
-# 全局安全与门禁中间件（顺序：先 security_headers，再 portal_auth_gate）
-app.middleware("http")(security_headers)
+# 全局安全与门禁中间件
+# Starlette 中间件是「后注册者在外层」：最后注册的最先执行、最后处理响应。
+# 因此要让 security_headers 包裹住 portal_auth_gate（这样门禁直接返回的
+# 302/403/401 响应也会带上 CSP 等安全头），必须先注册 portal_auth_gate。
 app.middleware("http")(portal_auth_gate)
+app.middleware("http")(security_headers)
 
 # ---------------------------------------------------------------------
 # 4. 挂载 9 大领域子路由
