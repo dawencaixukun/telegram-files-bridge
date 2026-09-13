@@ -509,9 +509,13 @@ window.cloudLibrary = function cloudLibrary() {
             <div class="t-foot cloud-actions-cell">
               <!-- 1. 在 OpenList 中打开直达链接 -->
               {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
-              <a :href="getOpenListUrl('{{ f.cloud_path }}', '{{ f.openlist_url }}')"
+              <!-- 用 data-* 传递 + Alpine 读取，避免把 Jinja 值插进属性里的 JS 字符串
+                   （Jinja 的 HTML 转义在 Alpine 表达式解析前会被解码，单引号可逃逸出字符串） -->
+              <a :href="getOpenListUrl($el.dataset.path, $el.dataset.url)"
+                 :data-path="'{{ f.cloud_path }}'"
+                 :data-url="'{{ f.openlist_url }}'"
                  target="_blank" rel="noopener noreferrer"
-                 @click="handleOpenListClick('{{ f.cloud_path }}', '{{ f.openlist_url }}', $event)"
+                 @click="handleOpenListClick($el.dataset.path, $el.dataset.url, $event)"
                  class="btn sm ghost" title="在 OpenList 中直达打开此文件" aria-label="在 OpenList 中打开 {{ f.filename }}">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
                 OpenList

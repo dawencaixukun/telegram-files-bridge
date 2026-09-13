@@ -73,6 +73,14 @@
     var m = document.cookie.match(/(?:^|;\s*)tf_portal_csrf=([^;]*)/);
     return m ? decodeURIComponent(m[1]) : '';
   }
+  // 转义后端数据后再拼进 innerHTML。文件名/聊天标题/云端路径都来自 Telegram 与
+  // OpenList，属不可信输入；直接拼接会造成存储型 XSS（含 onclick 属性内的引号逃逸）。
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  window.__escHtml = escHtml;
   function postJSON(url, body) {
     return fetch(url, {
       method: 'POST',
@@ -2768,17 +2776,18 @@
       html += '<div class="spotlight-section">';
       html += '<div class="spotlight-section-head"><span>任务队列 (' + tasks.length + ')</span></div>';
       tasks.forEach(function (t) {
-        var statusLabel = t.status === 'completed' ? '已完成' : (t.status === 'downloading' ? '下载中 ' + t.progress + '%' : t.status);
-        html += '<div class="spotlight-item" data-index="' + (itemIndex++) + '" data-url="' + t.actionUrl + '" onclick="location.href=\'' + t.actionUrl + '\'">';
+        var statusLabel = t.status === 'completed' ? '已完成' : (t.status === 'downloading' ? '下载中 ' + Number(t.progress || 0) + '%' : escHtml(t.status));
+        var tUrl = escHtml(t.actionUrl);
+        html += '<div class="spotlight-item" data-index="' + (itemIndex++) + '" data-url="' + tUrl + '" onclick="location.href=\'' + tUrl + '\'">';
         html += '  <div class="spotlight-item-left">';
         html += '    <span class="spotlight-item-icon">⏳</span>';
         html += '    <div class="spotlight-item-text">';
-        html += '      <div class="spotlight-item-title">' + (t.filename || '任务') + '</div>';
-        html += '      <div class="spotlight-item-sub"><span>' + (t.source || '会话') + '</span><span>' + (t.sizeHuman || '—') + '</span><span class="badge accent">' + statusLabel + '</span></div>';
+        html += '      <div class="spotlight-item-title">' + escHtml(t.filename || '任务') + '</div>';
+        html += '      <div class="spotlight-item-sub"><span>' + escHtml(t.source || '会话') + '</span><span>' + escHtml(t.sizeHuman || '—') + '</span><span class="badge accent">' + statusLabel + '</span></div>';
         html += '    </div>';
         html += '  </div>';
         html += '  <div class="spotlight-item-right">';
-        html += '    <button type="button" class="btn xs ghost" onclick="event.stopPropagation(); location.href=\'' + t.actionUrl + '\'">查看任务</button>';
+        html += '    <button type="button" class="btn xs ghost" onclick="event.stopPropagation(); location.href=\'' + tUrl + '\'">查看任务</button>';
         html += '  </div>';
         html += '</div>';
       });
@@ -2790,12 +2799,13 @@
       html += '<div class="spotlight-section">';
       html += '<div class="spotlight-section-head"><span>本地在存资产 (' + local.length + ')</span></div>';
       local.forEach(function (l) {
-        html += '<div class="spotlight-item" data-index="' + (itemIndex++) + '" data-url="' + l.actionUrl + '" onclick="location.href=\'' + l.actionUrl + '\'">';
+        var lUrl = escHtml(l.actionUrl);
+        html += '<div class="spotlight-item" data-index="' + (itemIndex++) + '" data-url="' + lUrl + '" onclick="location.href=\'' + lUrl + '\'">';
         html += '  <div class="spotlight-item-left">';
         html += '    <span class="spotlight-item-icon">💾</span>';
         html += '    <div class="spotlight-item-text">';
-        html += '      <div class="spotlight-item-title">' + (l.filename || '本地在存文件') + '</div>';
-        html += '      <div class="spotlight-item-sub"><span>' + (l.sizeHuman || '—') + '</span><span style="font-family:var(--font-mono);">' + (l.localPath || '本地磁盘') + '</span></div>';
+        html += '      <div class="spotlight-item-title">' + escHtml(l.filename || '本地在存文件') + '</div>';
+        html += '      <div class="spotlight-item-sub"><span>' + escHtml(l.sizeHuman || '—') + '</span><span style="font-family:var(--font-mono);">' + escHtml(l.localPath || '本地磁盘') + '</span></div>';
         html += '    </div>';
         html += '  </div>';
         html += '  <div class="spotlight-item-right">';
@@ -2811,18 +2821,18 @@
       html += '<div class="spotlight-section">';
       html += '<div class="spotlight-section-head"><span>云端网盘归档 (' + cloud.length + ')</span></div>';
       cloud.forEach(function (c) {
-        var targetUrl = c.openlistUrl || c.actionUrl;
+        var targetUrl = escHtml(c.openlistUrl || c.actionUrl);
         html += '<div class="spotlight-item" data-index="' + (itemIndex++) + '" data-url="' + targetUrl + '" onclick="window.open(\'' + targetUrl + '\', \'_blank\')">';
         html += '  <div class="spotlight-item-left">';
         html += '    <span class="spotlight-item-icon">☁️</span>';
         html += '    <div class="spotlight-item-text">';
-        html += '      <div class="spotlight-item-title">' + (c.filename || '云端归档文件') + '</div>';
-        html += '      <div class="spotlight-item-sub"><span class="badge ok">' + (c.drive || '网盘') + '</span><span style="font-family:var(--font-mono);">' + (c.cloudPath || '—') + '</span></div>';
+        html += '      <div class="spotlight-item-title">' + escHtml(c.filename || '云端归档文件') + '</div>';
+        html += '      <div class="spotlight-item-sub"><span class="badge ok">' + escHtml(c.drive || '网盘') + '</span><span style="font-family:var(--font-mono);">' + escHtml(c.cloudPath || '—') + '</span></div>';
         html += '    </div>';
         html += '  </div>';
         html += '  <div class="spotlight-item-right">';
         if (c.openlistUrl) {
-          html += '    <button type="button" class="btn xs" onclick="event.stopPropagation(); window.open(\'' + c.openlistUrl + '\', \'_blank\')">直达网盘</button>';
+          html += '    <button type="button" class="btn xs" onclick="event.stopPropagation(); window.open(\'' + targetUrl + '\', \'_blank\')">直达网盘</button>';
         }
         html += '    <button type="button" class="btn xs ghost" onclick="event.stopPropagation(); location.href=\'/library/cloud\'">云端中心</button>';
         html += '  </div>';
