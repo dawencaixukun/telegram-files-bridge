@@ -25,7 +25,6 @@ test_link_download.py — Telegram 消息链接解析与直投下载自动化测
    - 基于 link 的一键自动解析并投递下载
    - 无有效文件、解析失败或账号缺失等边界容错
 """
-
 import asyncio
 import os
 import shutil
@@ -33,9 +32,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-
 from fastapi.testclient import TestClient
-
 import bridge_server
 
 

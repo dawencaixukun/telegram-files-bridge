@@ -25,7 +25,6 @@ os.environ["TG_DATA_DIR"] = _TMP
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_server as B  # noqa: E402
-
 import httpx  # noqa: E402
 
 PASS = 0

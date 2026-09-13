@@ -3,29 +3,15 @@
 """
 routers/system.py — 表现层路由模块：系统设置、日志中心、OpenList控制、TG向导、Doctor探针、Session冷备与磁盘保护
 """
-
 import os
-
 import re
-
 import time
-
 import json
-
 import asyncio
-
 from typing import Any, Dict, List, Optional, Tuple, Union
-
-
-
 from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
-
-
-
 from core import *
-
 from services import *
 
 

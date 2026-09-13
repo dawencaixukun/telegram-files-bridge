@@ -8,7 +8,6 @@ test_adv_features_arch_review_t7.py — Task t7 架构与代码审查同行评�
 3. 确认 System Doctor 各探针具有 3 秒硬超时隔离与异常边界捕获，主事件循环零阻塞
 4. 确认订阅规则优先级排序与模板解析算法高效，无无效正则回溯与性能瓶颈
 """
-
 import asyncio
 import json
 import os
@@ -19,9 +18,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, patch
-
 from fastapi.testclient import TestClient
-
 import bridge_server
 
 

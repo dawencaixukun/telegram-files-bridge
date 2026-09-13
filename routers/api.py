@@ -3,29 +3,15 @@
 """
 routers/api.py — 表现层路由模块：全局聚合搜索、文件指纹查重、链接解析与流媒体切片分发
 """
-
 import os
-
 import re
-
 import time
-
 import json
-
 import asyncio
-
 from typing import Any, Dict, List, Optional, Tuple, Union
-
-
-
 from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-
 from fastapi.responses import JSONResponse
-
-
-
 from core import *
-
 from services import *
 
 

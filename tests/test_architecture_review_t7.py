@@ -24,7 +24,6 @@ test_architecture_review_t7.py — Task t7: 全模块架构规范、并发健壮
    - 验证 token_expired 分类自动触发 _openlist_relogin 凭据重登
    - 验证 forceOverwrite 冲突处理策略原子更新
 """
-
 import asyncio
 import inspect
 import json
@@ -34,9 +33,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-
 from fastapi.testclient import TestClient
-
 import bridge_server
 
 

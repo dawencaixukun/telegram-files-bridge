@@ -12,10 +12,8 @@ import hmac as _hmac
 import secrets
 import ipaddress
 from typing import Any, Dict, List, Optional
-
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
-
 from core.config import (
     APP_ROOT_DIR, PORTAL_COOKIE, CSRF_COOKIE, CSRF_HEADER,
     _SECRET_FILE, _INIT_FLAG_FILE, PORTAL_TTL, PUBLIC_PATHS,

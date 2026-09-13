@@ -19,9 +19,7 @@ import shutil
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
-
 from fastapi.testclient import TestClient
-
 import bridge_server
 
 

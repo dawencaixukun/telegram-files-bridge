@@ -17,7 +17,6 @@ r"""回归测试：浏览页已归档卡片的底部操作按钮。
 """
 import re
 import unittest
-
 from core.templates import templates
 
 

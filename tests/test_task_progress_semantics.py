@@ -10,9 +10,7 @@
 不能把上传中的阶段画成已完成。
 """
 import unittest
-
 from unittest.mock import patch
-
 from core.templates import _stages, templates
 from services.task_service import _to_task
 

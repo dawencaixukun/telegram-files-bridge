@@ -22,9 +22,7 @@ import re
 import time
 import asyncio
 from typing import Any, Dict, List, Optional
-
 import httpx
-
 from core.config import _fmt_size, _fmt_time
 from core.state import (
     _NOTIFY_CONFIG, _ARCHIVE_JOBS, _ARCHIVE_CONFIG,

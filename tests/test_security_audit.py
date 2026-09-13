@@ -16,9 +16,7 @@ import sys
 import time
 import unittest
 from unittest.mock import AsyncMock, patch
-
 from starlette.testclient import TestClient
-
 import bridge_server
 from bridge_server import (
     app,

@@ -19,9 +19,7 @@ UndefinedError，把 /account 整页打成 500（用户点侧边栏「账号健�
 """
 import unittest
 from unittest.mock import AsyncMock, patch
-
 from fastapi.testclient import TestClient
-
 import bridge_server
 
 
@@ -49,9 +47,7 @@ class TestAccountHealthPage(unittest.TestCase):
     def test_stats_dict_contains_trend_keys(self):
         """_dashboard_stats 返回 dict 必须含 trend_* 三键（模板渲染契约）。"""
         import asyncio
-
         from services.task_service import _dashboard_stats
-
         import time as _time
         now = _time.time()
         tasks = [

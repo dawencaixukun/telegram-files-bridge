@@ -9,9 +9,7 @@ import time
 import asyncio
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Tuple
-
 import httpx
-
 from core.config import _fmt_size
 from core.state import _NOTIFY_CONFIG
 from core.backend import telegram_api_call

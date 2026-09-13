@@ -11,7 +11,6 @@ r"""回归测试：浏览页滚动自动加载下一页（无限滚动）。
 """
 import re
 import unittest
-
 from core.templates import templates
 
 

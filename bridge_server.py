@@ -16,7 +16,6 @@ import types
 import time
 import asyncio
 from typing import Any, Dict, List, Optional
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -193,7 +192,6 @@ import routers.archive as _r_archive
 import routers.subscriptions as _r_subscriptions
 import routers.system as _r_system
 import routers.api as _r_api
-
 import services.openlist_service as _s_openlist
 import services.watermark_service as _s_watermark
 import services.notification_service as _s_notification
@@ -205,7 +203,6 @@ import services.subscription_service as _s_subscription
 import services.media_service as _s_media
 import services.task_service as _s_task
 import services.browse_service as _s_browse
-
 import core.config as _c_config
 import core.state as _c_state
 import core.logging as _c_logging

@@ -10,7 +10,6 @@ import asyncio
 import posixpath
 from urllib.parse import urljoin
 from typing import Any, Dict, List, Optional
-
 from core.config import (
     APP_ROOT_DIR, OPENLIST_URL, _resolve_host_local_path,
     _norm_remote_path

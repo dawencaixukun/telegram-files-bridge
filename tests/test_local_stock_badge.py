@@ -12,7 +12,6 @@
 import os
 import tempfile
 import unittest
-
 import core.state as state
 from services.task_service import _local_stock_exists, _to_task
 

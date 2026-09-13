@@ -10,10 +10,8 @@ import asyncio
 import posixpath
 from urllib.parse import quote, urlparse
 from typing import Any, Dict, List, Optional, Tuple
-
 import httpx
 from fastapi.responses import JSONResponse
-
 from core.config import (
     OPENLIST_URL, _archive_norm_dir
 )
