@@ -177,14 +177,18 @@ async def _doctor_probe_openlist() -> Dict[str, Any]:
     user_masked = _mask_secret(_OPENLIST.get("username", ""))
     deadline = start + _DOCTOR_PROBE_BUDGET
     try:
-        has_token = bool(_OPENLIST.get("token"))
+        # 不能拿 _OPENLIST["token"] 做提前短路：token 为空并不等于不能用 ——
+        # _openlist_status() 在存有密码时会静默重登并拿到新 token。旧实现
+        # `if has_token:` 会在「凭据已配置但 token 字段为空/被清」时直接跳过
+        # 探测并报 critical「未登录或令牌失效」，而实际归档功能完全正常，
+        # 属于医生误诊。_openlist_ready() 自身在无 token 无密码时立即返回
+        # False（无 HTTP 往返），因此直接调用既正确又不影响 SLA。
         verified = False
-        if has_token:
-            remaining = max(0.05, deadline - time.perf_counter())
-            try:
-                verified = await asyncio.wait_for(_openlist_ready(), timeout=remaining)
-            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
-                verified = False
+        remaining = max(0.05, deadline - time.perf_counter())
+        try:
+            verified = await asyncio.wait_for(_openlist_ready(), timeout=remaining)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            verified = False
         mount_count = 0
         if verified:
             remaining = max(0.05, deadline - time.perf_counter())
