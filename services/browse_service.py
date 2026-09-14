@@ -229,13 +229,6 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
     params: Dict[str, Any] = {"type": type_, "limit": limit}
     if cursor:
         params["fromMessageId"] = cursor
-    try:
-        tg = BACKEND._safe_id(tg_id)
-        ch = BACKEND._safe_id(chat_id)
-        raw = await BACKEND._request("GET", f"/telegram/{tg}/chat/{ch}/files", params=params)
-    except Exception as e:  # noqa: BLE001
-        log.warning("browse files(%s,%s) 失败: %s", tg_id, chat_id, e)
-        return [], 0, 0, {"collapsed": 0, "loaded": 0}
     state = _browse_seen_state(_browse_seen_key(tg_id, chat_id, type_))
     # 过滤规则（用户要求，两次迭代）：
     # 1. 图片在浏览页全站屏蔽（包括「全部」分类，收藏里只见视频）；

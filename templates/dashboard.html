@@ -200,6 +200,7 @@
 
     var timer = null;
     async function poll() {
+      if (!window.__pollAllowed || !window.__pollAllowed()) return;  // 后台标签页不轮询
       try {
         var r = await fetch('/api/speeds', { headers: { 'X-Requested-With': 'fetch' } });
         if (!r.ok) return;

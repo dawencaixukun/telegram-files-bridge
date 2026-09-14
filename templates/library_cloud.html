@@ -649,9 +649,8 @@ window.cloudLibrary = function cloudLibrary() {
 {% endblock %}
 
 {% block js %}
-<script>
-if (window.__retrievePollStart && document.querySelector('[data-retrieve-btn], [data-ret-pill]')) {
-  window.__retrievePollStart();
-}
-</script>
+{# retrieve 轮询的启动已由 app.js 的启动守卫统一负责（app.js:2994 判断
+   [data-retrieve-btn]/[data-ret-pill] 后调用 __retrievePollStart），
+   这里曾经再跑一遍同样判断，导致 __retrievePollTick 每次进页面多打一个
+   /library/cloud/retrieve/status。删掉重复启动块。 #}
 {% endblock %}

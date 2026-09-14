@@ -21,7 +21,10 @@ from core.state import (
 )
 from core.logging import log
 
-_UPLOAD_CHUNK = 1 << 20  # 1MB 分块
+_UPLOAD_CHUNK = 4 << 20  # 4MB 分块
+# 历史值 1MB：流式写盘对每个分块做一次 await asyncio.to_thread(fh.write, chunk)，
+# 10GB 文件 = 10240 次线程池往返。放大到 4MB 后降到约 1/4，内存峰值仍只有
+# chunk × 并发数（_RETRIEVE_SEM 限 2）。上传侧读取同一常量，行为一致。
 
 
 async def _openlist_api_login(username: str, password: str) -> Tuple[str, str]:
@@ -125,7 +128,16 @@ async def _openlist_relogin() -> str:
 
 
 def _openlist_env(resp: httpx.Response) -> Tuple[int, Dict[str, Any], str]:
-    """OpenList /api 包络 → (code, data, message)。错误也是 HTTP 200，必须看包络码。"""
+    """OpenList /api 包络 → (code, data, message)。错误也是 HTTP 200，必须看包络码。
+
+    注意 3xx：共享单例 _openlist_client 设了 follow_redirects=False。若 OpenList
+    前面挂了反代、把请求 302 到 /login，这里只会拿到一段 HTML，json() 解析失败
+    后返回 code=0，调用方一律当「业务失败」处理且**永不重登** —— 表现为「凭据
+    明明是好的，却一直报未登录」。这里显式把 3xx 映射为未认证码 401，让调用方
+    已有的 `code in (401, 403)` 重登逻辑生效。
+    """
+    if 300 <= resp.status_code < 400:
+        return 401, {}, f"OpenList 返回重定向 HTTP {resp.status_code}（疑似反代跳登录）"
     try:
         env = resp.json()
     except Exception:  # noqa: BLE001

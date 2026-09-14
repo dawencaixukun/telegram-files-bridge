@@ -32,6 +32,17 @@
     }
   }
 
+  /* ---------------- 轮询门控：后台标签页不发请求 ----------------
+     历史缺陷：全站多个轮询定时器（归档 2s / 取回 2s / FloodWait 30s /
+     dashboard 测速 2s / 任务表 5s）都没有 visibilitychange 门控 —— 页面切到
+     后台后仍在持续打后端，白耗带宽与服务端 CPU。
+     这里不改定时器生命周期（避免引入清理复杂度），只让 tick 在隐藏时直接返回：
+     定时器照常到期，但不产生任何网络请求；页面重新可见后下个周期自然恢复。 */
+  function __pollAllowed() {
+    return !document.hidden;
+  }
+  window.__pollAllowed = __pollAllowed;
+
 
   /* ---------------- 缩略图加载失败兜底 ----------------
      /preview 代理在 TDLib 未就绪 / Java 后端离线 / 补图失败时返回 404，
@@ -819,6 +830,7 @@
     p.appendChild(label);
   }
   function __archPollTick() {
+    if (!__pollAllowed()) return;   // 后台标签页不轮询
     fetch('/archive/status', { headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -1230,6 +1242,7 @@
   var retrieveTimer = null;
   var retrieveIdleCount = 0;
   function __retrievePollTick() {
+    if (!__pollAllowed()) return;   // 后台标签页不轮询
     fetch('/library/cloud/retrieve/status', { headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -2257,6 +2270,7 @@
     }
 
     function checkStatus() {
+      if (!window.__pollAllowed || !window.__pollAllowed()) return;  // 后台标签页不轮询
       fetch('/api/tg/floodwait/status')
         .then(function (r) { return r.json(); })
         .then(function (res) {
@@ -2317,7 +2331,9 @@
       init: function () {
         var self = this;
         self.load();
-        setInterval(function () {
+        // 本地倒计时不涉及网络，隐藏时继续跑（用户切回来立刻看到正确剩余时间）；
+        // 真正的数据拉取在 load() 里做后台门控。
+        var t = setInterval(function () {
           if (self.st.isCooling && self.st.remainingSeconds > 0) {
             self.st.remainingSeconds--;
             var m = Math.floor(self.st.remainingSeconds / 60);
@@ -2325,9 +2341,11 @@
             self.st.formattedRemaining = (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
           }
         }, 1000);
+        if (window.__pageOnLeave) window.__pageOnLeave(function () { clearInterval(t); });
       },
       load: function () {
         var self = this;
+        if (!window.__pollAllowed || !window.__pollAllowed()) return;  // 后台标签页不发请求
         fetch('/api/tg/floodwait/status')
           .then(function (r) { return r.json(); })
           .then(function (res) {

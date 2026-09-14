@@ -26,6 +26,14 @@ from core.logging import log
 # ---------------------------------------------------------------------
 # 1. 签名密钥与令牌机制
 # ---------------------------------------------------------------------
+# 磁盘不可写时的进程级回退密钥：只生成一次，保证同一进程内签发与校验一致
+# （旧代码每次调用都新生成 → 全体 401 循环；见 _portal_secret 的注释）。
+_FALLBACK_PORTAL_SECRET = secrets.token_bytes(32)
+
+# 单 IP 失败时间戳上限，防止无界增长
+_LOGIN_FAILURE_MAX_PER_IP = 100
+
+
 def _portal_secret() -> bytes:
     try:
         os.makedirs(APP_ROOT_DIR, exist_ok=True)
@@ -40,8 +48,11 @@ def _portal_secret() -> bytes:
             f.write(data)
         return data
     except Exception as e:  # noqa: BLE001
-        log.error("portal 密钥读取/写入失败（%s），本次运行使用临时内存密钥", e)
-        return secrets.token_bytes(32)
+        # 回退密钥必须是「进程内唯一」的常量，绝不能每次调用都新生成：
+        # 多 worker / 热重载 / 磁盘瞬时不可写时，签发与校验会用不同密钥，
+        # 表现为全体用户莫名 401 循环（旧代码 return secrets.token_bytes(32) 就是此坑）。
+        log.error("portal 密钥读取/写入失败（%s），本次运行使用进程级临时密钥", e)
+        return _FALLBACK_PORTAL_SECRET
 
 
 _PORTAL_SECRET = _portal_secret()
@@ -88,14 +99,19 @@ def _is_public(path: str) -> bool:
 
 
 async def _init_gate_open(local_flag: bool) -> bool:
-    """/init 是否开放：以后端 bootstrap/status 为准，本地标志仅作辅助。"""
+    """/init 是否开放：以后端 bootstrap/status 为准，本地标志仅作辅助。
+
+    注意 fail-closed：后端不可达时旧代码 return not local_flag（本地无标志 →
+    放行）。而 PUBLIC_PATHS 含 /init，等于「后端宕机窗口可匿名访问初始化页」。
+    安全策略下必须收窄：状态未知一律视为「不开放」。
+    """
     try:
         from core.backend import BACKEND
         status = await BACKEND.ensure_bootstrap_status()
     except Exception:  # noqa: BLE001
         status = None
     if status is None:
-        return not local_flag
+        return False
     return bool(status.get("required"))
 
 
@@ -130,24 +146,30 @@ def _client_ip(request: Request) -> str:
 
 def _prune_login_failures() -> None:
     now = time.time()
-    stale = [ip for ip, ts_list in _login_failures.items() if not any(now - t < LOGIN_RATE_WINDOW for t in ts_list)]
+    # 必须用 list(...) 快照：本函数会在 _record_login_failure / _login_blocked
+    # 里被调用，同进程并发写 key 时直接遍历 items() 会 RuntimeError:
+    # dictionary changed size during iteration（限流器 500）。
+    stale = [ip for ip, ts_list in list(_login_failures.items())
+             if not any(now - t < LOGIN_RATE_WINDOW for t in ts_list)]
     for ip in stale:
         _login_failures.pop(ip, None)
 
 
 def _login_blocked(ip: str) -> bool:
+    """只读判定：已过窗口的时间戳不落盘，避免只读路径也写字典（并发放大 + 无界增长）。"""
     now = time.time()
-    window = [t for t in _login_failures.get(ip, []) if now - t < LOGIN_RATE_WINDOW]
-    _login_failures[ip] = window
-    if len(_login_failures) > _LOGIN_FAILURE_MAX:
-        _prune_login_failures()
+    window = [t for t in list(_login_failures.get(ip, [])) if now - t < LOGIN_RATE_WINDOW]
     return len(window) >= LOGIN_RATE_LIMIT
 
 
 def _record_login_failure(ip: str) -> None:
     if len(_login_failures) > _LOGIN_FAILURE_MAX:
         _prune_login_failures()
-    _login_failures.setdefault(ip, []).append(time.time())
+    ts_list = _login_failures.setdefault(ip, [])
+    ts_list.append(time.time())
+    # 单 IP 时间戳也要封顶，否则长期大量失败会让列表无界增长
+    if len(ts_list) > _LOGIN_FAILURE_MAX_PER_IP:
+        del ts_list[:-_LOGIN_FAILURE_MAX_PER_IP]
 
 
 def _clear_login_failures(ip: str) -> None:

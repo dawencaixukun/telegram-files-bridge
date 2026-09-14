@@ -700,7 +700,13 @@ def _record_disk_sample(used_gb: float) -> None:
                 data = {}
         if not isinstance(data, dict):
             data = {}
-        data[key] = round(float(used_gb), 2)
+        new_val = round(float(used_gb), 2)
+        # 幂等短路：本函数由 _dashboard_stats 在每次 / 与 /tasks 渲染时调用，
+        # 旧代码无论数值是否变化都走一遍「读 + 写临时文件 + os.replace」磁盘事务，
+        # 等于每个页面请求都产生一次落盘。当天样本没变化就直接返回。
+        if data.get(key) == new_val:
+            return
+        data[key] = new_val
         # 只保留最近 60 天，避免文件无限增长
         for old in sorted(data.keys())[:-60]:
             data.pop(old, None)

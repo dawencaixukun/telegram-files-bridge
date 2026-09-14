@@ -20,6 +20,18 @@ RE_BOT_TOKEN = re.compile(r"^[A-Za-z0-9_:-]{3,100}$")
 RE_CHAT_ID = re.compile(r"^[A-Za-z0-9_@-]{1,64}$")
 _NOTIFY_LAST_DISK_ALERT = 0.0
 
+# 持有派发任务的强引用：asyncio 事件循环只持弱引用，裸 create_task 的返回值
+# 随时可能被 GC 回收，任务在完成前就被丢掉（异常还会被内部吞掉，调用方无从
+# 发现），表现为偶发「通知没发出」。
+_NOTIFY_PENDING_TASKS: set = set()
+
+
+def _spawn_notification(kind: str, card: str) -> None:
+    """派发通知并持有任务引用，完成后自动从集合移除。"""
+    task = asyncio.create_task(_dispatch_notification(kind, card))
+    _NOTIFY_PENDING_TASKS.add(task)
+    task.add_done_callback(_NOTIFY_PENDING_TASKS.discard)
+
 
 async def _send_via_bot(bot_token: str, chat_id: str, html_text: str) -> Tuple[bool, str]:
     bot_token = str(bot_token or "").strip()
@@ -159,7 +171,7 @@ def notify_download_completed(task: Dict[str, Any]) -> None:
             "━━━━━━━━━━━━━━━━━━\n"
             "<i>💡 该文件已安全落地，等待归档转存。</i>"
         )
-        asyncio.create_task(_dispatch_notification("downloadCompleted", card))
+        _spawn_notification("downloadCompleted", card)
     except Exception as e:
         log.debug("notify_download_completed 异常: %s", e)
 
@@ -188,7 +200,7 @@ def notify_archive_success(job: Dict[str, Any]) -> None:
             "━━━━━━━━━━━━━━━━━━\n"
             f'🔗 <a href="{url}">点击直接在 OpenList 中查看文件</a>'
         )
-        asyncio.create_task(_dispatch_notification("archiveSuccess", card))
+        _spawn_notification("archiveSuccess", card)
     except Exception as e:
         log.debug("notify_archive_success 异常: %s", e)
 
@@ -224,7 +236,7 @@ def notify_archive_failed(job: Dict[str, Any]) -> None:
             "━━━━━━━━━━━━━━━━━━\n"
             f"<i>🔧 处理建议：{action}</i>"
         )
-        asyncio.create_task(_dispatch_notification("archiveFailed", card))
+        _spawn_notification("archiveFailed", card)
     except Exception as e:
         log.debug("notify_archive_failed 异常: %s", e)
 
@@ -246,7 +258,7 @@ def notify_disk_watermark_alert(cur_pct: float, high_thresh: float, free_gb: flo
             "━━━━━━━━━━━━━━━━━━\n"
             "<i>🚨 系统已启动自动应急清理与保护，请关注存储安全。</i>"
         )
-        asyncio.create_task(_dispatch_notification("diskWatermarkAlert", card))
+        _spawn_notification("diskWatermarkAlert", card)
     except Exception as e:
         log.debug("notify_disk_watermark_alert 异常: %s", e)
 

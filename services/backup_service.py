@@ -336,12 +336,15 @@ async def _upload_session_backup_to_openlist(filename: str, enc_bytes: bytes) ->
             "As-Task": "false",
         }
         resp = await _openlist_upload_client.put("/api/fs/put", content=enc_bytes, headers=headers)
-        if resp.status_code == 401:
+        code, _, msg = _openlist_env(resp)
+        # OpenList 用「HTTP 200 + 包络码」表达鉴权失败：token 过期时错误体里的
+        # code 才是 401/403（见 openlist_service._openlist_put_once 的同款写法）。
+        # 老代码只判 resp.status_code == 401，token 失效后冷备永远无法自愈。
+        if resp.status_code == 401 or code in (401, 403):
             token = await _openlist_relogin()
             headers["Authorization"] = token
             resp = await _openlist_upload_client.put("/api/fs/put", content=enc_bytes, headers=headers)
-
-        code, _, msg = _openlist_env(resp)
+            code, _, msg = _openlist_env(resp)
         if code != 200:
             return False, f"OpenList 返回错误码 {code}: {msg}"
 

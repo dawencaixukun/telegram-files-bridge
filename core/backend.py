@@ -106,7 +106,10 @@ class BackendClient:
             if csrf:
                 headers["X-CSRF-Token"] = csrf
         resp = await self.client.request(m, path, json=json, params=params, headers=headers)
-        auth_lost = resp.status_code == 401 or (300 <= resp.status_code < 400 and resp.status_code != 304)
+        # 只有 401（必要时含 403）才算认证丢失。旧代码把任意 3xx（除 304）
+        # 也当认证丢失，遇到正常的重定向就会 _relogin() 并重放请求 —— 对
+        # 凭据类 POST 会形成循环。
+        auth_lost = resp.status_code in (401, 403)
         if auth_lost and retry_on_401:
             self._cache.clear()
             if await self._relogin():

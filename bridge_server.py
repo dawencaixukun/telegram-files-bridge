@@ -108,40 +108,23 @@ _bot_command_task: Optional[asyncio.Task] = None
 
 @app.on_event("startup")
 async def _startup():
-    global _relay_task, _auto_archive_task, _flood_wait_timer_task
-    # 状态持久化文件加载恢复
-    try:
-        _openlist_load()
-    except Exception as e:
-        log.warning("OpenList 状态加载失败: %s", e)
-    try:
-        _archive_load()
-    except Exception as e:
-        log.warning("归档日志加载失败: %s", e)
-    try:
-        _notify_config_load()
-    except Exception as e:
-        log.warning("通知配置加载失败: %s", e)
-    try:
-        _subs_load()
-    except Exception as e:
-        log.warning("订阅规则加载失败: %s", e)
-    try:
-        _waiting_disk_load()
-    except Exception as e:
-        log.warning("磁盘挂起任务加载失败: %s", e)
-    try:
-        _flood_wait_load()
-    except Exception as e:
-        log.warning("FloodWait 状态加载失败: %s", e)
+    global _relay_task, _auto_archive_task, _bot_command_task
+    # 状态持久化文件的加载已在 core.state 模块装载时完成（state.py 末尾的
+    # _flood_wait_load/_archive_load/_subs_load/... 七连调用），此处不再重复执行。
+    # 旧代码在这里又跑了一遍同样的 7 次加载：既产生重复的「已恢复…」日志行，
+    # 也是 FloodWait 双定时器竞态的源头之一。
+    #
+    # 但有一个必须补的动作：_flood_wait_load() 在导入期运行时还没有事件循环，
+    # 里面的 _ensure_flood_wait_timer() 会因 get_running_loop() 抛 RuntimeError
+    # 而被静默跳过。若进程是在冷却期内被重启的，active=True 却没有任何定时器在跑
+    # → 调度永久挂起，直到下次显式触发 FloodWait 才恢复。这里拿到运行循环后补启动。
+    _ensure_flood_wait_timer()
 
     # 启动后台异步中继与循环任务
     _relay_task = asyncio.create_task(ws_relay_loop())
     asyncio.create_task(BACKEND.refresh_bootstrap_status())
     _auto_archive_task = asyncio.create_task(_auto_archive_loop())
-    _flood_wait_timer_task = asyncio.create_task(_flood_wait_timer_loop())
     # TG Bot 命令长轮询（/ck /yd /st /err /help）：未配置 Bot 时内部自动挂起等待
-    global _bot_command_task
     _bot_command_task = asyncio.create_task(bot_command_loop())
 
 

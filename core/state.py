@@ -177,6 +177,11 @@ def _flood_wait_load() -> None:
                 else:
                     _FLOOD_WAIT_STATE["active"] = True
                     log.info("已恢复 Telegram FloodWait 冷却状态: 剩余 %d 秒", int(until - now))
+                    # 冷却中被重启时，必须把冷却定时器重新拉起来，否则 active=True
+                    # 却没有任何循环在等待结束 → 调度永久挂起（要等下次显式触发才恢复）。
+                    # 导入期调用此函数时还没有事件循环，_ensure_flood_wait_timer 会
+                    # 静默跳过，由 bridge_server startup 拿到 loop 后再补一次。
+                    _ensure_flood_wait_timer()
     except Exception as e:  # noqa: BLE001
         log.warning("恢复 flood_wait 状态异常: %s", e)
 
@@ -293,12 +298,21 @@ async def _flood_wait_timer_loop() -> None:
 
 
 def _ensure_flood_wait_timer() -> None:
+    """确保 FloodWait 冷却定时器在跑（幂等，可在导入期/startup 调用）。
+
+    这是 FloodWait 定时器的**唯一入口**。历史上 bridge_server 也自己
+    create_task(_flood_wait_timer_loop())，两个循环并发跑同一份状态：各自
+    清空挂起队列、各自把 active 清零，shutdown 又只 cancel 前者 —— 挂起任务
+    会被不确定地清空。现在只留 core.state 这一份，由 _trigger_flood_wait 与
+    startup 共同保证存在。
+    """
     global _FLOOD_WAIT_TIMER_TASK
     if _FLOOD_WAIT_STATE.get("active") and (_FLOOD_WAIT_TIMER_TASK is None or _FLOOD_WAIT_TIMER_TASK.done()):
         try:
             loop = asyncio.get_running_loop()
             _FLOOD_WAIT_TIMER_TASK = loop.create_task(_flood_wait_timer_loop())
         except RuntimeError:
+            # 导入期还没有事件循环：由 bridge_server startup 再调一次补上
             pass
 
 
@@ -426,8 +440,27 @@ def _archive_save() -> None:
                  if j.get("state") in ("done", "failed", "cancelled")),
                 key=lambda j: j.get("created_at") or 0.0)
             drop = len(_ARCHIVE_JOBS) - _ARCHIVE_MAX_JOBS
-            for j in finished[:drop]:
-                _ARCHIVE_JOBS.pop(j.get("id"), None)
+            # 表键未必等于 job["id"]（跨进程恢复/外部写入时可能不一致）：
+            # 老代码 pop(j.get("id")) 在两者不等时删不掉任何东西，实测上限设 10
+            # 但写入 20 条 key≠id 时 20 条全部保留，内存/落盘上限完全失效。
+            # 这里按「对象身份」回查真实表键，保证删得掉。
+            doomed = finished[:drop]
+            # 极端情况：待删数量超过终态任务数（例如全部仍是 queued/uploading）。
+            # 老代码此时完全不裁剪，表可以无限增长。按 created_at 从最旧的补足。
+            if len(doomed) < drop:
+                chosen = {id(j) for j in doomed}
+                for j in sorted(_ARCHIVE_JOBS.values(),
+                                key=lambda x: x.get("created_at") or 0.0):
+                    if len(doomed) >= drop:
+                        break
+                    if id(j) not in chosen:
+                        doomed.append(j)
+                        chosen.add(id(j))
+            if doomed:
+                doomed_ids = {id(j) for j in doomed}
+                for k, j in list(_ARCHIVE_JOBS.items()):
+                    if id(j) in doomed_ids:
+                        _ARCHIVE_JOBS.pop(k, None)
         os.makedirs(APP_ROOT_DIR, exist_ok=True)
         payload = json.dumps({"jobs": _ARCHIVE_JOBS}).encode("utf-8")
         fd = os.open(_ARCHIVE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -483,11 +516,15 @@ def _archive_config_save() -> None:
     try:
         os.makedirs(APP_ROOT_DIR, exist_ok=True)
         payload = json.dumps(_ARCHIVE_CONFIG, ensure_ascii=False).encode("utf-8")
-        fd = os.open(_ARCHIVE_CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # tmp + os.replace 原子写：旧代码 O_TRUNC 直写，写入中途崩溃会留下
+        # 被截断的 JSON；且归档 worker 里高频调用，并发写会丢更新。
+        tmp = f"{_ARCHIVE_CONFIG_FILE}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, payload)
         finally:
             os.close(fd)
+        os.replace(tmp, _ARCHIVE_CONFIG_FILE)
     except Exception as e:  # noqa: BLE001
         log.warning("默认归档配置持久化失败: %s", e)
 
@@ -537,11 +574,16 @@ def _subs_save() -> None:
     try:
         os.makedirs(APP_ROOT_DIR, exist_ok=True)
         payload = json.dumps({"rules": _SUB_RULES}, ensure_ascii=False).encode("utf-8")
-        fd = os.open(_SUBS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # tmp + os.replace 原子写：_sub_bump 在每个归档任务终态都会调用本函数
+        # （批量归档 200 文件 = 200 次写入），O_TRUNC 直写在写入中途崩溃会留下
+        # 截断 JSON，并发写还会丢更新。
+        tmp = f"{_SUBS_FILE}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, payload)
         finally:
             os.close(fd)
+        os.replace(tmp, _SUBS_FILE)
     except Exception as e:  # noqa: BLE001
         log.warning("订阅规则持久化失败: %s", e)
 

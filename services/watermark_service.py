@@ -69,6 +69,7 @@ async def _check_and_wake_waiting_disk_tasks() -> int:
 
     sorted_tasks = sorted(_WAITING_DISK_TASKS.values(), key=lambda x: float(x.get("created_at") or 0.0))
     woken_count = 0
+    dropped_count = 0
 
     for task in sorted_tasks:
         cur = _get_disk_usage_percent()
@@ -78,25 +79,38 @@ async def _check_and_wake_waiting_disk_tasks() -> int:
 
         tid = task["id"]
         payload = task.get("payload")
+        # 占位挂起任务（payload 为空）不可能是真实下载请求：早期版本直接在
+        # _waiting_disk_add 里塞了 {"id","created_at"} 空壳，唤醒时这里会跳过
+        # 下载调用却仍然 pop + woken_count += 1 + 落 INFO「已成功唤醒」。
+        # 实测：woken_count=1 而 BACKEND.start_download_multiple 调用 0 次，
+        # 任务被静默删除、/api/disk/wake 返回假的成功数。
+        if not payload:
+            _WAITING_DISK_TASKS.pop(tid, None)
+            dropped_count += 1
+            log.warning("挂起任务 %s 无下载请求体（占位记录），无法恢复，已移除",
+                        task.get("filename") or tid)
+            continue
         try:
-            if payload:
-                if isinstance(payload, list):
-                    await BACKEND.start_download_multiple({"files": payload})
-                elif isinstance(payload, dict):
-                    if "files" in payload:
-                        await BACKEND.start_download_multiple(payload)
-                    else:
-                        await BACKEND.start_download_multiple({"files": [payload]})
+            if isinstance(payload, list):
+                await BACKEND.start_download_multiple({"files": payload})
+            elif isinstance(payload, dict):
+                if "files" in payload:
+                    await BACKEND.start_download_multiple(payload)
+                else:
+                    await BACKEND.start_download_multiple({"files": [payload]})
             _WAITING_DISK_TASKS.pop(tid, None)
             woken_count += 1
             log.info("已成功唤醒挂起任务: %s (%s)", task.get("filename"), tid)
         except Exception as e:
             log.warning("唤醒任务 %s 失败: %s", tid, e)
 
-    if woken_count:
+    if woken_count or dropped_count:
+        # 即使一个都没唤醒成功，只要清掉了占位记录也必须落盘，否则重启后
+        # 这些无法恢复的空壳会一直占据挂起队列、每次巡检重复报警。
         _waiting_disk_save()
         _TASKS_CACHE["expire"] = 0.0
         _TASKS_CACHE["value"] = None
+    if woken_count:
         LOG_STORE.append("INFO", f"磁盘回落至 {cur_pct:.1f}%，已自动唤醒 {woken_count} 个挂起下载任务")
 
     return woken_count
