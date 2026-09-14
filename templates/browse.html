@@ -115,6 +115,9 @@
                 title="清空全部已选，侧栏立即恢复显示所有会话">一键清空</button>
         <span class="sub" style="font-size:12px;color:var(--text-3);" id="browseManageCount"></span>
       </div>
+      <div class="hint" style="margin:0 0 8px;">
+        开关含义：<b style="color:var(--text-1);">开 = 在侧栏显示</b>，关 = 从侧栏隐藏。想隐藏谁就把谁的开关关掉。
+      </div>
       <input class="input" type="search" id="browseManageSearch" placeholder="筛选会话…" autocomplete="off"
              oninput="window.__browseManageFilter(this.value)" style="margin-bottom:12px;">
     </div>
@@ -295,9 +298,11 @@
         shown++;
         // 结构固定：标题占满剩余宽度（order 1），开关固定右侧（order 2），
         // 「始终显示」标签最后（order 3）。收藏不可取消，故 switch 禁用。
-        rows += '<label class="manage-row' + (c.saved ? ' is-saved' : '') + '">'
+        rows += '<label class="manage-row' + (c.saved ? ' is-saved' : '') + '" title="'
+              + esc(title) + (on ? '：正在侧栏显示（关掉即隐藏）' : '：已隐藏（打开即在侧栏显示）') + '">'
               + '<span class="manage-title" title="' + esc(title) + '">' + esc(title) + '</span>'
               + '<span class="switch"><input type="checkbox" data-chat="' + esc(cid) + '"'
+              + ' aria-label="在侧栏显示 ' + esc(title) + '"'
               + (on ? ' checked' : '') + (c.saved ? ' disabled' : '') + '>'
               + '<span class="track"></span></span>'
               + (c.saved ? '<span class="manage-tag">始终显示</span>' : '')
@@ -509,6 +514,11 @@
         else delete window.__BROWSE_MANAGE.pins[cid];
         window.__browseManageCount();
         window.__browseSyncSidebar(cid, pinned, title);
+        if (window.__toast) {
+          window.__toast(pinned ? ('已显示：' + (title || '会话')) : ('已隐藏：' + (title || '会话')),
+                         'success',
+                         pinned ? '侧栏已加入该会话' : '侧栏已移除该会话（收窄态下）');
+        }
       } else {
         el.checked = !pinned;  // 回滚 UI，避免显示与服务端不一致
         if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
