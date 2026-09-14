@@ -517,11 +517,27 @@
     if (bd) bd.classList.remove('show');
   };
 
-  /* ---------------- 会话面板开关（顶栏「切换会话」按钮） ---------------- */
+  /* ---------------- 会话面板开关（顶栏「切换会话」按钮） ----------------
+     关键：面板原本在 #content 内，而 #content 有 view-transition-name
+     （页面切换动画用）→ 它是独立层叠上下文，z-index 只在其内部生效。
+     顶栏(80)在更外层，把面板(85)整个压住 —— 头部（会话标题/×/管理会话）
+     永远藏在顶栏下面，用户看到的是"管理会话按钮被隐藏"。
+     修复：把面板与遮罩搬到 body 直下，脱离该层叠上下文，z-index 才是全局的。 */
+  window.__browseReparentSidePanel = function () {
+    var side = document.getElementById('browseSide');
+    var scrim = document.getElementById('browseSideScrim');
+    try {
+      if (side && side.parentElement !== document.body) document.body.appendChild(side);
+      if (scrim && scrim.parentElement !== document.body) document.body.appendChild(scrim);
+    } catch (e) {}
+  };
+  window.__browseReparentSidePanel();
+
   window.__browseToggleSidePanel = function (forceClose) {
     var side = document.getElementById('browseSide');
     var scrim = document.getElementById('browseSideScrim');
     if (!side) return;
+    window.__browseReparentSidePanel();   // htmx 局部换页后 DOM 可能被重建，兜底
     var open = !side.classList.contains('open') && forceClose !== true;
     side.classList.toggle('open', open);
     if (scrim) scrim.classList.toggle('show', open);
