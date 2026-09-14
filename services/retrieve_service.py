@@ -20,7 +20,8 @@ from core.state import (
 from core.logging import log
 from services.openlist_service import (
     _openlist_client, _openlist_upload_client, _openlist_token,
-    _openlist_relogin, _openlist_env, _UPLOAD_CHUNK
+    _openlist_relogin, _openlist_env, _UPLOAD_CHUNK,
+    _openlist_relocate_after_rename,
 )
 
 _RETRIEVE_TASKS: Dict[str, Any] = {}
@@ -93,7 +94,22 @@ async def _retrieve_worker(job: Dict[str, Any]) -> None:
                     )
                     code, data, msg = _openlist_env(resp)
                 if code != 200:
-                    raise RuntimeError(msg or f"OpenList 获取文件信息失败 (code={code})")
+                    # 改名自愈：路径失效（用户在 OpenList 里改过名）时，
+                    # 按"同目录 + 相同文件大小"重定位。唯一匹配则回写记录并继续。
+                    relocated = await _openlist_relocate_after_rename(
+                        token, job["remote_path"], int(job.get("size_bytes") or 0))
+                    if relocated:
+                        job["remote_path"] = relocated
+                        resp = await _openlist_client.post(
+                            "/api/fs/get",
+                            json={"path": relocated},
+                            headers={"Authorization": token}
+                        )
+                        code, data, msg = _openlist_env(resp)
+                        if code != 200:
+                            raise RuntimeError(msg or "OpenList 获取文件信息失败（重定位后仍失败）")
+                    else:
+                        raise RuntimeError(msg or f"OpenList 获取文件信息失败 (code={code})")
                 raw_url = str(data.get("raw_url") or "")
                 if not job.get("size_bytes") and data.get("size"):
                     job["size_bytes"] = int(data["size"])

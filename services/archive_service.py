@@ -305,6 +305,48 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
             "localPath": j.get("local_path") or "",
         })
 
+    # ---------------- 改名自愈 ----------------
+    # 用户在 OpenList 网页里改过文件名 -> 记录里的 remote_path 失效，
+    # status 判为 missing、OpenList 按钮回落首页、取回失败。
+    # 这里对 missing 行尝试按"同目录 + 相同文件大小"重定位；唯一匹配则回写
+    # 记录（内存 + 落盘），按钮 URL 与状态同步刷新。多匹配/无匹配保持 missing
+    # —— 宁可如实失败也不静默指错文件。
+    if status_missing := [r for r in out if r.get("status") == "missing" and r.get("remote_path")]:
+        try:
+            from services.openlist_service import _openlist_relocate_after_rename, _openlist_token
+            _tok = ""
+            try:
+                _tok = await _openlist_token()
+            except Exception:  # noqa: BLE001
+                _tok = ""
+            if _tok:
+                for row in status_missing:
+                    new_path = await _openlist_relocate_after_rename(
+                        _tok, str(row["remote_path"]), int(row.get("sizeBytes") or 0))
+                    if new_path:
+                        rid = str(row.get("id") or "")
+                        job = _ARCHIVE_JOBS.get(rid)
+                        if job is not None:
+                            job["remote_path"] = new_path
+                            job["filename"] = posixpath.basename(new_path)
+                            try:
+                                _archive_save()
+                            except Exception:  # noqa: BLE001
+                                pass
+                        row["remote_path"] = new_path
+                        row["remotePath"] = new_path
+                        row["cloud_path"] = new_path
+                        row["cloudPath"] = new_path
+                        row["filename"] = posixpath.basename(new_path)
+                        row["status"] = "archived"
+                        row["exists"] = True
+                        _url2 = _openlist_direct_url(new_path)
+                        row["openlist_url"] = _url2
+                        row["directUrl"] = _url2
+                        row["openlistUrl"] = _url2
+        except Exception as e:  # noqa: BLE001
+            log.debug("改名自愈批处理跳过: %s", e)
+
     # 卡片化联查（历史缺陷：云端页旧表格只有文件维度字段，缩略图/消息定位
     # 存放在 TG 任务记录里，模板拿不到，卡片化后无图可显）。
     # 联查数据源一：bridge 任务列表（与旧版一致，含速率/状态富化）

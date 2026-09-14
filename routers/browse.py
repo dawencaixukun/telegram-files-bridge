@@ -56,7 +56,7 @@ async def browse_page(request: Request, tg: str = "", chat: str = "", type: str 
         # OpenList 外部访问域名：卡片上的「OpenList」直达按钮要用它拼公网地址
         # （内网 127.0.0.1 在用户浏览器里打不开）。
         "openlist_public_base": str(_ARCHIVE_CONFIG.get("publicBaseUrl") or ""),
-        # 侧栏置顶收窄：模板据此显示「仅显示 N 个已选会话 / 显示全部」提示与置顶按钮态
+        # 侧栏黑名单：模板据此显示「已隐藏 N 个会话 / 全部显示」提示条
         "browse_pins": _browse_pins_all(),
     })
     return templates.TemplateResponse("browse.html", ctx)
@@ -64,20 +64,23 @@ async def browse_page(request: Request, tg: str = "", chat: str = "", type: str 
 
 @router.get("/browse/account-tree", response_class=JSONResponse)
 async def browse_account_tree(tg: str = ""):
-    """返回**完整**会话树（不做置顶收窄），供浏览页「管理会话」面板列出候选。
+    """返回**完整**会话树（不做黑名单隐藏），供浏览页「管理会话」面板列出候选。
 
-    必须用 full=True：面板要能列出全部会话让用户勾选。若这里跟着收窄，用户一旦
-    置顶过，面板里就只剩已选项，再也无法把其它会话加回侧栏（只能一路取消）。
+    必须用 full=True：面板要能列出全部会话。hidden 字段 = 当前被隐藏的 chatId 列表
+    （同时保留 pins 旧字段名兼容）。
     """
     tree = await _browse_tree(full=True)
-    return JSONResponse({"ok": True, "tree": tree, "pins": _browse_pins_all()})
+    hidden = _browse_pins_all()
+    return JSONResponse({"ok": True, "tree": tree, "hidden": hidden, "pins": hidden})
 
 
 @router.post("/browse/pins")
 async def browse_set_pins(request: Request):
-    """设置/取消某个会话的置顶（置顶后侧栏只展示置顶会话）。
+    """设置单个会话的显示态（黑名单模型：关 = 隐藏）。
 
     体：{"tg": "<telegramId>", "chat": "<chatId>", "pinned": true|false}
+    pinned=True  => 在侧栏显示；pinned=False => 从侧栏隐藏。
+    返回的 shown 字段是该会话当前是否在侧栏显示。
     """
     try:
         body = await request.json()
@@ -89,16 +92,17 @@ async def browse_set_pins(request: Request):
     if not chat:
         return JSONResponse({"ok": False, "message": "缺少会话 ID"}, status_code=400)
     pinned = bool(body.get("pinned"))
-    now_pinned = _browse_pin_apply(chat, pinned)
-    return JSONResponse({"ok": True, "chat": chat, "pinned": now_pinned, "pins": _browse_pins_all()})
+    now_shown = _browse_pin_apply(chat, pinned)
+    return JSONResponse({"ok": True, "chat": chat, "pinned": pinned,
+                         "shown": now_shown, "hidden": _browse_pins_all()})
 
 
 @router.post("/browse/pins/bulk")
 async def browse_set_pins_bulk(request: Request):
-    """批量设置/取消置顶。体：{"chats": [...], "pinned": true|false}
+    """批量设置显示态。体：{"chats": [...], "pinned": true|false}
 
-    一次请求、一次落盘：前端「全选（当前筛选）」会一次提交几十上百个 chatId，
-    逐个走 /browse/pins 会产生同样次数的往返与磁盘写入。
+    pinned=True => 显示；pinned=False => 隐藏（黑名单）。
+    一次请求、一次落盘：前端「全选/取消全选」一次提交几十上百个 chatId。
     """
     try:
         body = await request.json()
@@ -115,7 +119,7 @@ async def browse_set_pins_bulk(request: Request):
 
 @router.post("/browse/pins/clear")
 async def browse_clear_pins(request: Request):
-    """一键清空全部置顶：侧栏立即恢复显示全部会话。
+    """一键清空黑名单：全部隐藏的会话立即恢复显示。
 
     能一次做完就一次做完 —— 逐个 POST /browse/pins 取消会有 N 次磁盘写入与 N 次
     网络往返，且中途失败会留下「关了一半」的状态。

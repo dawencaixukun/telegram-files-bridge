@@ -38,12 +38,12 @@ _BROWSE_SEEN_MAX = 64
 CHAT_SOURCE_CACHE: Dict[str, Any] = {"key": None, "value": None}
 
 # ---------------------------------------------------------------------------
-# 侧栏会话置顶（用户手动「只留想要的会话」）
+# 侧栏会话隐藏（黑名单，用户手动「关掉不想看的会话」）
 #
-# 侧栏会话来自账号的 dialog 列表（可能上百个，且绝大多数与归档无关）。用置顶
-# 列表做**过滤收窄**：一旦用户置顶过任意会话，侧栏只展示置顶会话，其余收起。
-# 值为 **chatId 字符串**，与 account-tree 端点返回的 chatId 类型一致，无需关心
-# 是数字 ID 还是 @username。
+# 侧栏会话来自账号的 dialog 列表（可能上百个，且绝大多数与归档无关）。
+# 集合里存的是【被隐藏】会话的 **chatId 字符串**：关掉谁，谁从侧栏消失；
+# 集合为空 = 显示全部；收藏是硬性标准项，永不进集合（不会被隐藏）。
+# （历史语义曾是白名单收窄：勾=留。用户实测后明确要求改为直觉模型。）
 # 每个进程各自持有内存集合 + 落盘 JSON；进程外改文件不会即时生效（与
 # .subscriptions.json 等既有状态文件同一取舍）。
 # ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def _browse_pins_load() -> None:
         raw = data.get("pins") if isinstance(data, dict) else data
         _BROWSE_PINS = {str(x) for x in raw} if isinstance(raw, list) else set()
         if _BROWSE_PINS:
-            log.info("已恢复侧栏置顶会话: %d 个", len(_BROWSE_PINS))
+            log.info("已恢复侧栏隐藏会话（黑名单）: %d 个", len(_BROWSE_PINS))
     except FileNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001
@@ -124,7 +124,11 @@ def _browse_pins_clear() -> int:
 
 
 def _browse_pins_apply_many(chat_ids: Any, pinned: bool) -> int:
-    """批量置顶/取消置顶。返回实际变更的条数。
+    """批量设置会话显示态。返回实际变更的条数。
+
+    pinned=True  => 开关"开" => 在侧栏显示 => 从黑名单【移除】
+    pinned=False => 开关"关" => 隐藏 => 加入黑名单
+    （字段名 pinned 沿用旧契约，语义已按黑名单翻转。）
 
     单次落盘：逐个 _browse_pin_apply 会有 N 次磁盘写入，且中途异常会留下
     「改了一半」的状态。这里先在内存里改完再写一次。
@@ -141,31 +145,35 @@ def _browse_pins_apply_many(chat_ids: Any, pinned: bool) -> int:
     changed = 0
     for cid in ids:
         if pinned:
-            if cid not in _BROWSE_PINS:
-                _BROWSE_PINS.add(cid)
-                changed += 1
-        else:
             if cid in _BROWSE_PINS:
                 _BROWSE_PINS.discard(cid)
                 changed += 1
+        else:
+            if cid not in _BROWSE_PINS:
+                _BROWSE_PINS.add(cid)
+                changed += 1
     if changed:
         _browse_pins_save()
-        log.info("批量%s侧栏置顶会话: %d 个", "设置" if pinned else "取消", changed)
+        log.info("批量%s侧栏会话: %d 个", "显示" if pinned else "隐藏", changed)
     return changed
 
 
 def _browse_pin_apply(chat_id: Any, pinned: bool) -> bool:
-    """置顶/取消置顶。返回操作后该会话是否处于置顶态。"""
+    """设置单个会话显示态。返回操作后该会话是否在侧栏显示。
+
+    pinned=True  => 显示 => 移出黑名单
+    pinned=False => 隐藏 => 加入黑名单（收藏不受此约束，调用侧已排除）
+    """
     _browse_pins_ensure_loaded()
     cid = str(chat_id or "").strip()
     if not cid:
         return False
     if pinned:
-        _BROWSE_PINS.add(cid)
-    else:
         _BROWSE_PINS.discard(cid)
+    else:
+        _BROWSE_PINS.add(cid)
     _browse_pins_save()
-    return cid in _BROWSE_PINS
+    return cid not in _BROWSE_PINS
 
 
 def _browse_seen_key(tg_id: Any, chat_id: Any, type_: str) -> Tuple[str, str, str]:
@@ -253,10 +261,11 @@ async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
 async def _browse_tree(force: bool = False, full: bool = False) -> List[Dict[str, Any]]:
     """构建账号→会话树。
 
-    full=False（默认）：应用置顶收窄 —— 置顶过任意会话时，侧栏只保留置顶项
-    （收藏始终保留），避免把账号里上百个无关会话全罗列出来。
-    full=True：返回**完整**列表，不做收窄。供「管理会话」面板列候选使用 ——
-    面板必须能看到全部会话，否则用户一旦置顶过，就再也无法把其它会话加回侧栏。
+    full=False（默认）：应用**黑名单隐藏** —— 用户在「管理会话」里关掉的会话
+    从侧栏消失，其余全部照常显示；集合为空 = 显示全部。收藏永不被隐藏。
+    （历史语义曾是白名单收窄：勾=留。用户实测后明确要求改为"关=隐藏"的
+    直觉模型 —— 关掉谁谁就消失，不需要先勾其它会话。）
+    full=True：返回**完整**列表，不做隐藏。供「管理会话」面板列候选使用。
     """
     _browse_pins_ensure_loaded()
     tree: List[Dict[str, Any]] = []
@@ -267,10 +276,10 @@ async def _browse_tree(force: bool = False, full: bool = False) -> List[Dict[str
         return tree
     if not isinstance(telegrams, list):
         return tree
-    # 置顶收窄：一旦用户置顶过任意会话，侧栏只保留置顶项（收藏始终保留），
-    # 避免把账号里上百个无关会话全罗列出来。full=True 时跳过收窄。
-    pins = _BROWSE_PINS
-    filtering = bool(pins) and not full
+    # 黑名单隐藏：集合里的是【被隐藏】的会话（收藏不会进集合）。空集 = 全显示。
+    # full=True 时跳过（管理面板要列全部候选）。
+    hidden = _BROWSE_PINS
+    filtering = bool(hidden) and not full
     for tg in telegrams:
         tg_id = _pick(tg, "telegramId", "telegram_id", "id")
         if tg_id is None:
@@ -287,19 +296,17 @@ async def _browse_tree(force: bool = False, full: bool = False) -> List[Dict[str
                 if cid is None:
                     continue
                 saved = str(cid) == str(tg_id)
-                pinned = str(cid) in pins
-                if filtering and not pinned and not saved:
+                # 黑名单：命中即隐藏；收藏是硬性标准项，永不隐藏
+                if filtering and not saved and str(cid) in hidden:
                     continue
                 title = str(_pick(ch, "title", "name", "channel", "chatName", default="聊天"))
                 items.append({
                     "chatId": cid,
                     "title": "收藏 (Saved Messages)" if saved else title,
                     "saved": saved,
-                    "pinned": pinned,
                 })
-        # 排序：收藏恒第 1（用户要求：收藏是默认展示的硬性标准，必须置顶），
-        # 其余按置顶优先。saved 与 pinned 互斥（saved 即置顶）。
-        items.sort(key=lambda c: (0 if c["saved"] else (1 if c["pinned"] else 2)))
+        # 排序：收藏恒第 1（硬性标准），其余保持后端返回顺序
+        items.sort(key=lambda c: 0 if c["saved"] else 1)
         tree.append({
             "telegramId": tg_id,
             "name": (str(_pick(tg, "name", "username", "phone", default="TG 账号")).strip() or "TG 账号"),

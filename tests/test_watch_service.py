@@ -50,10 +50,13 @@ class TestWatchService(unittest.TestCase):
                 return {"ok": True}
 
         self.fb = FakeB()
+        self._W = W                      # tearDown 引用用（W 是 setUp 局部名）
+        self._orig_backend = W.BACKEND
         W.BACKEND = self.fb
 
     def tearDown(self):
         os.environ.pop("TG_DATA_DIR", None)
+        self._W.BACKEND = self._orig_backend  # 归还单例，避免污染后续测试
 
     def _rule(self, **kw):
         r = {"id": "r1", "enabled": True, "watch": True,
@@ -127,6 +130,7 @@ class TestWatchService(unittest.TestCase):
         self.st._WATCH_SEEN.clear()
         self.fb.files = [self._f(101, "A")]
         asyncio.run(self.W._watch_tick())
+        orig_flood = self.W._is_flood_wait_active
         self.W._is_flood_wait_active = lambda: True
         self.st._ARCHIVE_JOBS.clear()
         self.fb.files = [self._f(102, "B")]
@@ -135,6 +139,7 @@ class TestWatchService(unittest.TestCase):
         pend = [j for j in self.st._ARCHIVE_JOBS.values() if j.get("source") == "watch"]
         self.assertEqual(len(pend), 1)
         self.assertEqual(pend[0].get("state"), "waiting_disk")
+        self.W._is_flood_wait_active = orig_flood  # 归还，避免污染后续测试
 
     def test_seen_bounded_and_persist(self):
         """已见集合有界 + 落盘 0600 + 恢复往返。"""

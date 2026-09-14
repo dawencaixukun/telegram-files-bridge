@@ -166,6 +166,53 @@ async def _openlist_mkdir_tree(token: str, remote_dir: str) -> None:
             raise RuntimeError(f"创建目录 {cur} 失败：{msg or code}")
 
 
+async def _openlist_relocate_after_rename(token: str, remote_path: str,
+                                          size_bytes: int = 0) -> Optional[str]:
+    """按【同目录 + 相同文件大小】在云端重定位改名后的文件，返回新路径。
+
+    场景：用户在 OpenList 网页里把文件改名 —— 归档记录里存的旧路径立刻失效
+    （OpenList 按钮回落首页、取回失败）。改名不改内容，所以"同目录下唯一一个
+    大小相同的文件"几乎必然就是它。
+
+    返回：
+      * 找到唯一匹配 -> 新路径（调用方应回写归档记录，实现自愈）
+      * 找到 0 个或多个匹配 -> None（多匹配说明无法确定是哪个，宁可失败
+        也不能静默改指向别的文件 —— 那是数据错乱）
+    """
+    raw = str(remote_path or "").strip().replace("\\", "/").lstrip("/")
+    # raw 先 lstrip 再拼根：直接 normpath("/" + raw) 会让 POSIX 把开头的 "//"
+    # 当成特殊双斜杠路径原样保留（实测 parent 变 '//onedrive/d'）。
+    parent = posixpath.dirname(posixpath.normpath("/" + raw))
+    if not parent:
+        return None
+    try:
+        lst = await openlist_list_files(parent)
+    except Exception as e:  # noqa: BLE001
+        log.debug("改名重定位：列目录失败 %s: %s", parent, e)
+        return None
+    if not lst.get("ok"):
+        return None
+    size = int(size_bytes or 0)
+    if size <= 0:
+        return None
+    cands = []
+    for f in lst.get("files") or []:
+        try:
+            if int(f.get("size") or 0) == size:
+                cands.append(str(f.get("name") or ""))
+        except (TypeError, ValueError):
+            continue
+    old_name = posixpath.basename(norm_remote := posixpath.normpath("/" + raw))
+    cands = [c for c in cands if c != old_name]
+    if len(cands) == 1:
+        new_path = posixpath.join(parent, cands[0])
+        log.info("改名自愈：%s -> %s（按大小 %d 字节唯一匹配）", remote_path, new_path, size)
+        return new_path
+    if len(cands) > 1:
+        log.info("改名重定位：同目录有 %d 个同大小文件，无法唯一确定，放弃", len(cands))
+    return None
+
+
 async def _openlist_stat(token: str, remote_path: str) -> Optional[Dict[str, Any]]:
     """探测远端文件元数据（含 size）。不存在或探测失败返回 None。
 
