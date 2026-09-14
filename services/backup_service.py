@@ -941,14 +941,37 @@ async def delete_session_backup(name: str, origin: str = "local") -> Dict[str, A
         return {"ok": True, "origin": "local", "name": nm, "message": f"已删除本地快照 {nm}"}
 
     if org == "remote":
-        remote_dir, remote_source, _mounts = await _resolve_session_backup_remote_dir_detail(
-            await _openlist_token())
+        # 两次取 token 都要在保护内：OpenList 未登录时 _openlist_token() 会抛
+        # RuntimeError（"尚未登录"），漏在外面会让「未登录」变成 500 而不是可读提示。
+        try:
+            _tok0 = await _openlist_token()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"OpenList 未就绪：{e}"}
+        try:
+            remote_dir, remote_source, _mounts = await _resolve_session_backup_remote_dir_detail(_tok0)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"无法解析云端冷备目录：{e}"}
         if not remote_dir:
             return {"ok": False, "message": remote_source or "无法确定云端冷备目录"}
         try:
             token = await _openlist_token()
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "message": f"OpenList 未就绪：{e}"}
+
+        # 先确认云端确实有这一份。OpenList 的 /api/fs/remove 是幂等的：
+        # 删一个从不存在的文件名同样返回 code=200 "success"（实测确认）。
+        # 不先确认就删，接口会把「本来就没有」报成「已删除」—— 正是本项目
+        # 在别处修过的那类假成功，这里不能重犯。
+        try:
+            lst = await openlist_list_files(remote_dir)
+            if not lst.get("ok"):
+                return {"ok": False, "message": f"无法读取云端目录：{lst.get('message') or ''}"}
+            names = {str(f.get("name") or "") for f in (lst.get("files") or [])}
+            if nm not in names:
+                return {"ok": False, "message": "云端没有这一份快照（可能已删除或已被轮转）"}
+        except Exception as e:  # noqa: BLE001
+            log.warning("确认云端快照存在性失败 %s: %s", nm, e)
+            return {"ok": False, "message": f"无法确认云端快照：{e}"}
 
         async def _rm_once(tok: str):
             return await _openlist_client.post(
