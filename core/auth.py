@@ -269,6 +269,10 @@ async def portal_auth_gate(request: Request, call_next):
             or path.startswith("/openlist/") or path.startswith("/archive/")
             or path.startswith("/api/")
             or path.startswith("/library/local/delete") or path.startswith("/library/cloud/")
-            or path in ("/tasks", "/auth/password", "/submit")):
+            or path in ("/tasks", "/auth/password", "/submit",
+                        # 浏览页的 JSON 接口：客户端用 fetch().json() 消费，401 JSON 才是
+                        # 可解析的契约；给 302 会返回登录页 HTML，调用方解析失败只能报
+                        # 「未知错误」。注意只列精确路径 —— /browse 页面本身仍需 302 跳登录。
+                        "/browse/account-tree", "/browse/pins")):
         return JSONResponse({"ok": False, "message": "未登录"}, status_code=401)
     return RedirectResponse(url="/login", status_code=302)

@@ -19,20 +19,49 @@
 
   {# ---------------- 聊天侧栏（Jinja2 服务端直出，彻底免疫客户端组件切页竞态） ---------------- #}
   <aside class="card browse-side" id="browseSide">
+    <div class="side-tools">
+      <span class="side-title">会话</span>
+      <button type="button" class="btn xs ghost" id="browseManageBtn"
+              onclick="window.__browseOpenManage()"
+              title="从全部会话里挑选要在侧栏显示的（只保留需要的，不再全部罗列）">
+        <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-cog"/></svg>
+        <span id="browseManageLabel">管理会话</span>
+      </button>
+    </div>
+    {% if browse_pins %}
+    <div class="side-hint">
+      侧栏仅显示 <b>{{ tree|map(attribute='chats')|map('length')|sum }}</b> 个已选会话
+      <button type="button" class="link" onclick="window.__browseShowAll()">显示全部</button>
+    </div>
+    {% endif %}
     {% for acc in tree %}
     <div class="acc-group" data-tg="{{ acc.telegramId }}">
       <div class="group-label">{{ acc.name }}</div>
       {% for c in acc.chats %}
-      <button type="button" class="chat-item {% if sel_tg == (acc.telegramId|string) and sel_chat == (c.chatId|string) %}active{% endif %}"
-              data-tg="{{ acc.telegramId }}"
-              data-chat="{{ c.chatId }}"
-              data-title="{{ c.title }}"
-              onclick="window.__browseSelectChat(this)">
-        {% if c.saved %}
-        <svg class="star" viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+      <div class="chat-row">
+        <button type="button" class="chat-item {% if sel_tg == (acc.telegramId|string) and sel_chat == (c.chatId|string) %}active{% endif %}"
+                data-tg="{{ acc.telegramId }}"
+                data-chat="{{ c.chatId }}"
+                data-title="{{ c.title }}"
+                onclick="window.__browseSelectChat(this)">
+          {% if c.saved %}
+          <svg class="star" viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+          {% endif %}
+          <span class="t">{{ c.title }}</span>
+        </button>
+        {% if not c.saved %}
+        <button type="button" class="chat-pin {% if c.pinned %}on{% endif %}"
+                data-tg="{{ acc.telegramId }}"
+                data-chat="{{ c.chatId }}"
+                data-title="{{ c.title }}"
+                data-pinned="{{ '1' if c.pinned else '0' }}"
+                title="{{ '从侧栏移除' if c.pinned else '固定在侧栏显示' }}"
+                aria-label="{{ '从侧栏移除' if c.pinned else '固定在侧栏显示' }} {{ c.title }}"
+                onclick="window.__browseTogglePin(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#ic-pin"/></svg>
+        </button>
         {% endif %}
-        <span class="t">{{ c.title }}</span>
-      </button>
+      </div>
       {% endfor %}
     </div>
     {% endfor %}
@@ -71,6 +100,35 @@
       </div>
     </div>
   </section>
+</div>
+
+{# ---------------- 管理会话弹窗：手动挑选侧栏要显示的会话 ---------------- #}
+<div class="modal-backdrop" id="browseManageBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="管理会话" style="max-width:560px;width:92vw;">
+    <div class="modal-head">
+      <h2 style="font-size:16px;">管理会话</h2>
+      <button type="button" class="icon-btn xs" aria-label="关闭" onclick="window.__browseCloseManage()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <div style="padding:12px 20px 4px;">
+      <p style="font-size:13px;color:var(--text-2);margin:0 0 10px;line-height:1.5;">
+        勾选你想在左侧显示的会话。勾选任意一项后，侧栏只显示已勾选的会话（收藏始终显示），不再把全部会话罗列出来。
+      </p>
+      <input class="input" type="search" id="browseManageSearch" placeholder="筛选会话…" autocomplete="off"
+             oninput="window.__browseManageFilter(this.value)" style="margin-bottom:8px;">
+    </div>
+    <div class="modal-body" id="browseManageList" style="max-height:52vh;overflow-y:auto;padding:0 20px 12px;">
+      <div style="color:var(--text-3);font-size:13px;padding:16px 0;">正在加载会话…</div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button type="button" class="btn sm ghost" onclick="window.__browseShowAll()">显示全部会话</button>
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn sm ghost" onclick="window.__browseCloseManage()">关闭</button>
+        <button type="button" class="btn sm primary" onclick="window.__browseManageApply()">应用并刷新</button>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -136,7 +194,10 @@
       items.forEach(function (item) {
         var t = (item.dataset.title || item.textContent || '').toLowerCase();
         var match = !q || t.indexOf(q) !== -1;
-        item.style.display = match ? '' : 'none';
+        // 搜索可以命中"在完整列表里但被置顶收窄隐藏掉"的会话：把它的行（含置顶
+        // 按钮）一并显示，否则会出现"搜到了却没法操作"。
+        var row = item.closest('.chat-row') || item;
+        row.style.display = match ? '' : 'none';
         if (match) grpVisible++;
       });
       grp.style.display = grpVisible > 0 ? '' : 'none';
@@ -144,6 +205,145 @@
     });
     var emptyEl = document.getElementById('browseSideEmpty');
     if (emptyEl) emptyEl.style.display = totalVisible === 0 ? '' : 'none';
+  };
+
+  /* ---------------- 会话置顶 / 管理会话 ----------------
+     置顶 = 收窄侧栏：只要置顶过任意会话，侧栏只显示置顶项（收藏始终保留），
+     不再把账号里全部会话罗列出来。状态存服务端（跨设备/跨浏览器一致）。 */
+  window.__browsePinPost = function (chat, pinned) {
+    return fetch('/browse/pins', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: JSON.stringify({ chat: String(chat), pinned: !!pinned })
+    }).then(function (r) { return r.json(); });
+  };
+
+  /* 单条会话的「固定在侧栏 / 从侧栏移除」 */
+  window.__browseTogglePin = function (btn) {
+    if (!btn) return;
+    var chat = btn.dataset.chat || '';
+    var pinNow = btn.dataset.pinned !== '1';
+    window.__browsePinPost(chat, pinNow).then(function (d) {
+      if (!d || !d.ok) {
+        if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
+        return;
+      }
+      // 侧栏是服务端渲染的收窄结果，改完必须重载才能看到列表变化
+      window.location.reload();
+    }).catch(function () {
+      if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    });
+  };
+
+  /* 显示全部会话 = 清空置顶收窄 */
+  window.__browseShowAll = function () {
+    var btns = document.querySelectorAll('.browse-side .chat-pin[data-pinned="1"]');
+    var chats = [];
+    btns.forEach(function (b) { chats.push(String(b.dataset.chat || '')); });
+    if (!chats.length) {
+      if (window.__toast) window.__toast('侧栏已是全部会话', 'info');
+      return;
+    }
+    Promise.all(chats.map(function (c) { return window.__browsePinPost(c, false); }))
+      .then(function () { window.location.reload(); })
+      .catch(function () {
+        if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+      });
+  };
+
+  /* ---------------- 管理会话弹窗 ---------------- */
+  window.__BROWSE_MANAGE = { tree: [], pins: {}, q: '' };
+
+  window.__browseOpenManage = function () {
+    var bd = document.getElementById('browseManageBackdrop');
+    if (bd) bd.classList.add('show');
+    var list = document.getElementById('browseManageList');
+    if (list) list.innerHTML = '<div style="color:var(--text-3);font-size:13px;padding:16px 0;">正在加载会话…</div>';
+    fetch('/browse/account-tree', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) throw new Error((d && d.message) || '加载失败');
+        var pins = {};
+        (d.pins || []).forEach(function (c) { pins[String(c)] = true; });
+        window.__BROWSE_MANAGE.tree = d.tree || [];
+        window.__BROWSE_MANAGE.pins = pins;
+        window.__browseRenderManage();
+      })
+      .catch(function (e) {
+        if (list) list.innerHTML = '<div class="alert error" style="margin:12px 0;">加载会话失败：' +
+          (window.__escHtml ? window.__escHtml(String(e.message || e)) : String(e.message || e)) + '</div>';
+      });
+  };
+
+  window.__browseRenderManage = function () {
+    var list = document.getElementById('browseManageList');
+    if (!list) return;
+    var q = (window.__BROWSE_MANAGE.q || '').toLowerCase();
+    var esc = window.__escHtml || function (s) { return String(s); };
+    var html = '';
+    var shown = 0;
+    (window.__BROWSE_MANAGE.tree || []).forEach(function (acc) {
+      var rows = '';
+      (acc.chats || []).forEach(function (c) {
+        var title = String(c.title || '聊天');
+        if (q && title.toLowerCase().indexOf(q) === -1) return;
+        var cid = String(c.chatId);
+        var on = !!window.__BROWSE_MANAGE.pins[cid];
+        shown++;
+        // 收藏是自己的 dialog 且不能取消；置顶按钮同样不提供（收藏恒显示）
+        rows += '<label class="manage-row" data-title="' + esc(title.toLowerCase()) + '">'
+              + '<span class="switch"><input type="checkbox" data-chat="' + esc(cid) + '"'
+              + (on ? ' checked' : '') + (c.saved ? ' disabled' : '') + '>'
+              + '<span class="track"></span></span>'
+              + '<span class="manage-title">' + esc(title)
+              + (c.saved ? ' <span style="color:var(--text-3);font-size:11px;">（始终显示）</span>' : '')
+              + '</span></label>';
+      });
+      if (rows) {
+        html += '<div class="manage-group">' + esc(String(acc.name || 'TG 账号')) + '</div>' + rows;
+      }
+    });
+    if (!shown) {
+      html = '<div style="color:var(--text-3);font-size:13px;padding:16px 0;">没有匹配的会话</div>';
+    }
+    list.innerHTML = html;
+  };
+
+  window.__browseManageFilter = function (v) {
+    window.__BROWSE_MANAGE.q = String(v || '');
+    window.__browseRenderManage();
+  };
+
+  /* 勾选即时生效：变更立即 POST，关闭按钮只负责关弹窗 */
+  document.addEventListener('change', function (evt) {
+    var el = evt.target;
+    if (!el || !el.matches || !el.matches('#browseManageList input[type=checkbox]')) return;
+    var cid = el.dataset.chat || '';
+    var pinned = !!el.checked;
+    window.__browsePinPost(cid, pinned).then(function (d) {
+      if (d && d.ok) {
+        if (pinned) window.__BROWSE_MANAGE.pins[cid] = true;
+        else delete window.__BROWSE_MANAGE.pins[cid];
+      } else {
+        el.checked = !pinned;  // 回滚 UI，避免显示与服务端不一致
+        if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
+      }
+    }).catch(function () {
+      el.checked = !pinned;
+      if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    });
+  });
+
+  window.__browseManageApply = function () {
+    window.location.reload();
+  };
+
+  window.__browseCloseManage = function () {
+    var bd = document.getElementById('browseManageBackdrop');
+    if (bd) bd.classList.remove('show');
   };
 
   /* 监听顶栏自定义事件与数量同步 */

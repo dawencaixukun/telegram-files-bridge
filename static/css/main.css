@@ -1517,6 +1517,100 @@ html.theme-anim *::after {
 .chat-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-side .side-empty { color: var(--text-3); font-size: 13px; padding: var(--space-3) 10px; }
 
+/* ---- 侧栏会话置顶（手动收窄：不再把所有会话罗列出来） ---- */
+.browse-side .side-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 6px;
+}
+.browse-side .side-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.browse-side .side-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  margin-bottom: 6px;
+}
+.browse-side .side-hint b { color: var(--text-1); }
+.browse-side .side-hint .link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--brand, #a78bfa);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.chat-row { position: relative; display: flex; align-items: center; }
+.chat-row .chat-item { flex: 1; min-width: 0; }
+/* 会话行内的固定按钮：默认隐藏，悬停或已固定时显示 */
+.chat-pin {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.chat-pin svg { width: 13px; height: 13px; }
+.chat-row:hover .chat-pin { opacity: 1; }
+.chat-pin:hover { background: var(--hover-bg); color: var(--text-1); }
+.chat-pin.on { opacity: 1; color: var(--brand, #a78bfa); }
+.chat-pin:focus-visible { opacity: 1; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* ---- 管理会话弹窗 ---- */
+.manage-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--text-3);
+  padding: 12px 0 4px;
+}
+.manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.manage-row:hover { background: var(--hover-bg); }
+.manage-row .manage-title {
+  font-size: 13px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.manage-row input:disabled ~ .manage-title { opacity: 0.6; }
+
 .browse-toolbar { flex-wrap: wrap; gap: var(--space-3); }
 .browse-toolbar-title .card-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-tools { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
@@ -2385,4 +2479,52 @@ html.theme-anim *::after {
   border-radius: 4px;
   margin-top: 4px;
   line-height: 1.4;
+}
+
+/* ===========================================================================
+   滚动条：全局细化
+   原先只有 .log-list 与 .arch-crumb 单独处理，其余容器走浏览器默认样式 ——
+   默认滚动条又宽又方、在深浅两色下都很突兀（用户反馈「滑条 UI 很生硬」）。
+   这里统一给出：细轨道 + 圆角滑块 + 透明轨道，悬停加粗加深。
+   同时补上 Firefox：::-webkit-* 在 Gecko 下完全无效（旧代码只写了 webkit，
+   Firefox 用户看到的一直是系统默认样式）。
+   =========================================================================== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar);
+  border-radius: 999px;
+  /* 用等宽透明边框把滑块"收窄"：滑块本体细，但命中区域仍占满 10px，好点 */
+  border: 3px solid transparent;
+  background-clip: content-box;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-hover, var(--text-3));
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-hover, var(--text-2));
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* 局部已有的自定义滚动条（.log-list）保持原样，不覆盖 */
+
+/* 侧栏会话列表 / 管理会话列表：滚动条更含蓄，避免抢占视觉 */
+.browse-side::-webkit-scrollbar,
+#browseManageList::-webkit-scrollbar {
+  width: 8px;
+}
+.browse-side::-webkit-scrollbar-thumb,
+#browseManageList::-webkit-scrollbar-thumb {
+  border-width: 2px;
 }

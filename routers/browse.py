@@ -56,8 +56,37 @@ async def browse_page(request: Request, tg: str = "", chat: str = "", type: str 
         # OpenList 外部访问域名：卡片上的「OpenList」直达按钮要用它拼公网地址
         # （内网 127.0.0.1 在用户浏览器里打不开）。
         "openlist_public_base": str(_ARCHIVE_CONFIG.get("publicBaseUrl") or ""),
+        # 侧栏置顶收窄：模板据此显示「仅显示 N 个已选会话 / 显示全部」提示与置顶按钮态
+        "browse_pins": _browse_pins_all(),
     })
     return templates.TemplateResponse("browse.html", ctx)
+
+
+@router.get("/browse/account-tree", response_class=JSONResponse)
+async def browse_account_tree(tg: str = ""):
+    """返回**完整**会话树（不受置顶收窄影响），供浏览页「管理会话」面板列出候选。"""
+    tree = await _browse_tree()
+    return JSONResponse({"ok": True, "tree": tree, "pins": _browse_pins_all()})
+
+
+@router.post("/browse/pins")
+async def browse_set_pins(request: Request):
+    """设置/取消某个会话的置顶（置顶后侧栏只展示置顶会话）。
+
+    体：{"tg": "<telegramId>", "chat": "<chatId>", "pinned": true|false}
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    chat = str(body.get("chat") or "").strip()
+    if not chat:
+        return JSONResponse({"ok": False, "message": "缺少会话 ID"}, status_code=400)
+    pinned = bool(body.get("pinned"))
+    now_pinned = _browse_pin_apply(chat, pinned)
+    return JSONResponse({"ok": True, "chat": chat, "pinned": now_pinned, "pins": _browse_pins_all()})
 
 
 @router.get("/partials/browse-files", response_class=HTMLResponse)

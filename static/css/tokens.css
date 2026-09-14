@@ -102,6 +102,7 @@
   --hover-bg: rgba(255, 255, 255, 0.07);
   --focus-ring: rgba(139, 92, 246, 0.55);
   --scrollbar: rgba(255, 255, 255, 0.18);
+  --scrollbar-hover: rgba(255, 255, 255, 0.34);
 }
 
 /* ---------------- LIGHT THEME ---------------- */
@@ -139,4 +140,5 @@
   --hover-bg: rgba(40, 40, 90, 0.06);
   --focus-ring: rgba(139, 92, 246, 0.45);
   --scrollbar: rgba(40, 40, 90, 0.22);
+  --scrollbar-hover: rgba(40, 40, 90, 0.40);
 }

@@ -4,10 +4,13 @@ services/browse_service.py — 聊天资源浏览与流式分页去重服务
 ============================================================
 负责账号聊天树构建、频道媒体按类检索、消息级转发副本折叠去重与资源浏览行渲染。
 """
+import json
+import os
 import time
 import asyncio
 from typing import Any, Dict, List, Tuple
 from core.config import _pick, _fmt_size, _fmt_time, _human_name
+from core import config as _config
 from core.state import _archive_index_snapshot
 from core.backend import BACKEND
 from core.logging import log
@@ -33,6 +36,91 @@ _BROWSE_SEEN_TTL = 1800.0
 _BROWSE_SEEN_MAX = 64
 
 CHAT_SOURCE_CACHE: Dict[str, Any] = {"key": None, "value": None}
+
+# ---------------------------------------------------------------------------
+# 侧栏会话置顶（用户手动「只留想要的会话」）
+#
+# 侧栏会话来自账号的 dialog 列表（可能上百个，且绝大多数与归档无关）。用置顶
+# 列表做**过滤收窄**：一旦用户置顶过任意会话，侧栏只展示置顶会话，其余收起。
+# 值为 **chatId 字符串**，与 account-tree 端点返回的 chatId 类型一致，无需关心
+# 是数字 ID 还是 @username。
+# 每个进程各自持有内存集合 + 落盘 JSON；进程外改文件不会即时生效（与
+# .subscriptions.json 等既有状态文件同一取舍）。
+# ---------------------------------------------------------------------------
+_BROWSE_PIN_FILE = ".browse_pins.json"
+_BROWSE_PINS: set = set()
+_BROWSE_PINS_LOADED = False
+
+
+def _browse_pin_path() -> str:
+    # 每次按当前 APP_ROOT_DIR 解析：测试会切 TG_DATA_DIR，不能模块加载时固化。
+    return os.path.join(_config.APP_ROOT_DIR, _BROWSE_PIN_FILE)
+
+
+def _browse_pins_ensure_loaded() -> None:
+    """首次访问时懒加载。
+
+    不在模块导入期加载：core.state 已经把「状态文件统一在状态层加载」定为单点，
+    这里再插一个导入期加载会重新引入多条加载路径；而懒加载对 TG_DATA_DIR 的
+    切换（测试环境）天然正确。
+    """
+    global _BROWSE_PINS_LOADED
+    if not _BROWSE_PINS_LOADED:
+        _BROWSE_PINS_LOADED = True
+        _browse_pins_load()
+
+
+def _browse_pins_load() -> None:
+    """启动/首次访问时从磁盘恢复置顶列表。文件缺失或损坏都不应影响页面。"""
+    global _BROWSE_PINS
+    try:
+        with open(_browse_pin_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw = data.get("pins") if isinstance(data, dict) else data
+        _BROWSE_PINS = {str(x) for x in raw} if isinstance(raw, list) else set()
+        if _BROWSE_PINS:
+            log.info("已恢复侧栏置顶会话: %d 个", len(_BROWSE_PINS))
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("侧栏置顶会话恢复失败: %s", e)
+
+
+def _browse_pins_save() -> None:
+    path = _browse_pin_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = json.dumps({"pins": sorted(_BROWSE_PINS)}, ensure_ascii=False).encode("utf-8")
+        # tmp + os.replace 原子写：直接 O_TRUNC 直写时崩溃会留下被截断的 JSON，
+        # 下次启动整个置顶列表就丢了（与 _archive_config_save 同一处理）。
+        tmp = f"{path}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except Exception as e:  # noqa: BLE001
+        log.warning("侧栏置顶会话持久化失败: %s", e)
+
+
+def _browse_pins_all() -> List[str]:
+    _browse_pins_ensure_loaded()
+    return sorted(_BROWSE_PINS)
+
+
+def _browse_pin_apply(chat_id: Any, pinned: bool) -> bool:
+    """置顶/取消置顶。返回操作后该会话是否处于置顶态。"""
+    _browse_pins_ensure_loaded()
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return False
+    if pinned:
+        _BROWSE_PINS.add(cid)
+    else:
+        _BROWSE_PINS.discard(cid)
+    _browse_pins_save()
+    return cid in _BROWSE_PINS
 
 
 def _browse_seen_key(tg_id: Any, chat_id: Any, type_: str) -> Tuple[str, str, str]:
@@ -118,6 +206,7 @@ async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
 
 
 async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
+    _browse_pins_ensure_loaded()
     tree: List[Dict[str, Any]] = []
     try:
         telegrams = await BACKEND.list_telegrams(force=force)
@@ -126,6 +215,10 @@ async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
         return tree
     if not isinstance(telegrams, list):
         return tree
+    # 置顶收窄：一旦用户置顶过任意会话，侧栏只保留置顶项（收藏始终保留），
+    # 避免把账号里上百个无关会话全罗列出来。
+    pins = _BROWSE_PINS
+    filtering = bool(pins)
     for tg in telegrams:
         tg_id = _pick(tg, "telegramId", "telegram_id", "id")
         if tg_id is None:
@@ -141,14 +234,19 @@ async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
                 cid = _pick(ch, "chatId", "chat_id", "id")
                 if cid is None:
                     continue
-                title = str(_pick(ch, "title", "name", "channel", "chatName", default="聊天"))
                 saved = str(cid) == str(tg_id)
+                pinned = str(cid) in pins
+                if filtering and not pinned and not saved:
+                    continue
+                title = str(_pick(ch, "title", "name", "channel", "chatName", default="聊天"))
                 items.append({
                     "chatId": cid,
                     "title": "收藏 (Saved Messages)" if saved else title,
                     "saved": saved,
+                    "pinned": pinned,
                 })
-        items.sort(key=lambda c: not c["saved"])
+        # 先按置顶，再按收藏（原先只按 saved，置顶项会沉到列表中间）
+        items.sort(key=lambda c: (not c["pinned"], not c["saved"]))
         tree.append({
             "telegramId": tg_id,
             "name": (str(_pick(tg, "name", "username", "phone", default="TG 账号")).strip() or "TG 账号"),
