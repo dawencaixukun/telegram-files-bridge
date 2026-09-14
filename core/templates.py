@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from core.config import (
-    TEMPLATES_DIR, _JAVA_TO_UI, _fmt_size, _fmt_time, _fmt_dur
+    TEMPLATES_DIR, _fmt_size, _fmt_time, _fmt_dur
 )
 
 
@@ -26,14 +26,6 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 templates.env.filters["fmt_size"] = _fmt_size
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_dur"] = _fmt_dur
-
-
-def map_status(java_status: Any) -> str:
-    """Java download_status → 前端 status。无法识别时回退 pending。"""
-    if java_status is None:
-        return "pending"
-    key = str(java_status).strip().lower()
-    return _JAVA_TO_UI.get(key, "pending")
 
 
 def _stages(status: str, rec: Optional[Dict[str, Any]] = None, arch_job: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

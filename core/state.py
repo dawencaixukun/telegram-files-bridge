@@ -40,7 +40,6 @@ _FLOOD_WAIT_TIMER_TASK: Optional[asyncio.Task] = None
 # 2. 缓存与队列
 # ---------------------------------------------------------------------
 _TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
-_BROWSE_SEEN_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
 _WAITING_DISK_TASKS: Dict[str, Dict[str, Any]] = {}
 
@@ -141,8 +140,6 @@ _alert_state: Dict[str, Any] = {
 # ---------------------------------------------------------------------
 _archive_lock = asyncio.Lock()
 _archive_sem = asyncio.Semaphore(2)
-_retrieve_lock = asyncio.Lock()
-_retrieve_sem = asyncio.Semaphore(2)
 _subs_lock = asyncio.Lock()
 _disk_lock = asyncio.Lock()
 _openlist_lock = asyncio.Lock()

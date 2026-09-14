@@ -6,10 +6,9 @@ core/config.py — 系统全局配置常量、环境变量与基础工具函数
 """
 import os
 import re
-import math
 import time
 import posixpath
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------
 # 目录与环境配置
@@ -145,16 +144,6 @@ _LOG_TIME_FMT = "%m-%d %H:%M:%S"
 _LOG_STORE_LEVELS = ("INFO", "WARN", "ERROR")
 
 # ---------------------------------------------------------------------
-# 状态映射枚举
-# ---------------------------------------------------------------------
-_JAVA_TO_UI = {
-    "idle": "pending",
-    "downloading": "download",
-    "paused": "pending",
-    "completed": "downloaded",
-    "error": "failed",
-}
-
 # ---------------------------------------------------------------------
 # 持久化文件与水位参数
 # ---------------------------------------------------------------------
@@ -187,7 +176,6 @@ _NOTIFY_FILE = _NOTIFY_CONFIG_FILE
 _OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 
 _SESSION_BACKUP_STATUS_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_status.json")
-_SESSION_BACKUP_LOCAL_DIR = os.path.join(APP_ROOT_DIR, "session-backups")
 _SESSION_BACKUP_REMOTE_DIR = "/TG-Backups"
 _SESSION_BACKUP_SECRET_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_key")
 _SESSION_BACKUP_KEY_FILE = _SESSION_BACKUP_SECRET_FILE

@@ -21,21 +21,18 @@ Bot 回复系统实时状态，手机上不打开管理台也能掌握全局。
 import re
 import time
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import httpx
 from core.config import _fmt_size, _fmt_time
 from core.state import (
     _NOTIFY_CONFIG, _ARCHIVE_JOBS, _ARCHIVE_CONFIG,
     _WAITING_DISK_TASKS, _FLOOD_WAIT_STATE, _is_flood_wait_active,
-    _DELETED_LOCAL_UIDS,
 )
-from core.backend import BACKEND
 from core.logging import log
 
 # 长轮询间隔与单次超时：Telegram 官方推荐 long-poll timeout ≤ 50s
 _POLL_INTERVAL = 3.0
 _POLL_TIMEOUT = 35.0
-_UPDATE_OFFSET_FILE: Optional[str] = None  # 由 core/config 注入 APP_ROOT_DIR 后惰性初始化
 _update_offset = 0
 
 # 最近一次归档失败快照（/err 用，环形保留 8 条）

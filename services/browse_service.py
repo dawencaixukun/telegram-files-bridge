@@ -8,7 +8,7 @@ import time
 import asyncio
 from typing import Any, Dict, List, Tuple
 from core.config import _pick, _fmt_size, _fmt_time, _human_name
-from core.state import _archive_registry_lookup, _archive_index_snapshot
+from core.state import _archive_index_snapshot
 from core.backend import BACKEND
 from core.logging import log
 from services.openlist_service import _openlist_direct_url
@@ -22,7 +22,6 @@ _BROWSE_TYPES = (
 # 历史变更：「图片」分类按用户要求整体移除（浏览栏不再提供图片入口）。
 # photo 保留在 _BROWSE_TYPE_LABELS 仅为历史数据/类型标注兜底；
 # 直接访问 type=photo 由各调用点回落 document（_BROWSE_TYPES 白名单校验）。
-_BROWSE_FORBIDDEN_TYPES = {"photo"}
 _BROWSE_TYPE_LABELS = {
     "video": "视频", "photo": "图片", "audio": "音频", "document": "文档",
     "file": "文件", "animation": "动图", "url": "链接", "media": "媒体",
