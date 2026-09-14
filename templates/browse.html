@@ -106,7 +106,7 @@
     </div>
     <div style="padding:12px 20px 4px;">
       <p style="font-size:13px;color:var(--text-2);margin:0 0 10px;line-height:1.5;">
-        勾选你想在左侧显示的会话。勾选任意一项后，侧栏只显示已勾选的会话（收藏始终显示），不再把全部会话罗列出来。
+        勾选你想在左侧显示的会话，改动立即生效（免刷新）。勾选任意一项后，侧栏只显示已勾选的会话（收藏始终显示且置顶），其余不再罗列。
       </p>
       <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
         <button type="button" class="btn xs ghost" onclick="window.__browseBulk('filtered', true)">全选（当前筛选）</button>
@@ -124,8 +124,7 @@
     <div class="modal-foot" style="justify-content:space-between;">
       <button type="button" class="btn sm ghost" onclick="window.__browseShowAll()">显示全部会话</button>
       <div class="row" style="gap:8px;">
-        <button type="button" class="btn sm ghost" onclick="window.__browseCloseManage()">关闭</button>
-        <button type="button" class="btn sm primary" onclick="window.__browseManageApply()">应用并刷新</button>
+        <button type="button" class="btn sm primary" onclick="window.__browseCloseManage()">完成</button>
       </div>
     </div>
   </div>
@@ -218,24 +217,38 @@
     }).then(function (r) { return r.json(); });
   };
 
-  /* 显示全部会话 = 清空置顶收窄。
-     不能像旧实现那样从行内图钉按钮读 chatId —— 那按钮已移除。改为直接从
-     服务端拉当前置顶列表，再逐个取消，数据源更可靠（不受页面渲染影响）。 */
+  /* 显示全部会话 = 清空置顶收窄，走 /browse/pins/clear 一次完成，
+     并无感恢复侧栏（不 reload）。弹窗开着时同步重渲染勾选态。 */
   window.__browseShowAll = function () {
-    fetch('/browse/account-tree', { headers: { 'Accept': 'application/json' } })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var pins = (d && d.pins) || [];
-        if (!pins.length) {
-          if (window.__toast) window.__toast('侧栏已是全部会话', 'info');
-          return;
-        }
-        return Promise.all(pins.map(function (c) { return window.__browsePinPost(c, false); }))
-          .then(function () { window.location.reload(); });
-      })
-      .catch(function () {
-        if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    fetch('/browse/pins/clear', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: '{}'
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) {
+        if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
+        return;
+      }
+      if (!d.removed) {
+        if (window.__toast) window.__toast('侧栏已是全部会话', 'info');
+        return;
+      }
+      window.__BROWSE_MANAGE.pins = {};
+      window.__browseRenderManage();
+      window.__browseManageCount();
+      // 无感：把收窄时隐藏的行补回侧栏
+      (window.__BROWSE_MANAGE.tree || []).forEach(function (acc) {
+        (acc.chats || []).forEach(function (c) {
+          window.__browseSyncSidebar(String(c.chatId), false, String(c.title || '聊天'));
+        });
       });
+      if (window.__toast) window.__toast('已恢复显示全部会话', 'success');
+    }).catch(function () {
+      if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    });
   };
 
   /* ---------------- 管理会话弹窗 ---------------- */
@@ -273,6 +286,8 @@
     (window.__BROWSE_MANAGE.tree || []).forEach(function (acc) {
       var rows = '';
       (acc.chats || []).forEach(function (c) {
+        // 收藏是默认展示的硬性标准项：不进管理列表（不可隐藏、无需管理）。
+        if (c.saved) return;
         var title = String(c.title || '聊天');
         if (q && title.toLowerCase().indexOf(q) === -1) return;
         var cid = String(c.chatId);
@@ -293,7 +308,7 @@
       }
     });
     if (!shown) {
-      html = '<div class="manage-empty">没有匹配的会话</div>';
+      html = '<div class="manage-empty">没有匹配的会话（收藏始终显示，不在此列）</div>';
     }
     list.innerHTML = html;
   };
@@ -318,7 +333,7 @@
       return;
     }
     var verb = checked ? '勾选' : '取消勾选';
-    if (!window.confirm('将' + verb + '当前列表里的 ' + chats.length + ' 个会话，确定？')) return;
+    // 直接执行，不再弹确认 —— 用户明确要求全选立即生效，不要打断。
 
     // 一次性批量提交，避免 N 次往返 + N 次落盘（服务端也是单次落盘）。
     fetch('/browse/pins/bulk', {
@@ -336,6 +351,17 @@
           else delete window.__BROWSE_MANAGE.pins[c];
         });
         window.__browseManageCount();
+        // 逐条无感同步侧栏（收窄态下移除未勾选行 / 补齐勾选行）
+        chats.forEach(function (c) {
+          var t = '';
+          var row = document.querySelector('#browseManageList input[data-chat="' + String(c).replace(/"/g, '\\&quot;') + '"]');
+          if (row) {
+            var lab = row.closest('.manage-row');
+            var tt = lab ? lab.querySelector('.manage-title') : null;
+            t = tt ? tt.textContent : '';
+          }
+          window.__browseSyncSidebar(c, !!checked, t);
+        });
         if (window.__toast) window.__toast('已' + verb + ' ' + chats.length + ' 个会话', 'success');
       } else {
         if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
@@ -345,14 +371,14 @@
     });
   };
 
-  /* 一键清空全部已选：服务端单次清空 + 单次落盘 */
+  /* 一键清空全部已选：服务端单次清空 + 单次落盘 + 侧栏无感恢复全量。
+     不弹确认 —— 与批量勾选一致，操作本身完全可逆（再勾回来即可）。 */
   window.__browseClearPins = function () {
     var n = Object.keys(window.__BROWSE_MANAGE.pins || {}).length;
     if (!n) {
       if (window.__toast) window.__toast('当前没有已选会话', 'info');
       return;
     }
-    if (!window.confirm('一键清空全部 ' + n + ' 个已选会话？\n\n侧栏将恢复显示账号下的所有会话。')) return;
     fetch('/browse/pins/clear', {
       method: 'POST',
       headers: {
@@ -362,8 +388,18 @@
       body: '{}'
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d && d.ok) {
+        // 清空前记下勾选过的行，逐条无感恢复（全量态下侧栏显示全部会话）
+        var touched = [];
+        var list = document.getElementById('browseManageList');
+        if (list) {
+          list.querySelectorAll('input[type=checkbox][data-chat]').forEach(function (b) {
+            touched.push({ chat: String(b.dataset.chat || ''), title: '' });
+          });
+        }
         window.__BROWSE_MANAGE.pins = {};
         window.__browseRenderManage();
+        window.__browseManageCount();
+        touched.forEach(function (o) { window.__browseSyncSidebar(o.chat, false, o.title); });
         if (window.__toast) window.__toast('已清空全部已选（' + (d.removed || 0) + ' 个）', 'success');
       } else {
         if (window.__toast) window.__toast('清空失败', 'error', (d && d.message) || '请重试');
@@ -381,17 +417,98 @@
     el.textContent = n ? ('已选 ' + n + ' 个') : '未选择任何会话（侧栏显示全部）';
   };
 
-  /* 勾选即时生效：变更立即 POST，关闭按钮只负责关弹窗 */
+  /* ---------------- 无感隐藏：开关一拨，侧栏立即变 ----------------
+     历史行为是"勾完点应用并刷新"，用户明确要求免刷新。
+     这里在开关成功落盘后直接改侧栏 DOM：
+       勾上 -> 立即插入该会话行（如不存在）
+       取消 -> 立即移除该行（若当前处于收窄态；全量态下原本就显示，仅后续收窄生效）
+     收藏行永不被动（硬性标准：默认展示、置顶、不可隐藏）。 */
+  window.__browseSyncSidebar = function (cid, pinned, title) {
+    var side = document.getElementById('browseSideScroll');
+    if (!side) return;
+    var row = side.querySelector('.chat-item[data-chat="' + String(cid).replace(/"/g, '\\&quot;') + '"]');
+    var filtering = Object.keys(window.__BROWSE_MANAGE.pins || {}).length > 0;
+
+    if (pinned) {
+      if (row) return;  // 本来就在（全量态），无需动
+      // 找到该会话所属账号组（用管理树里的归属关系），没有组就建一个
+      var acc = null, accName = '';
+      (window.__BROWSE_MANAGE.tree || []).forEach(function (a) {
+        (a.chats || []).forEach(function (c) {
+          if (String(c.chatId) === String(cid)) { acc = a; accName = String(a.name || 'TG 账号'); }
+        });
+      });
+      var grp = null;
+      if (acc) {
+        grp = side.querySelector('.acc-group[data-tg="' + String(acc.telegramId).replace(/"/g, '\\&quot;') + '"]');
+      }
+      if (!grp) {
+        grp = document.createElement('div');
+        grp.className = 'acc-group';
+        grp.dataset.tg = acc ? String(acc.telegramId) : '';
+        var lb = document.createElement('div');
+        lb.className = 'group-label';
+        lb.textContent = accName;
+        grp.appendChild(lb);
+        side.insertBefore(grp, side.querySelector('.side-empty'));
+      }
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-item';
+      btn.dataset.tg = acc ? String(acc.telegramId) : '';
+      btn.dataset.chat = String(cid);
+      btn.dataset.title = title || '聊天';
+      btn.setAttribute('onclick', 'window.__browseSelectChat(this)');
+      var span = document.createElement('span');
+      span.className = 't';
+      span.textContent = title || '聊天';
+      btn.appendChild(span);
+      grp.appendChild(btn);
+    } else {
+      // 取消勾选：只有当前处于"收窄态"才从侧栏移除该行；
+      // 全量态下侧栏本来显示全部，删了反而与事实不符。
+      if (filtering && row) {
+        var grp2 = row.closest('.acc-group');
+        row.remove();
+        if (grp2 && !grp2.querySelector('.chat-item')) grp2.remove();
+      }
+    }
+    // 提示条同步（"仅显示 N 个已选会话"）
+    var hint = document.querySelector('#browseSide .side-hint');
+    var n = Object.keys(window.__BROWSE_MANAGE.pins || {}).length;
+    if (filtering && n) {
+      if (!hint) {
+        var tools = document.querySelector('#browseSide .side-tools');
+        hint = document.createElement('div');
+        hint.className = 'side-hint';
+        if (tools) tools.after(hint);
+      }
+      var visible = side.querySelectorAll('.chat-item').length;
+      hint.innerHTML = '侧栏仅显示 <b>' + visible + '</b> 个已选会话 '
+                     + '<button type="button" class="link" onclick="window.__browseShowAll()">显示全部</button>';
+    } else if (hint) {
+      hint.remove();
+    }
+  };
+
+  /* 勾选即时生效：落盘 + 侧栏无感同步（不再需要"应用并刷新"） */
   document.addEventListener('change', function (evt) {
     var el = evt.target;
     if (!el || !el.matches || !el.matches('#browseManageList input[type=checkbox]')) return;
     var cid = el.dataset.chat || '';
     var pinned = !!el.checked;
+    var title = '';
+    var lab = el.closest('.manage-row');
+    if (lab) {
+      var t = lab.querySelector('.manage-title');
+      title = t ? t.textContent : '';
+    }
     window.__browsePinPost(cid, pinned).then(function (d) {
       if (d && d.ok) {
         if (pinned) window.__BROWSE_MANAGE.pins[cid] = true;
         else delete window.__BROWSE_MANAGE.pins[cid];
         window.__browseManageCount();
+        window.__browseSyncSidebar(cid, pinned, title);
       } else {
         el.checked = !pinned;  // 回滚 UI，避免显示与服务端不一致
         if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
@@ -401,10 +518,6 @@
       if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
     });
   });
-
-  window.__browseManageApply = function () {
-    window.location.reload();
-  };
 
   window.__browseCloseManage = function () {
     var bd = document.getElementById('browseManageBackdrop');

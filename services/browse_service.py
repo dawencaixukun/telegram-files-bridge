@@ -297,8 +297,9 @@ async def _browse_tree(force: bool = False, full: bool = False) -> List[Dict[str
                     "saved": saved,
                     "pinned": pinned,
                 })
-        # 先按置顶，再按收藏（原先只按 saved，置顶项会沉到列表中间）
-        items.sort(key=lambda c: (not c["pinned"], not c["saved"]))
+        # 排序：收藏恒第 1（用户要求：收藏是默认展示的硬性标准，必须置顶），
+        # 其余按置顶优先。saved 与 pinned 互斥（saved 即置顶）。
+        items.sort(key=lambda c: (0 if c["saved"] else (1 if c["pinned"] else 2)))
         tree.append({
             "telegramId": tg_id,
             "name": (str(_pick(tg, "name", "username", "phone", default="TG 账号")).strip() or "TG 账号"),
