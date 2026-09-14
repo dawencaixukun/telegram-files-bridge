@@ -18,6 +18,8 @@
 <div class="browse-layout" id="browseLayout">
 
   {# ---------------- 聊天侧栏（Jinja2 服务端直出，彻底免疫客户端组件切页竞态） ---------------- #}
+  {# .browse-side 自身不滚动，改为内部列表滚动：这样「会话 + 管理会话」头部
+     固定在顶端，滚动会话时不会一起滚走（用户反馈：一滚动管理会话就看不见了）。 #}
   <aside class="card browse-side" id="browseSide">
     <div class="side-tools">
       <span class="side-title">会话</span>
@@ -34,6 +36,7 @@
       <button type="button" class="link" onclick="window.__browseShowAll()">显示全部</button>
     </div>
     {% endif %}
+    <div class="side-scroll" id="browseSideScroll">
     {% for acc in tree %}
     <div class="acc-group" data-tg="{{ acc.telegramId }}">
       <div class="group-label">{{ acc.name }}</div>
@@ -55,6 +58,7 @@
     </div>
     {% endfor %}
     <div class="side-empty" id="browseSideEmpty" style="{% if tree and (tree|map(attribute='chats')|map('length')|sum > 0) %}display:none;{% endif %}">没有匹配的聊天</div>
+    </div>{# /side-scroll #}
   </aside>
 
   {# ---------------- 文件列表 ---------------- #}
@@ -104,6 +108,13 @@
       <p style="font-size:13px;color:var(--text-2);margin:0 0 10px;line-height:1.5;">
         勾选你想在左侧显示的会话。勾选任意一项后，侧栏只显示已勾选的会话（收藏始终显示），不再把全部会话罗列出来。
       </p>
+      <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn xs ghost" onclick="window.__browseBulk('filtered', true)">全选（当前筛选）</button>
+        <button type="button" class="btn xs ghost" onclick="window.__browseBulk('filtered', false)">取消全选</button>
+        <button type="button" class="btn xs danger" onclick="window.__browseClearPins()"
+                title="清空全部已选，侧栏立即恢复显示所有会话">一键清空</button>
+        <span class="sub" style="font-size:12px;color:var(--text-3);" id="browseManageCount"></span>
+      </div>
       <input class="input" type="search" id="browseManageSearch" placeholder="筛选会话…" autocomplete="off"
              oninput="window.__browseManageFilter(this.value)" style="margin-bottom:12px;">
     </div>
@@ -244,6 +255,7 @@
         window.__BROWSE_MANAGE.tree = d.tree || [];
         window.__BROWSE_MANAGE.pins = pins;
         window.__browseRenderManage();
+        window.__browseManageCount();
       })
       .catch(function (e) {
         var msg = window.__escHtml ? window.__escHtml(String(e.message || e)) : String(e.message || e);
@@ -291,6 +303,84 @@
     window.__browseRenderManage();
   };
 
+  /* 批量勾选/取消：只作用于**当前筛选可见**的行。
+     全选整个列表在几百个会话时几乎肯定不是用户想要的；
+     "当前筛选"让用户先搜索再批量，安全且可预期。 */
+  window.__browseBulk = function (scope, checked) {
+    if (scope !== 'filtered') scope = 'filtered';
+    var list = document.getElementById('browseManageList');
+    if (!list) return;
+    var boxes = list.querySelectorAll('input[type=checkbox]:not(:disabled)');
+    var chats = [];
+    boxes.forEach(function (b) { chats.push(String(b.dataset.chat || '')); });
+    if (!chats.length) {
+      if (window.__toast) window.__toast('当前没有可选会话', 'info');
+      return;
+    }
+    var verb = checked ? '勾选' : '取消勾选';
+    if (!window.confirm('将' + verb + '当前列表里的 ' + chats.length + ' 个会话，确定？')) return;
+
+    // 一次性批量提交，避免 N 次往返 + N 次落盘（服务端也是单次落盘）。
+    fetch('/browse/pins/bulk', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: JSON.stringify({ chats: chats, pinned: !!checked })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        boxes.forEach(function (b) { b.checked = !!checked; });
+        chats.forEach(function (c) {
+          if (checked) window.__BROWSE_MANAGE.pins[c] = true;
+          else delete window.__BROWSE_MANAGE.pins[c];
+        });
+        window.__browseManageCount();
+        if (window.__toast) window.__toast('已' + verb + ' ' + chats.length + ' 个会话', 'success');
+      } else {
+        if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
+      }
+    }).catch(function () {
+      if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    });
+  };
+
+  /* 一键清空全部已选：服务端单次清空 + 单次落盘 */
+  window.__browseClearPins = function () {
+    var n = Object.keys(window.__BROWSE_MANAGE.pins || {}).length;
+    if (!n) {
+      if (window.__toast) window.__toast('当前没有已选会话', 'info');
+      return;
+    }
+    if (!window.confirm('一键清空全部 ' + n + ' 个已选会话？\n\n侧栏将恢复显示账号下的所有会话。')) return;
+    fetch('/browse/pins/clear', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: '{}'
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        window.__BROWSE_MANAGE.pins = {};
+        window.__browseRenderManage();
+        if (window.__toast) window.__toast('已清空全部已选（' + (d.removed || 0) + ' 个）', 'success');
+      } else {
+        if (window.__toast) window.__toast('清空失败', 'error', (d && d.message) || '请重试');
+      }
+    }).catch(function () {
+      if (window.__toast) window.__toast('清空失败', 'error', '网络异常，请重试');
+    });
+  };
+
+  /* 已选计数：让用户随时知道当前选了几个 */
+  window.__browseManageCount = function () {
+    var el = document.getElementById('browseManageCount');
+    if (!el) return;
+    var n = Object.keys(window.__BROWSE_MANAGE.pins || {}).length;
+    el.textContent = n ? ('已选 ' + n + ' 个') : '未选择任何会话（侧栏显示全部）';
+  };
+
   /* 勾选即时生效：变更立即 POST，关闭按钮只负责关弹窗 */
   document.addEventListener('change', function (evt) {
     var el = evt.target;
@@ -301,6 +391,7 @@
       if (d && d.ok) {
         if (pinned) window.__BROWSE_MANAGE.pins[cid] = true;
         else delete window.__BROWSE_MANAGE.pins[cid];
+        window.__browseManageCount();
       } else {
         el.checked = !pinned;  // 回滚 UI，避免显示与服务端不一致
         if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');

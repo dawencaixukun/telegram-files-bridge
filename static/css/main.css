@@ -1678,6 +1678,68 @@ html.theme-anim *::after {
 .pill-btns .btn .icon { width: 15px; height: 15px; }
 .pill-btns .btn.sm { padding: 6px 11px; font-size: 12.5px; }
 
+/* ---------- 设置页：分组区块与开关行 ----------
+   原先设置项平铺在 g-2 网格里，逻辑相关的项（归档方式 / 目标与命名 / 磁盘保护）
+   混在一起，开关行的文字长短差异也导致对齐参差。这里给出统一的分组标题与
+   开关行结构：开关固定宽、文字独立成列并对齐同一基线。 */
+.set-group + .set-group { margin-top: var(--space-5); }
+.set-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 var(--space-3);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  margin: 0;
+}
+.switch-row .switch { flex: none; margin-top: 1px; }
+.switch-row .switch-label {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+.switch-row .switch-label b { color: var(--text-1); }
+/* 统计条：独立成块，避免像之前那样"浮"在卡片底部与按钮混在一起 */
+.set-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.set-stats .stat { display: inline-flex; align-items: baseline; gap: 5px; }
+.set-stats .stat b { font-size: 14px; }
+.set-stats .stat-label { color: var(--text-3); }
+
+/* ---------- 侧栏：头部固定、仅列表滚动 ----------
+   原先 .browse-side 整体 overflow-y:auto，导致「管理会话」按钮与提示条
+   随会话列表一起滚走（用户反馈：一滚动管理会话就看不见了）。 */
+.browse-side { overflow: hidden; }
+.browse-side .side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
 .browse-toolbar { flex-wrap: wrap; gap: var(--space-3); }
 .browse-toolbar-title .card-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-tools { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }

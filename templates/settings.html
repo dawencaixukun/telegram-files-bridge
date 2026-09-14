@@ -281,124 +281,127 @@
       </span>
     </div>
 
-    <div class="grid g-2">
-      <div class="field">
-        <label>下载完成自动归档</label>
-        <div class="row" style="gap:10px;margin-top:6px;">
-          <label class="row" style="gap:10px;cursor:pointer;">
+    {# 分组一：归档方式（是否自动归档、是否删除本地） #}
+    <div class="set-group">
+      <div class="set-group-title">归档方式</div>
+      <div class="grid g-2">
+        <div class="field" style="margin-bottom:0;">
+          <label class="switch-row">
             <span class="switch"><input type="checkbox" x-model="cfg.autoArchive"><span class="track"></span></span>
-            <span style="font-size:13px;color:var(--text-2);">任务下载完成后，自动排队上传至 OpenList 网盘</span>
+            <span class="switch-label"><b>下载完成自动归档</b><br>任务下载完成后自动排队上传至 OpenList 网盘</span>
           </label>
         </div>
-      </div>
-      <div class="field">
-        <label>归档成功后自动删除本地文件</label>
-        <div class="row" style="gap:10px;margin-top:6px;">
-          <label class="row" style="gap:10px;cursor:pointer;">
+        <div class="field" style="margin-bottom:0;">
+          <label class="switch-row">
             <span class="switch"><input type="checkbox" x-model="cfg.deleteLocal"><span class="track"></span></span>
-            <span style="font-size:13px;color:var(--text-2);">文件成功上传至网盘后自动清理本地磁盘，释放存储空间</span>
+            <span class="switch-label"><b>归档成功后自动删除本地文件</b><br>上传成功后清理本地磁盘，释放存储空间</span>
           </label>
         </div>
       </div>
     </div>
 
-    <div class="grid g-2" style="margin-top:14px;">
-      <div class="field">
-        <label for="cfgDefaultDir">默认归档位置（OpenList 网盘目录）</label>
-        <div class="arch-dir-field" style="position:relative;">
-          <input id="cfgDefaultDir" class="input" type="text" x-model="cfg.defaultDir"
-                 placeholder="输入或点击右侧 ▾ 选择，如 /阿里云盘/tg-archive" autocomplete="off" spellcheck="false">
-          <button type="button" class="arch-dir-arrow" :class="{ 'open': dirOpen }"
-                  aria-label="浏览目录" @click="toggleDir()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
-          </button>
-          <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'block' : 'none' }">
-            <div class="arch-crumb">
-              <template x-for="(seg, idx) in crumbList" :key="idx">
-                <span>
-                  <a href="javascript:void(0)" class="crumb-link" :class="{ 'cur': idx === crumbList.length - 1 }"
-                     @click="loadDir(seg.path)" x-text="seg.label"></a>
-                  <span class="crumb-sep" x-show="idx < crumbList.length - 1">/</span>
-                </span>
-              </template>
-            </div>
-            <div class="arch-dir-list" style="max-height:220px;overflow-y:auto;">
-              <div class="arch-dir-row arch-up-row" x-show="browsePath && browsePath !== '/'"
-                   style="color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;"
-                   @click="goUpDir()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(90deg);"><use href="#ic-chevron"/></svg>
-                <span class="d-name">⮬ 返回上一级</span>
+    {# 分组二：目标位置与命名 #}
+    <div class="set-group">
+      <div class="set-group-title">目标位置与命名</div>
+      <div class="grid g-2">
+        <div class="field" style="margin-bottom:0;">
+          <label for="cfgDefaultDir">默认归档位置（OpenList 网盘目录）</label>
+          <div class="arch-dir-field" style="position:relative;">
+            <input id="cfgDefaultDir" class="input" type="text" x-model="cfg.defaultDir"
+                   placeholder="输入或点击右侧 ▾ 选择，如 /阿里云盘/tg-archive" autocomplete="off" spellcheck="false">
+            <button type="button" class="arch-dir-arrow" :class="{ 'open': dirOpen }"
+                    aria-label="浏览目录" @click="toggleDir()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
+            </button>
+            <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'block' : 'none' }">
+              <div class="arch-crumb">
+                <template x-for="(seg, idx) in crumbList" :key="idx">
+                  <span>
+                    <a href="javascript:void(0)" class="crumb-link" :class="{ 'cur': idx === crumbList.length - 1 }"
+                       @click="loadDir(seg.path)" x-text="seg.label"></a>
+                    <span class="crumb-sep" x-show="idx < crumbList.length - 1">/</span>
+                  </span>
+                </template>
               </div>
-              <template x-for="d in dirs" :key="d.path">
-                <div class="arch-dir-row" @click="loadDir(d.path)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
-                  <span class="d-name" x-text="d.name"></span>
+              <div class="arch-dir-list" style="max-height:220px;overflow-y:auto;">
+                <div class="arch-dir-row arch-up-row" x-show="browsePath && browsePath !== '/'"
+                     style="color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;"
+                     @click="goUpDir()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(90deg);"><use href="#ic-chevron"/></svg>
+                  <span class="d-name">⮬ 返回上一级</span>
                 </div>
-              </template>
-              <div class="empty" x-show="!dirs.length && !loadingDirs" style="padding:12px 0;font-size:12px;">此目录下无子目录</div>
-              <div class="empty" x-show="loadingDirs" style="padding:12px 0;font-size:12px;">加载中…</div>
-            </div>
-            <div class="arch-drop-foot">
-              <span style="flex:1;"></span>
-              <button type="button" class="btn sm primary" @click="pickCurrentDir()">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
-                使用当前目录
-              </button>
+                <template x-for="d in dirs" :key="d.path">
+                  <div class="arch-dir-row" @click="loadDir(d.path)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+                    <span class="d-name" x-text="d.name"></span>
+                  </div>
+                </template>
+                <div class="empty" x-show="!dirs.length && !loadingDirs" style="padding:12px 0;font-size:12px;">此目录下无子目录</div>
+                <div class="empty" x-show="loadingDirs" style="padding:12px 0;font-size:12px;">加载中…</div>
+              </div>
+              <div class="arch-drop-foot">
+                <span style="flex:1;"></span>
+                <button type="button" class="btn sm primary" @click="pickCurrentDir()">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+                  使用当前目录
+                </button>
+              </div>
             </div>
           </div>
+          <div class="hint">未匹配特定「订阅规则」的任务完成下载后归档至此；点 ▾ 浏览各挂载网盘</div>
         </div>
-        <div class="hint">未匹配特定「订阅规则」的任务完成下载后，将自动归档至此目录；点 ▾ 可浏览各挂载网盘选择</div>
-      </div>
-      <div class="field">
-        <label>同名冲突处理</label>
-        <select class="select" x-model="cfg.policy">
-          <option value="overwrite">覆盖（云端存在同名文件则覆盖）</option>
-          <option value="skip">跳过已存在（云端已有同名文件则直接标记完成）</option>
-        </select>
-        <div class="hint">若目标目录中已存在同名文件时的处理策略</div>
+        <div class="field" style="margin-bottom:0;">
+          <label>同名冲突处理</label>
+          <select class="select" x-model="cfg.policy">
+            <option value="overwrite">覆盖（云端存在同名文件则覆盖）</option>
+            <option value="skip">跳过已存在（云端已有同名文件则直接标记完成）</option>
+          </select>
+          <div class="hint">目标目录中已存在同名文件时的处理策略</div>
+        </div>
       </div>
     </div>
 
-    <div class="grid g-2" style="margin-top:14px;align-items:start;">
-      <div class="field">
-        <label>文件名广告清洗（Emby / Jellyfin 友好）</label>
-        <div class="row" style="gap:10px;margin-top:6px;">
-          <label class="row" style="gap:10px;cursor:pointer;">
+    {# 分组三：文件与磁盘保护 #}
+    <div class="set-group">
+      <div class="set-group-title">文件与磁盘保护</div>
+      <div class="grid g-2" style="align-items:start;">
+        <div class="field" style="margin-bottom:0;">
+          <label class="switch-row">
             <span class="switch"><input type="checkbox" x-model="cfg.cleanFilename"><span class="track"></span></span>
-            <span style="font-size:13px;color:var(--text-2);">归档时自动去除文件名中的 @频道、推广群号、方括号广告标签</span>
+            <span class="switch-label"><b>文件名广告清洗</b>（Emby / Jellyfin 友好）<br>归档时自动去除文件名中的 @频道、推广群号、方括号广告标签</span>
           </label>
+          <div class="hint">仅清洗文件名显示，不影响文件内容</div>
         </div>
-        <div class="hint" style="margin-top:2px;">仅清洗文件名显示，不影响文件内容</div>
-      </div>
-      <div class="field" style="margin-bottom:0;">
-        <label>VPS 磁盘高低水位动态熔断保护与应急清理</label>
-        <div class="row" style="gap:10px;margin-top:6px;align-items:center;">
-          <label class="row" style="gap:8px;cursor:pointer;flex-shrink:0;">
+        <div class="field" style="margin-bottom:0;">
+          <label class="switch-row">
             <span class="switch"><input type="checkbox" x-model="cfg.diskAutoClean"><span class="track"></span></span>
-            <span style="font-size:13px;color:var(--text-2);">启用高水位被动应急清理（释放已归档文件）</span>
+            <span class="switch-label"><b>VPS 磁盘高低水位熔断保护</b><br>达到高水位时挂起新下载并应急清理已归档文件，回落到低水位后自动恢复</span>
           </label>
-        </div>
-        <div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
-          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">高水位熔断 &ge;</span>
-          <input class="input num" type="number" min="50" max="98" style="width:74px;height:34px;padding:4px 8px;flex-shrink:0;" x-model.number="cfg.diskHighWatermarkPercent">
-          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">% 拦截</span>
-          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">· 低水位唤醒 &le;</span>
-          <input class="input num" type="number" min="30" max="90" style="width:74px;height:34px;padding:4px 8px;flex-shrink:0;" x-model.number="cfg.diskLowWatermarkPercent">
-          <span style="font-size:13px;color:var(--text-2);flex-shrink:0;">% 恢复</span>
-        </div>
-        <div class="hint" style="margin-top:6px;">
-          当前 VPS 磁盘占用率：<b x-text="(cfg.diskUsagePercent || 0) + '%'"></b> ·
-          可用空间：<b x-text="(cfg.diskFreeGB || 0) + ' GB'"></b>
-          <span x-show="(cfg.diskUsagePercent || 0) >= (cfg.diskHighWatermarkPercent || 85)" style="color:var(--err);font-weight:700;">（⚠️ 已达到高水位熔断线，新下载已安全挂起）</span>
+          <div class="row" style="gap:8px;margin-top:8px;align-items:center;">
+            <span class="hint" style="flex:none;">高水位 &ge;</span>
+            <input class="input num" type="number" min="50" max="98" style="width:72px;height:32px;padding:4px 8px;flex:none;" x-model.number="cfg.diskHighWatermarkPercent">
+            <span class="hint" style="flex:none;">% 熔断</span>
+            <span class="hint" style="flex:none;">·</span>
+            <span class="hint" style="flex:none;">低水位 &le;</span>
+            <input class="input num" type="number" min="30" max="90" style="width:72px;height:32px;padding:4px 8px;flex:none;" x-model.number="cfg.diskLowWatermarkPercent">
+            <span class="hint" style="flex:none;">% 恢复</span>
+          </div>
+          <div class="hint" style="margin-top:6px;">
+            当前占用率 <b x-text="(cfg.diskUsagePercent || 0) + '%'"></b> · 可用
+            <b x-text="(cfg.diskFreeGB || 0) + ' GB'"></b>
+            <span x-show="(cfg.diskUsagePercent || 0) >= (cfg.diskHighWatermarkPercent || 85)" style="color:var(--err);font-weight:700;">（⚠️ 已达熔断线，新下载已挂起）</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="hint" x-show="cfg.stats && (cfg.stats.enqueued > 0 || cfg.stats.done > 0)" style="margin-top:10px;">
-      默认规则统计：累计自动入队 <b x-text="cfg.stats.enqueued || 0"></b> 个文件 ·
-      已归档完成 <b x-text="cfg.stats.done || 0" style="color:var(--ok);"></b> 个
-      <span x-show="cfg.stats.failed > 0"> · 失败 <b x-text="cfg.stats.failed" style="color:var(--err);"></b> 个</span>
+    {# 统计独立成块：原先直接浮在卡片底部、与按钮混在一起，容易被忽略 #}
+    <div class="set-stats" x-show="cfg.stats && (cfg.stats.enqueued > 0 || cfg.stats.done > 0)" style="display:none;">
+      <span class="stat-label">默认规则统计</span>
+      <span class="stat"><span class="stat-label">累计自动入队</span><b x-text="cfg.stats.enqueued || 0"></b></span>
+      <span class="stat"><span class="stat-label">已归档完成</span><b x-text="cfg.stats.done || 0" style="color:var(--ok);"></b></span>
+      <span class="stat" x-show="cfg.stats.failed > 0"><span class="stat-label">失败</span><b x-text="cfg.stats.failed" style="color:var(--err);"></b></span>
     </div>
 
     <div class="row" style="gap:10px;margin-top:16px;">

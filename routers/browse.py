@@ -64,8 +64,12 @@ async def browse_page(request: Request, tg: str = "", chat: str = "", type: str 
 
 @router.get("/browse/account-tree", response_class=JSONResponse)
 async def browse_account_tree(tg: str = ""):
-    """返回**完整**会话树（不受置顶收窄影响），供浏览页「管理会话」面板列出候选。"""
-    tree = await _browse_tree()
+    """返回**完整**会话树（不做置顶收窄），供浏览页「管理会话」面板列出候选。
+
+    必须用 full=True：面板要能列出全部会话让用户勾选。若这里跟着收窄，用户一旦
+    置顶过，面板里就只剩已选项，再也无法把其它会话加回侧栏（只能一路取消）。
+    """
+    tree = await _browse_tree(full=True)
     return JSONResponse({"ok": True, "tree": tree, "pins": _browse_pins_all()})
 
 
@@ -87,6 +91,43 @@ async def browse_set_pins(request: Request):
     pinned = bool(body.get("pinned"))
     now_pinned = _browse_pin_apply(chat, pinned)
     return JSONResponse({"ok": True, "chat": chat, "pinned": now_pinned, "pins": _browse_pins_all()})
+
+
+@router.post("/browse/pins/bulk")
+async def browse_set_pins_bulk(request: Request):
+    """批量设置/取消置顶。体：{"chats": [...], "pinned": true|false}
+
+    一次请求、一次落盘：前端「全选（当前筛选）」会一次提交几十上百个 chatId，
+    逐个走 /browse/pins 会产生同样次数的往返与磁盘写入。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    chats = body.get("chats")
+    if not isinstance(chats, list):
+        return JSONResponse({"ok": False, "message": "chats 必须是数组"}, status_code=400)
+    changed = _browse_pins_apply_many(chats, bool(body.get("pinned")))
+    return JSONResponse({"ok": True, "changed": changed, "pins": _browse_pins_all()})
+
+
+@router.post("/browse/pins/clear")
+async def browse_clear_pins(request: Request):
+    """一键清空全部置顶：侧栏立即恢复显示全部会话。
+
+    能一次做完就一次做完 —— 逐个 POST /browse/pins 取消会有 N 次磁盘写入与 N 次
+    网络往返，且中途失败会留下「关了一半」的状态。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    removed = _browse_pins_clear()
+    return JSONResponse({"ok": True, "removed": removed, "pins": _browse_pins_all()})
 
 
 @router.get("/partials/browse-files", response_class=HTMLResponse)

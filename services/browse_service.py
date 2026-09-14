@@ -109,6 +109,51 @@ def _browse_pins_all() -> List[str]:
     return sorted(_BROWSE_PINS)
 
 
+def _browse_pins_clear() -> int:
+    """一键清空全部置顶。返回被清除的条数。
+
+    单次落盘而不是逐个删除：逐条调用会产生 N 次磁盘写入与 N 个中间状态。
+    """
+    _browse_pins_ensure_loaded()
+    n = len(_BROWSE_PINS)
+    if n:
+        _BROWSE_PINS.clear()
+        _browse_pins_save()
+        log.info("已一键清空侧栏置顶会话: %d 个", n)
+    return n
+
+
+def _browse_pins_apply_many(chat_ids: Any, pinned: bool) -> int:
+    """批量置顶/取消置顶。返回实际变更的条数。
+
+    单次落盘：逐个 _browse_pin_apply 会有 N 次磁盘写入，且中途异常会留下
+    「改了一半」的状态。这里先在内存里改完再写一次。
+    """
+    _browse_pins_ensure_loaded()
+    # 必须显式拒绝字符串：迭代 str 会逐字符产出，把 "notalist" 变成
+    # a/i/l/n/o/s/t 七个"会话 ID"写进置顶列表（实测复现）。路由层虽已校验
+    # 是 list，但服务函数自身也要挡住 —— 它会被其它调用方直接使用。
+    if not isinstance(chat_ids, (list, tuple, set)):
+        return 0
+    ids = [str(c).strip() for c in chat_ids if str(c).strip()]
+    if not ids:
+        return 0
+    changed = 0
+    for cid in ids:
+        if pinned:
+            if cid not in _BROWSE_PINS:
+                _BROWSE_PINS.add(cid)
+                changed += 1
+        else:
+            if cid in _BROWSE_PINS:
+                _BROWSE_PINS.discard(cid)
+                changed += 1
+    if changed:
+        _browse_pins_save()
+        log.info("批量%s侧栏置顶会话: %d 个", "设置" if pinned else "取消", changed)
+    return changed
+
+
 def _browse_pin_apply(chat_id: Any, pinned: bool) -> bool:
     """置顶/取消置顶。返回操作后该会话是否处于置顶态。"""
     _browse_pins_ensure_loaded()
@@ -205,7 +250,14 @@ async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
     return value
 
 
-async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
+async def _browse_tree(force: bool = False, full: bool = False) -> List[Dict[str, Any]]:
+    """构建账号→会话树。
+
+    full=False（默认）：应用置顶收窄 —— 置顶过任意会话时，侧栏只保留置顶项
+    （收藏始终保留），避免把账号里上百个无关会话全罗列出来。
+    full=True：返回**完整**列表，不做收窄。供「管理会话」面板列候选使用 ——
+    面板必须能看到全部会话，否则用户一旦置顶过，就再也无法把其它会话加回侧栏。
+    """
     _browse_pins_ensure_loaded()
     tree: List[Dict[str, Any]] = []
     try:
@@ -216,9 +268,9 @@ async def _browse_tree(force: bool = False) -> List[Dict[str, Any]]:
     if not isinstance(telegrams, list):
         return tree
     # 置顶收窄：一旦用户置顶过任意会话，侧栏只保留置顶项（收藏始终保留），
-    # 避免把账号里上百个无关会话全罗列出来。
+    # 避免把账号里上百个无关会话全罗列出来。full=True 时跳过收窄。
     pins = _BROWSE_PINS
-    filtering = bool(pins)
+    filtering = bool(pins) and not full
     for tg in telegrams:
         tg_id = _pick(tg, "telegramId", "telegram_id", "id")
         if tg_id is None:
