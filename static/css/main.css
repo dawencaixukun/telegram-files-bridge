@@ -1534,30 +1534,6 @@ html.theme-anim *::after {
   font-weight: 700;
   color: var(--text-3);
 }
-.browse-side .side-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--text-3);
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 7px 10px;
-  margin-bottom: 6px;
-}
-.browse-side .side-hint b { color: var(--text-1); }
-.browse-side .side-hint .link {
-  border: none;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--brand, #a78bfa);
-  cursor: pointer;
-  text-decoration: underline;
-}
 /* 会话行内的「固定/图钉」按钮与其 .chat-row 容器已移除：
    它是无文字图标，用户看不出功能；「管理会话」面板已覆盖该能力。 */
 

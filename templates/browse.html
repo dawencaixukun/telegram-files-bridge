@@ -30,12 +30,6 @@
         <span id="browseManageLabel">管理会话</span>
       </button>
     </div>
-    {% if browse_pins %}
-    <div class="side-hint">
-      已隐藏 <b>{{ browse_pins|length }}</b> 个会话
-      <button type="button" class="link" onclick="window.__browseShowAll()">全部显示</button>
-    </div>
-    {% endif %}
     <div class="side-scroll" id="browseSideScroll">
     {% for acc in tree %}
     <div class="acc-group" data-tg="{{ acc.telegramId }}">
@@ -475,23 +469,7 @@
         if (grp2 && !grp2.querySelector('.chat-item')) grp2.remove();
       }
     }
-    // 提示条：仅在有隐藏时显示
-    var hint = document.querySelector('#browseSide .side-hint');
-    var n = Object.keys(window.__BROWSE_MANAGE.hidden || {}).length;
-    if (n) {
-      if (!hint) {
-        var tools = document.querySelector('#browseSide .side-tools');
-        hint = document.createElement('div');
-        hint.className = 'side-hint';
-        if (tools) tools.after(hint);
-      }
-      var visible = side.querySelectorAll('.chat-item').length;
-      hint.innerHTML = '已隐藏 ' + n + ' 个会话 '
-                     + '<button type="button" class="link" onclick="window.__browseShowAll()">全部显示</button>';
-    } else if (hint) {
-      hint.remove();
-    }
-    };
+  };
 
   /* 勾选即时生效：落盘 + 侧栏无感同步（不再需要"应用并刷新"） */
   document.addEventListener('change', function (evt) {
