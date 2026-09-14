@@ -60,6 +60,9 @@ async def api_subscriptions_add(request: Request):
         "dirTemplate": tpl,
         "deleteLocal": bool(body.get("deleteLocal", True)),
         "policy": "overwrite" if str(body.get("policy") or "") == "overwrite" else "skip",
+        # watch：频道监听开关。开启后该会话的新消息会被自动入队下载（默认关，
+        # 避免用户没预期地自动下载一堆东西）。
+        "watch": bool(body.get("watch", False)),
         "created_at": time.time(),
         "stats": {"enqueued": 0, "done": 0, "failed": 0, "last_hit_at": 0.0},
     }
@@ -106,6 +109,8 @@ async def api_subscriptions_update(request: Request):
         rule["policy"] = "overwrite" if str(body.get("policy") or "") == "overwrite" else "skip"
     if "enabled" in body:
         rule["enabled"] = bool(body.get("enabled"))
+    if "watch" in body:
+        rule["watch"] = bool(body.get("watch"))
     _subs_save()
     if rule.get("enabled") and "enabled" in body:
         asyncio.create_task(_auto_archive_sweep())

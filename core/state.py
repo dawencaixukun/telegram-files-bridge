@@ -585,6 +585,52 @@ def _subs_save() -> None:
         log.warning("订阅规则持久化失败: %s", e)
 
 
+# ---------------------------------------------------------------------
+# 5b. 频道监听已见集合（watch）
+#
+# 记录每条监听规则在每个会话里「已经见过的 uniqueId」，用于判断哪些是新文件。
+# 只存 uniqueId 列表（不存文件对象），并有条数上限 —— 否则上百个会话的
+# 历史消息会把状态文件撑爆。
+# ---------------------------------------------------------------------
+_WATCH_SEEN_FILE = os.path.join(APP_ROOT_DIR, ".watch_seen.json")
+_WATCH_SEEN: Dict[str, List[str]] = {}
+_WATCH_SEEN_MAX = 500
+
+
+def _watch_seen_load() -> None:
+    try:
+        with open(_WATCH_SEEN_FILE, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        seen = d.get("seen") if isinstance(d, dict) else None
+        if isinstance(seen, dict):
+            for k, v in seen.items():
+                if isinstance(v, list):
+                    _WATCH_SEEN[str(k)] = [str(x) for x in v][-_WATCH_SEEN_MAX:]
+        if _WATCH_SEEN:
+            log.info("已恢复频道监听已见集合（%d 个会话）", len(_WATCH_SEEN))
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("频道监听状态恢复失败: %s", e)
+
+
+def _watch_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps({"seen": _WATCH_SEEN}, ensure_ascii=False).encode("utf-8")
+        # tmp + os.replace 原子写：轮询每轮都可能写入，直写崩溃会留下截断 JSON，
+        # 整个已见集合就丢了 —— 丢了会导致历史消息被当成新文件重新下载。
+        tmp = f"{_WATCH_SEEN_FILE}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        os.replace(tmp, _WATCH_SEEN_FILE)
+    except Exception as e:  # noqa: BLE001
+        log.warning("频道监听状态持久化失败: %s", e)
+
+
 def _notify_config_load() -> None:
     try:
         if os.path.exists(_NOTIFY_CONFIG_FILE):
@@ -911,5 +957,6 @@ _waiting_disk_load()
 _archive_load()
 _archive_config_load()
 _subs_load()
+_watch_seen_load()
 _notify_config_load()
 _openlist_load()

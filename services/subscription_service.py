@@ -212,6 +212,8 @@ def _sub_public(rule: Dict[str, Any]) -> Dict[str, Any]:
         "dirTemplate": str(rule.get("dirTemplate") or ""),
         "deleteLocal": bool(rule.get("deleteLocal", True)),
         "policy": str(rule.get("policy") or "skip"),
+        # watch：该会话是否开启频道监听（新消息自动入队下载）
+        "watch": bool(rule.get("watch")),
         "createdAt": float(rule.get("created_at") or 0.0),
         "previewDir": preview or "",
         "stats": {

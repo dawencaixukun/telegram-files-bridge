@@ -21,6 +21,7 @@ _SUBMODULES = [
     "services.task_service",
     "services.browse_service",
     "services.bot_command_service",
+    "services.watch_service",
 ]
 
 __all__ = []

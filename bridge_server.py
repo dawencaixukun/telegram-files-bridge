@@ -104,11 +104,12 @@ _relay_task: Optional[asyncio.Task] = None
 _auto_archive_task: Optional[asyncio.Task] = None
 _flood_wait_timer_task: Optional[asyncio.Task] = None
 _bot_command_task: Optional[asyncio.Task] = None
+_watch_task: Optional[asyncio.Task] = None
 
 
 @app.on_event("startup")
 async def _startup():
-    global _relay_task, _auto_archive_task, _bot_command_task
+    global _relay_task, _auto_archive_task, _bot_command_task, _watch_task
     # 状态持久化文件的加载已在 core.state 模块装载时完成（state.py 末尾的
     # _flood_wait_load/_archive_load/_subs_load/... 七连调用），此处不再重复执行。
     # 旧代码在这里又跑了一遍同样的 7 次加载：既产生重复的「已恢复…」日志行，
@@ -126,11 +127,13 @@ async def _startup():
     _auto_archive_task = asyncio.create_task(_auto_archive_loop())
     # TG Bot 命令长轮询（/ck /yd /st /err /help）：未配置 Bot 时内部自动挂起等待
     _bot_command_task = asyncio.create_task(bot_command_loop())
+    # 频道监听：按订阅规则上的 watch 开关盯住会话，新消息自动入队下载
+    _watch_task = asyncio.create_task(watch_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown():
-    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task
+    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task
     if _relay_task is not None and not _relay_task.done():
         _relay_task.cancel()
         try:
@@ -153,6 +156,12 @@ async def _shutdown():
         _bot_command_task.cancel()
         try:
             await _bot_command_task
+        except asyncio.CancelledError:
+            pass
+    if _watch_task is not None and not _watch_task.done():
+        _watch_task.cancel()
+        try:
+            await _watch_task
         except asyncio.CancelledError:
             pass
 

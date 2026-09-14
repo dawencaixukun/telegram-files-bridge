@@ -766,6 +766,12 @@ async def _auto_archive_loop() -> None:
                     log.info("自动归档：本轮新入队 %d 个文件", n)
                 await _disk_guard_check()
                 await _check_and_wake_waiting_disk_tasks()
+                # 过期取回残片清理（失败保留的 .part 供断点续传，但不能永久堆积）
+                try:
+                    from services.retrieve_service import _retrieve_parts_cleanup
+                    _retrieve_parts_cleanup()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("残片清理跳过: %s", e)
             except Exception as e:  # noqa: BLE001
                 log.warning("自动归档扫描异常: %s", e)
             await asyncio.sleep(_AUTO_ARCHIVE_INTERVAL)

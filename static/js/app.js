@@ -1703,6 +1703,19 @@
       },
       load: function () {
         var self = this;
+        // 磁盘水位指标：后端 /api/disk/watermark/status 一直在正确返回占用率与
+        // 可用空间，但前端从未调用它 —— cfg.diskUsagePercent 初值是写死的 0，
+        // 于是页面恒显「占用 0% · 可用 0 GB」，连高水位告警也永不触发。
+        // 这里补上真实的取值。
+        fetch('/api/disk/watermark/status', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) {
+              self.cfg.diskUsagePercent = Number(d.usagePercent) || 0;
+              self.cfg.diskFreeGB = Number(d.freeGB) || 0;
+            }
+          })
+          .catch(function () {});
         fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
           .then(function (r) { return r.json(); })
           .then(function (d) {

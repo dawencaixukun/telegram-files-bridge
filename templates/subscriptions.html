@@ -102,6 +102,7 @@
             <th>目标目录模板</th>
             <th style="width:110px;">冲突策略</th>
             <th style="width:80px;">删本地</th>
+            <th style="width:90px;">监听新消息</th>
             <th style="width:120px;">自动归档</th>
             <th style="width:70px;">启用</th>
             <th style="width:80px;">操作</th>
@@ -137,6 +138,12 @@
               <td>
                 <span class="switch"><input type="checkbox" x-model="r.deleteLocal" @change="saveRule(r)"><span class="track"></span></span>
               </td>
+              <td>
+                {# 频道监听：开启后该会话的新消息会自动入队下载（下载完成再由自动归档转存） #}
+                <span class="switch" :title="r.watch ? '正在监听：新消息自动入队下载' : '未监听：新消息需手动到浏览页勾选'">
+                  <input type="checkbox" x-model="r.watch" @change="saveRule(r)"><span class="track"></span>
+                </span>
+              </td>
               <td class="tnum">
                 <span style="color:var(--ok);" x-text="'成功 ' + r.stats.done"></span>
                 <span style="color:var(--text-3);"> · </span>
@@ -161,7 +168,7 @@ function subsPage() {
   return {
     chatSources: {{ sub_chat_sources | tojson }},
     rules: {{ sub_rules | tojson }},
-    form: { chatKey: '', dirTemplate: '/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}/{resolution}', policy: 'skip', deleteLocal: true, priority: 0 },
+    form: { chatKey: '', dirTemplate: '/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}/{resolution}', policy: 'skip', deleteLocal: true, watch: false, priority: 0 },
     adding: false,
     running: false,
 
@@ -218,7 +225,7 @@ function subsPage() {
       this.adding = true;
       var res = await this.api('/api/subscriptions', {
         telegramId: parts[0], chatId: parts[1],
-        dirTemplate: this.form.dirTemplate, policy: this.form.policy, deleteLocal: this.form.deleteLocal,
+        dirTemplate: this.form.dirTemplate, policy: this.form.policy, deleteLocal: this.form.deleteLocal, watch: !!this.form.watch,
         priority: this.form.priority || 0
       });
       this.adding = false;
@@ -235,7 +242,7 @@ function subsPage() {
       r._saving = true;
       var res = await this.api('/api/subscriptions/update', {
         id: r.id, dirTemplate: r.dirTemplate, policy: r.policy, deleteLocal: r.deleteLocal,
-        priority: r.priority || 0
+        watch: !!r.watch, priority: r.priority || 0
       });
       r._saving = false;
       if (!res.ok) { window.__toast(res.message || '保存失败', 'error'); return; }
