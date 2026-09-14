@@ -2012,7 +2012,58 @@
       savingDir: false,
       busy: false,
       restoring: false,
+      // 删除中的快照（origin:name），用于单行按钮的禁用与文案
+      deleting: '',
+      // 备份目标：false = 传云端（默认，保持原有行为），true = 仅本地。
+      // 记忆在 localStorage，与 openlist_public_base 同一做法。
+      backupLocalOnly: (function () {
+        try { return localStorage.getItem('backup_local_only') === '1'; } catch (e) { return false; }
+      })(),
       loading: true,
+      // 当前「立即备份」的目标，供按钮文案与禁用判断使用
+      backupTarget: function () {
+        return this.backupLocalOnly ? 'local' : 'remote';
+      },
+      saveBackupTarget: function () {
+        try {
+          if (this.backupLocalOnly) localStorage.setItem('backup_local_only', '1');
+          else localStorage.removeItem('backup_local_only');
+        } catch (e) {}
+        if (window.__toast) {
+          window.__toast(this.backupLocalOnly ? '已切换为仅本地备份' : '已切换为备份到云端', 'info',
+            this.backupLocalOnly ? '快照只写入本地目录，不再上传' : '快照将上传到 OpenList 冷备目录');
+        }
+      },
+      // 删除单份快照：仅删这一份，不做轮转
+      del: function (it) {
+        if (!it || this.busy || this.restoring) return;
+        var key = it.origin + ':' + it.name;
+        if (this.deleting) return;
+        var where = it.origin === 'remote' ? '云端（OpenList）' : '本地';
+        if (!window.confirm('确定要删除这一份快照吗？\n\n文件: ' + it.name + '\n位置: ' + where +
+              '\n\n只删除这一份，不影响其它快照。删除后无法恢复。')) return;
+        var self = this;
+        this.deleting = key;
+        fetch('/api/session/backups/delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ name: it.name, origin: it.origin })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          self.deleting = '';
+          if (d && d.ok) {
+            window.__toast('已删除快照', 'success', d.message || it.name);
+          } else {
+            window.__toast('删除失败', 'error', (d && d.message) || '服务端异常');
+          }
+          self.load();
+        }).catch(function () {
+          self.deleting = '';
+          window.__toast('删除失败', 'error', '网络连接超时或异常');
+        });
+      },
       load: function () {
         var self = this;
         fetch('/api/session/backup/status', { headers: { 'Accept': 'application/json' } })
@@ -2127,30 +2178,6 @@
           window.__toast('保存失败', 'error', '网络连接超时或异常');
         });
       },
-      triggerLocalBackup: function () {
-        if (this.busy || this.restoring) return;
-        var self = this;
-        this.busy = true;
-        fetch('/api/session/backup', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
-          },
-          body: JSON.stringify({ localOnly: true })
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          self.busy = false;
-          if (d && d.ok) {
-            window.__toast('本地备份完成', 'success', d.message || '已生成加密快照');
-          } else {
-            window.__toast('本地备份失败', 'error', (d && d.message) || '服务端异常');
-          }
-          self.load();
-        }).catch(function () {
-          self.busy = false;
-          window.__toast('本地备份请求失败', 'error', '网络连接超时或异常');
-        });
-      },
       triggerBackup: function () {
         if (this.busy || this.restoring) return;
         var self = this;
@@ -2161,11 +2188,12 @@
             'Content-Type': 'application/json',
             'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
           },
-          body: '{}'
+          // 目标由按钮行内的开关决定（localOnly=true 时完全不联网上传）
+          body: JSON.stringify({ localOnly: !!self.backupLocalOnly })
         }).then(function (r) { return r.json(); }).then(function (d) {
           self.busy = false;
           if (d && d.ok) {
-            window.__toast('备份完成', 'success', d.message || '已生成加密快照');
+            window.__toast(self.backupLocalOnly ? '本地备份完成' : '备份完成', 'success', d.message || '已生成加密快照');
           } else {
             window.__toast('备份失败', 'error', (d && d.message) || '服务端异常');
           }

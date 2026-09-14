@@ -891,6 +891,91 @@ async def list_session_backups() -> Dict[str, Any]:
     }
 
 
+def _backup_name_ok(name: str) -> bool:
+    """严格校验快照文件名。
+
+    该名字直接拼进本地路径 / 传给 OpenList 删除接口，必须限定为**单一段**文件名：
+    过 _BACKUP_NAME_RE 且不含任何路径分隔符或 .. —— 否则 name 里塞 "../" 就能删到
+    备份目录之外的文件。
+    """
+    n = str(name or "").strip()
+    if not n or n in (".", ".."):
+        return False
+    if "/" in n or "\\" in n or "\x00" in n:
+        return False
+    try:
+        if os.path.basename(n) != n:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(_BACKUP_NAME_RE.match(n))
+
+
+async def delete_session_backup(name: str, origin: str = "local") -> Dict[str, Any]:
+    """手动删除单个会话快照。
+
+    origin='local'  -> 删除本地快照文件
+    origin='remote' -> 删除 OpenList 云端快照（先解析当前生效的冷备目录）
+
+    只删用户点的那一份，绝不顺带做轮转/清理 —— 轮转由 _rotate_local_backups
+    与上传后的云端轮转各自负责，混在一起会让「我只要删一份」变成删一批。
+    """
+    nm = str(name or "").strip()
+    if not _backup_name_ok(nm):
+        return {"ok": False, "message": "快照文件名无效"}
+
+    org = str(origin or "local").strip().lower()
+
+    if org == "local":
+        local_dir = session_backup_local_dir()
+        full = os.path.join(local_dir, nm)
+        if not os.path.isfile(full):
+            return {"ok": False, "message": "本地快照不存在（可能已被删除或轮转）"}
+        try:
+            size = os.path.getsize(full)
+            os.remove(full)
+        except OSError as e:
+            log.warning("删除本地快照失败 %s: %s", nm, e)
+            return {"ok": False, "message": f"删除失败：{e}"}
+        log.info("已手动删除本地会话快照: %s (%d 字节)", nm, size)
+        return {"ok": True, "origin": "local", "name": nm, "message": f"已删除本地快照 {nm}"}
+
+    if org == "remote":
+        remote_dir, remote_source, _mounts = await _resolve_session_backup_remote_dir_detail(
+            await _openlist_token())
+        if not remote_dir:
+            return {"ok": False, "message": remote_source or "无法确定云端冷备目录"}
+        try:
+            token = await _openlist_token()
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"OpenList 未就绪：{e}"}
+
+        async def _rm_once(tok: str):
+            return await _openlist_client.post(
+                "/api/fs/remove",
+                json={"dir": remote_dir, "names": [nm]},
+                headers={"Authorization": tok}
+            )
+
+        try:
+            resp = await _rm_once(token)
+            code, _data, msg = _openlist_env(resp)
+            if resp.status_code == 401 or code in (401, 403):
+                token = await _openlist_relogin()
+                resp = await _rm_once(token)
+                code, _data, msg = _openlist_env(resp)
+            low = (msg or "").lower()
+            if code != 200 and "not found" not in low and "no such file" not in low:
+                return {"ok": False, "message": f"云端删除失败：{msg or f'OpenList 业务码 {code}'}"}
+        except Exception as e:  # noqa: BLE001
+            log.warning("删除云端快照失败 %s: %s", nm, e)
+            return {"ok": False, "message": f"云端删除失败：{e}"}
+        log.info("已手动删除云端会话快照: %s/%s", remote_dir, nm)
+        return {"ok": True, "origin": "remote", "name": nm,
+                "message": f"已删除云端快照 {nm}"}
+
+    return {"ok": False, "message": "origin 只能是 local 或 remote"}
+
 
 async def _get_session_backup_status() -> Dict[str, Any]:
     """读取并判定冷备健康指示灯、最近备份与最近还原情况。

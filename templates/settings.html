@@ -227,22 +227,23 @@
               <span x-show="it.origin === 'remote' && it.alsoLocal"> · 本地也有</span>
             </div>
           </div>
-          <button class="btn ghost sm" style="flex-shrink:0;" :disabled="busy || restoring"
+          <button class="btn ghost sm" style="flex-shrink:0;" :disabled="busy || restoring || deleting === (it.origin + ':' + it.name)"
                   @click="restore(it)" x-text="'还原此份'"></button>
+          <button class="btn sm danger" style="flex-shrink:0;" :disabled="busy || restoring || deleting === (it.origin + ':' + it.name)"
+                  @click="del(it)" title="删除这一份快照（仅删这份，不做轮转）">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-trash"/></svg>
+            <span x-text="deleting === (it.origin + ':' + it.name) ? '删除中…' : '删除'"></span>
+          </button>
         </div>
       </template>
     </div>
 
-    <div class="row" style="gap:10px;margin-top:16px;">
-      <button class="btn primary" style="min-width:140px;height:38px;padding:9px 18px;display:inline-flex;align-items:center;justify-content:center;" :disabled="busy || restoring || needsConfig" @click="triggerBackup()">
+    <div class="row" style="gap:10px;margin-top:16px;flex-wrap:wrap;align-items:center;">
+      <button class="btn primary" style="min-width:140px;height:38px;padding:9px 18px;display:inline-flex;align-items:center;justify-content:center;"
+              :disabled="busy || restoring || (needsConfig && backupTarget() !== 'local')" @click="triggerBackup()">
         <span x-show="busy" class="spinner"></span>
         <svg x-show="!busy" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-upload"/></svg>
-        <span x-text="busy ? '正在生成快照并上传…' : '立即备份并上传'">立即备份并上传</span>
-      </button>
-      <button class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="busy || restoring" @click="triggerLocalBackup()"
-              title="只生成本地加密快照，不联网上传（适合未配置网盘或想落自备磁盘）">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg>
-        <span>仅本地备份</span>
+        <span x-text="busy ? (backupTarget() === 'local' ? '正在生成快照…' : '正在生成快照并上传…') : '立即备份'">立即备份</span>
       </button>
       <button class="btn ghost" style="height:38px;padding:9px 18px;" :disabled="busy || restoring" @click="load()" title="刷新状态">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
@@ -251,6 +252,19 @@
       <span class="sub" style="font-size:12px;color:var(--text-3);display:inline-flex;align-items:center;gap:6px;" x-show="restoring">
         <span class="spinner"></span> 正在还原（会短暂停写下载后端）…
       </span>
+    </div>
+
+    {# 备份目标开关：一个开关决定「立即备份」是传云端还是只落本地。
+       放在按钮行内，勾选状态记忆在 localStorage（复用 openlist_public_base 的既有做法）。 #}
+    <div class="row" style="gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap;
+         padding:10px 12px;border:1px solid var(--glass-border);border-radius:10px;background:var(--glass-bg);">
+      <label class="row" style="gap:10px;align-items:center;cursor:pointer;user-select:none;">
+        <span class="switch"><input type="checkbox" x-model="backupLocalOnly" @change="saveBackupTarget()"><span class="track"></span></span>
+        <span style="font-size:13px;color:var(--text-2);"
+              x-text="backupLocalOnly ? '仅备份到本地（不上传云端）' : '备份到云端（OpenList）'"></span>
+      </label>
+      <span class="sub" style="font-size:12px;color:var(--text-3);"
+            x-text="backupLocalOnly ? '快照只写入本地目录，不联网' : (remoteDir ? '将上传到 ' + remoteDir : '云端目录未就绪')"></span>
     </div>
   </div>
 

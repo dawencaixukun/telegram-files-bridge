@@ -640,6 +640,37 @@ async def api_session_backups(request: Request):
         return JSONResponse({"ok": False, "items": [], "message": f"获取快照列表失败: {e}"}, status_code=500)
 
 
+@router.post("/api/session/backups/delete")
+async def api_session_backup_delete(request: Request):
+    """手动删除单个会话快照。
+
+    体：{"name": "tg-session-20260914-033006.tar.gz.enc", "origin": "local"|"remote"}
+    只删指定的那一份，不做轮转 —— 轮转是另一个职责。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    name = str(body.get("name") or "").strip()
+    origin = str(body.get("origin") or "local").strip().lower()
+    if not name:
+        return JSONResponse({"ok": False, "message": "缺少快照文件名 name"}, status_code=400)
+    if origin not in ("local", "remote"):
+        return JSONResponse({"ok": False, "message": "origin 只能是 local 或 remote"}, status_code=400)
+    try:
+        res = await delete_session_backup(name, origin)
+    except Exception as e:  # noqa: BLE001
+        log.error("删除会话快照失败: %s", e)
+        return JSONResponse({"ok": False, "message": f"删除失败: {e}"}, status_code=500)
+    if not res.get("ok"):
+        # 名字非法/不存在/云端拒绝都属于"请求有问题"，不必 500 —— 500 会让前端
+        # 只看到「服务端异常」，而这里服务端是好的。
+        return JSONResponse(res, status_code=400)
+    return JSONResponse(res)
+
+
 @router.post("/api/session/backup/dir")
 async def api_session_backup_dir(request: Request):
     """单独设置「云端备份目录」，不触碰其它归档配置。
