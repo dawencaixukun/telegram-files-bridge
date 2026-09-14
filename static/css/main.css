@@ -427,6 +427,10 @@ body.drawer-open .scrim {
   box-shadow: none;
 }
 .btn.sm { padding: 6px 12px; font-size: 13px; }
+/* .btn.xs：account/logs/library/base 等多模板在用，但从未定义过 ——
+   这些按钮一直只有 .btn 基础样式（偏大），在此补上正式的 xs 档。 */
+.btn.xs { padding: 4px 9px; font-size: 12px; }
+.btn.xs .icon { width: 13px; height: 13px; }
 .btn .icon { width: 18px; height: 18px; }
 
 .icon {
@@ -1549,12 +1553,18 @@ html.theme-anim *::after {
 .browse-side .side-tools {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   padding: 2px 4px 8px;
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 6px;
 }
+.browse-side .side-tools .btn.xs,
+.browse-side .side-tools .icon-btn.xs { flex: none; }
+/* 面板头部初始渲染即完整可见：曾经“开面板时管理按钮不显示、点别处才出现”，
+   根因是 .btn.xs 无定义导致按钮尺寸计算不稳定，加上头部 space-between 在
+   弹层初次布局时的挤压。改为 flex 起点排布 + 显式尺寸 + 允许换行兜底。 */
+.browse-side .side-tools { flex-wrap: wrap; justify-content: flex-start; }
+.browse-side .side-tools [style*="flex:1"] { flex: 1 1 0 !important; min-width: 8px; }
 .browse-side .side-title {
   font-size: 11px;
   text-transform: uppercase;
