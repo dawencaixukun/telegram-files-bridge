@@ -244,7 +244,11 @@ async def _openlist_put_once(token: str, job: Dict[str, Any]) -> None:
 
 
 def _openlist_direct_url(remote_path: str) -> str:
-    """生成 OpenList 文件下载直链（浏览器访问即触发下载，非管理页定位）。"""
+    """生成在 OpenList Web 界面中定位到该文件的 URL（与“浏览下载”页一致）。
+
+    注意：这里保留**文件完整路径**。实测“浏览下载”页的 OpenList 按钮正是用它
+    并成功定位到文件所在位置，故两页保持同一语义，不再另造“父目录”版本。
+    """
     if not remote_path or remote_path == "—":
         return ""
     base = (_ARCHIVE_CONFIG.get("publicBaseUrl") or _OPENLIST.get("baseUrl") or OPENLIST_URL).rstrip("/")
@@ -254,33 +258,6 @@ def _openlist_direct_url(remote_path: str) -> str:
         return ""
     clean_path = quote(norm, safe="/")
     return f"{base}/{clean_path}"
-
-
-def _openlist_locate_url(remote_path: str) -> str:
-    """生成 OpenList **管理页里定位到该文件所在文件夹** 的 URL（指向父目录）。
-
-    为什么不能直接指到文件：OpenList 前端把 URL 路径当作目录去列，对文件路径
-    调 /api/fs/list 会返回 500 `failed get objs: not a folder`，前端渲染失败
-    即回落根目录 —— 用户看到的就是「点 OpenList 只打开网盘首页，没定位到文件」。
-    实测（v4.2.6，VPS 真实数据）：
-        fs/list('/onedrive/yello/xxx.mp4') -> code=500 "failed get objs: not a folder"
-        fs/list('/onedrive/yello')         -> code=200 正常列出条目
-    因此定位 URL 必须指向 **父目录**。
-
-    注：曾尝试附 `?target=<文件名>` 以高亮目标条目，但核对 v4.2.6 前端两个
-    bundle 后确认不存在该机制（searchParams 仅用于分页），故不加无效果参数。
-    """
-    if not remote_path or remote_path == "—":
-        return ""
-    base = (_ARCHIVE_CONFIG.get("publicBaseUrl") or _OPENLIST.get("baseUrl") or OPENLIST_URL).rstrip("/")
-    raw = str(remote_path or "").strip().replace("\\", "/")
-    norm = posixpath.normpath("/" + raw).lstrip("/")
-    if not norm or norm.startswith("..") or norm == ".":
-        return ""
-    parent = posixpath.dirname(norm)
-    if not parent:
-        return f"{base}/"
-    return f"{base}/{quote(parent, safe='/')}"
 
 
 async def openlist_dirs(path: str = "/") -> Dict[str, Any]:

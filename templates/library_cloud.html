@@ -88,34 +88,9 @@ window.cloudLibrary = function cloudLibrary() {
       await this.saveDomain();
     },
 
-    getOpenListUrl: function (locateUrl, cloudPath, fallbackUrl) {
-      var base = this.formatBase(this.openlistBase);
-      if (!base) {
-        // 没有可用域名时退回服务端算好的定位 URL
-        return locateUrl || fallbackUrl || '';
-      }
-      if (!cloudPath || cloudPath === '—') return base;
-      // OpenList 前端把 URL 路径当目录去列：对文件路径调 fs/list 会返回
-      // 500「not a folder」，前端渲染失败即回落根目录（症状：点了只开网盘首页）。
-      // 因此定位链接必须指向文件所在的【父目录】。
-      var parts = String(cloudPath).replace(/^\/+/, '').split('/').filter(Boolean);
-      parts.pop();  // 去掉文件名，只保留目录
-      if (!parts.length) return base + '/';
-      return base + '/' + parts.map(encodeURIComponent).join('/');
-    },
-
-    handleOpenListClick: function (cloudPath, fallbackUrl, evt) {
-      var targetUrl = this.getOpenListUrl(cloudPath, fallbackUrl);
-      if (!this.openlistBase && (!targetUrl || targetUrl.indexOf('127.0.0.1') !== -1 || targetUrl.indexOf('localhost') !== -1)) {
-        if (evt) evt.preventDefault();
-        this.openDomainModal();
-        if (window.__toast) {
-          window.__toast('检测到云端 OpenList 为内网地址，请先设置外部访问域名/公网IP', 'info');
-        }
-        return false;
-      }
-      return true;
-    },
+    /* 注意：openlistBase / openDomainModal / domainInput / saveDomain / showDomainModal
+       仍保留，供顶栏「配置 OpenList 域名」弹窗使用。
+       OpenList 按钮本身不再用 Alpine 绑定（见下方 window.__openCloudInOpenList）。 */
 
     matches: function (el) {
       if (!el || !el.getAttribute) return true;
@@ -514,20 +489,25 @@ window.cloudLibrary = function cloudLibrary() {
             <div class="cloud-path" title="{{ f.cloud_path }}">{{ f.cloud_path }}</div>
             <div class="t-foot cloud-actions-cell">
               <!-- 1. 在 OpenList 中打开直达链接 -->
-              {% if f.locate_url or f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
-              <!-- 用 data-* 传递 + Alpine 读取，避免把 Jinja 值插进属性里的 JS 字符串
-                   （Jinja 的 HTML 转义在 Alpine 表达式解析前会被解码，单引号可逃逸出字符串）
+              {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
+              <!-- 必须用【静态】属性 + 原生 href，不能用 Alpine 的 :href 绑定。
 
-                   注意优先用 locate_url：OpenList 前端把 URL 路径当目录去列，指向
-                   文件本身会触发 fs/list 500「not a folder」并回落首页（症状：点了
-                   只打开网盘首页、没定位到文件）。locate_url 已指向文件所在父目录。 -->
-              <a :href="getOpenListUrl($el.dataset.locate, $el.dataset.path, $el.dataset.url)"
-                 :data-locate="'{{ f.locate_url }}'"
-                 :data-path="'{{ f.cloud_path }}'"
-                 :data-url="'{{ f.openlist_url }}'"
-                 target="_blank" rel="noopener noreferrer"
-                 @click="handleOpenListClick($el.dataset.locate or $el.dataset.path, $el.dataset.url, $event)"
-                 class="btn sm ghost" title="在 OpenList 中定位到此文件所在文件夹" aria-label="在 OpenList 中打开 {{ f.filename }}">
+                   实测（jsdom + 真实 alpinejs 3.14.1）：
+                     :href="getOpenListUrl($el.dataset.path, ...)" + :data-path="'...'"
+                       => Alpine 初始化时 :data-path 自身尚未写入元素，:href 求值拿到的
+                          $el.dataset.path 是空串，函数走 return base 分支
+                          -> 打开网盘根目录（用户症状：点 OpenList 只开网盘首页）。
+                     静态 data-* 属性（服务端渲染）=> 求值正确。
+
+                   “浏览下载”页一直正常，正因为它用的是静态 data-* + onclick。 -->
+              <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
+                 data-cloud-path="{{ f.cloud_path }}"
+                 data-openlist-url="{{ f.openlist_url }}"
+                 data-filename="{{ f.filename }}"
+                 title="在 OpenList 中定位到该文件"
+                 aria-label="在 OpenList 中打开 {{ f.filename }}"
+                 onclick="return window.__openCloudInOpenList(this, event)"
+                 class="btn sm ghost">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
                 OpenList
               </a>
@@ -660,8 +640,71 @@ window.cloudLibrary = function cloudLibrary() {
 {% endblock %}
 
 {% block js %}
-{# retrieve 轮询的启动已由 app.js 的启动守卫统一负责（app.js:2994 判断
-   [data-retrieve-btn]/[data-ret-pill] 后调用 __retrievePollStart），
-   这里曾经再跑一遍同样判断，导致 __retrievePollTick 每次进页面多打一个
-   /library/cloud/retrieve/status。删掉重复启动块。 #}
+{# OpenList 直达：与「浏览下载」页同一套实现（静态 data-* + 全局函数）。
+
+   为什么不用 Alpine 的 :href/:data-* 绑定：实测（jsdom + 真实 alpinejs 3.14.1）
+   Alpine 初始化时，:data-locate 尚未写入元素，:href 求值拿到的 $el.dataset.locate
+   是空串 -> 打开网盘根目录（用户症状：点 OpenList 只开网盘首页、不定位到文件）。
+   「浏览下载」页一直正常，正因为它用的是静态 data-* + onclick。 #}
+<script>
+(function () {
+  window.__CLOUD_OPENLIST_BASE = window.__CLOUD_OPENLIST_BASE ||
+    (localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '');
+
+  window.__cloudFormatBase = function (raw) {
+    var s = String(raw || '').trim();
+    if (!s) return '';
+    if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+    return s.replace(/\/+$/, '');
+  };
+
+  /* 用 cloudPath 拼 OpenList 文件定位 URL；无公网域名时退回服务端算好的地址。 */
+  window.__cloudOpenListUrl = function (cloudPath, fallbackUrl) {
+    var base = window.__cloudFormatBase(window.__CLOUD_OPENLIST_BASE);
+    if (!base) return fallbackUrl || '';
+    var p = String(cloudPath || '').trim();
+    if (!p || p === '—') return base;
+    var clean = p.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+    return base + '/' + clean;
+  };
+
+  /* 返回 false 表示已接管（阻止默认跳转）；返回 true 让浏览器走原生 href。
+     原生 href 已是服务端算好的正确地址，所以只有两种情况需要接管：
+       1) 用户自定义了公网域名，需按该域名重拼（服务端不知道 localStorage 里的值）
+       2) 未配置域名且地址是内网 -> 拦下并引导去配置，而不是打开死链 */
+  window.__openCloudInOpenList = function (btn, evt) {
+    if (!btn) return true;
+    var cloudPath = btn.dataset.cloudPath || '';
+    var fallback = btn.dataset.openlistUrl || '';
+    var configured = window.__cloudFormatBase(window.__CLOUD_OPENLIST_BASE);
+
+    if (configured) {
+      var target = window.__cloudOpenListUrl(cloudPath, fallback);
+      if (target) {
+        if (evt) evt.preventDefault();
+        window.open(target, '_blank', 'noopener');
+        return false;
+      }
+      return true;
+    }
+
+    // 未配置公网域名：若服务端给的也是内网地址，拦下并引导配置
+    var href = btn.getAttribute('href') || '';
+    var isInternal = !href || /(^https?:\/\/)?(127\.0\.0\.1|localhost|0\.0\.0\.0)/i.test(href);
+    if (isInternal) {
+      if (evt) evt.preventDefault();
+      if (window.__toast) {
+        window.__toast('无法打开 OpenList', 'info',
+          '当前是内网地址，请先设置 OpenList 外部访问域名/公网 IP');
+      }
+      var root = document.querySelector('.cloud-library');
+      if (root && window.Alpine && window.Alpine.$data) {
+        try { window.Alpine.$data(root).openDomainModal(); } catch (e) {}
+      }
+      return false;
+    }
+    return true;
+  };
+})();
+</script>
 {% endblock %}
