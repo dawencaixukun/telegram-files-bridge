@@ -1558,58 +1558,125 @@ html.theme-anim *::after {
   cursor: pointer;
   text-decoration: underline;
 }
-.chat-row { position: relative; display: flex; align-items: center; }
-.chat-row .chat-item { flex: 1; min-width: 0; }
-/* 会话行内的固定按钮：默认隐藏，悬停或已固定时显示 */
-.chat-pin {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 2px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
-.chat-pin svg { width: 13px; height: 13px; }
-.chat-row:hover .chat-pin { opacity: 1; }
-.chat-pin:hover { background: var(--hover-bg); color: var(--text-1); }
-.chat-pin.on { opacity: 1; color: var(--brand, #a78bfa); }
-.chat-pin:focus-visible { opacity: 1; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+/* 会话行内的「固定/图钉」按钮与其 .chat-row 容器已移除：
+   它是无文字图标，用户看不出功能；「管理会话」面板已覆盖该能力。 */
 
-/* ---- 管理会话弹窗 ---- */
+/* ---- 管理会话弹窗 ----
+   排版原则：一行一会话、结构固定（标题占满剩余宽度、开关固定右侧），
+   开关位置在任何行都不漂移；分组标题 + 行分隔线给出层次。 */
+.manage-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 0 20px 12px;
+  /* 滚动区上下边界：给出"可以滚动"的视觉暗示 */
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
 .manage-group {
+  position: sticky;          /* 长列表滚动时分组标题不丢失 */
+  top: 0;
+  z-index: 1;
+  background: var(--glass-bg-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 700;
   color: var(--text-3);
-  padding: 12px 0 4px;
+  padding: 10px 8px 6px;
 }
 .manage-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 8px;
+  gap: 12px;
+  /* 固定行高：避免长/短标题导致行高跳动 */
+  min-height: 40px;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  /* 行分隔：用 inset 阴影而不是 border，避免首行多出一条线 */
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
 }
+.manage-row:last-child { box-shadow: none; }
 .manage-row:hover { background: var(--hover-bg); }
 .manage-row .manage-title {
+  /* 标题占满剩余宽度：开关因此恒在右侧同一竖线上 */
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 开关固定右侧，不被标题挤压 */
+.manage-row .switch { order: 2; flex: none; }
+.manage-row .manage-title { order: 1; }
+.manage-row.is-saved .manage-title { color: var(--text-2); }
+.manage-tag {
+  flex: none;
+  order: 3;
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
 .manage-row input:disabled ~ .manage-title { opacity: 0.6; }
+.manage-empty {
+  color: var(--text-3);
+  font-size: 13px;
+  padding: 18px 8px;
+  text-align: center;
+}
+
+/* ---- 云端归档卡片：OpenList + 取回 合并为紧贴的胶囊按钮组 ----
+   两段共用同一圆角外形：左段只圆左端、右段只圆右端，中间一条细分隔线，
+   视觉上是一个整体胶囊而不是两个各自成形的按钮。 */
+.pill-btns {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  border-radius: var(--radius-pill);
+  overflow: hidden;                       /* 裁掉子元素直角，形成胶囊端头 */
+}
+.pill-btns .btn {
+  /* 覆盖 .btn 的默认外形：不设圆角、去掉浮动阴影与位移动画，
+     否则每段各自成胶囊会看成两个按钮。 */
+  border-radius: 0;
+  margin: 0;
+  box-shadow: none;
+  transform: none;
+}
+.pill-btns .btn:hover,
+.pill-btns .btn:active {
+  transform: none;
+  box-shadow: none;
+}
+/* 左段：OpenList（描边风格） */
+.pill-btns .pill-seg-l {
+  border-top-left-radius: var(--radius-pill);
+  border-bottom-left-radius: var(--radius-pill);
+  border-right: none;                     /* 与右段共用一条边，避免双线 */
+}
+/* 右段：取回（主色渐变） */
+.pill-btns .pill-seg-r {
+  border-top-right-radius: var(--radius-pill);
+  border-bottom-right-radius: var(--radius-pill);
+  border-left: 1px solid var(--border-subtle);   /* 段间细分隔 */
+}
+/* 右段为渐变主色时，分隔线用半透明白更协调 */
+.pill-btns .pill-seg-r.primary { border-left-color: rgba(255, 255, 255, 0.28); }
+/* 右段在"取回失败"等状态下会被 JS 换成 danger：同一位置也要有分隔线 */
+.pill-btns .pill-seg-r.danger { border-left-color: rgba(248, 113, 113, 0.45); }
+.pill-btns .btn + .btn { margin-left: 0; }
+/* 段内文字不换行，避免窄卡片下被压成竖排 */
+.pill-btns .btn { white-space: nowrap; }
+.pill-btns .btn .icon { width: 15px; height: 15px; }
+.pill-btns .btn.sm { padding: 6px 11px; font-size: 12.5px; }
 
 .browse-toolbar { flex-wrap: wrap; gap: var(--space-3); }
 .browse-toolbar-title .card-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

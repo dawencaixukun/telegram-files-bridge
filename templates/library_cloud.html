@@ -488,10 +488,11 @@ window.cloudLibrary = function cloudLibrary() {
             </div>
             <div class="cloud-path" title="{{ f.cloud_path }}">{{ f.cloud_path }}</div>
             <div class="t-foot cloud-actions-cell">
-              <!-- 1. 在 OpenList 中打开直达链接 -->
               {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
-              <!-- 必须用【静态】属性 + 原生 href，不能用 Alpine 的 :href 绑定。
+              <!-- OpenList + 取回 合并为一个紧贴的胶囊按钮组（.pill-btns）：
+                   左段只圆左端、右段只圆右端，中间一条细分隔线，整体是一个胶囊。
 
+                   必须用【静态】属性 + 原生 href，不能用 Alpine 的 :href 绑定。
                    实测（jsdom + 真实 alpinejs 3.14.1）：
                      :href="getOpenListUrl($el.dataset.path, ...)" + :data-path="'...'"
                        => Alpine 初始化时 :data-path 自身尚未写入元素，:href 求值拿到的
@@ -500,35 +501,47 @@ window.cloudLibrary = function cloudLibrary() {
                      静态 data-* 属性（服务端渲染）=> 求值正确。
 
                    “浏览下载”页一直正常，正因为它用的是静态 data-* + onclick。 -->
-              <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
-                 data-cloud-path="{{ f.cloud_path }}"
-                 data-openlist-url="{{ f.openlist_url }}"
-                 data-filename="{{ f.filename }}"
-                 title="在 OpenList 中定位到该文件"
-                 aria-label="在 OpenList 中打开 {{ f.filename }}"
-                 onclick="return window.__openCloudInOpenList(this, event)"
-                 class="btn sm ghost">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
-                OpenList
-              </a>
+              <span class="pill-btns">
+                <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
+                   data-cloud-path="{{ f.cloud_path }}"
+                   data-openlist-url="{{ f.openlist_url }}"
+                   data-filename="{{ f.filename }}"
+                   title="在 OpenList 中定位到该文件"
+                   aria-label="在 OpenList 中打开 {{ f.filename }}"
+                   onclick="return window.__openCloudInOpenList(this, event)"
+                   class="btn sm ghost pill-seg-l">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+                  OpenList
+                </a>
+                <button type="button" class="btn sm primary pill-seg-r"
+                        data-retrieve-btn
+                        data-cloud-path="{{ f.cloud_path }}"
+                        data-job-id="{{ f.id }}"
+                        data-filename="{{ f.filename }}"
+                        {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法取回"{% else %}title="将该文件从云端下载取回到本地磁盘"{% endif %}
+                        onclick="window.__retrieveCloudFile(this)">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+                  <span class="ret-text">取回</span>
+                </button>
+              </span>
               {% else %}
-              <button type="button" class="btn sm ghost" disabled title="该文件暂无可用云端直达路径">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
-                OpenList
-              </button>
+              <span class="pill-btns">
+                <button type="button" class="btn sm ghost pill-seg-l" disabled title="该文件暂无可用云端直达路径">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+                  OpenList
+                </button>
+                <button type="button" class="btn sm primary pill-seg-r"
+                        data-retrieve-btn
+                        data-cloud-path="{{ f.cloud_path }}"
+                        data-job-id="{{ f.id }}"
+                        data-filename="{{ f.filename }}"
+                        {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法取回"{% else %}title="将该文件从云端下载取回到本地磁盘"{% endif %}
+                        onclick="window.__retrieveCloudFile(this)">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+                  <span class="ret-text">取回</span>
+                </button>
+              </span>
               {% endif %}
-
-              <!-- 2. 取回：从云端拉取下载回本地 -->
-              <button type="button" class="btn sm primary"
-                      data-retrieve-btn
-                      data-cloud-path="{{ f.cloud_path }}"
-                      data-job-id="{{ f.id }}"
-                      data-filename="{{ f.filename }}"
-                      {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法取回"{% else %}title="将该文件从云端下载取回到本地磁盘"{% endif %}
-                      onclick="window.__retrieveCloudFile(this)">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
-                <span class="ret-text">取回</span>
-              </button>
 
               <!-- 3. 云端删除 -->
               <button type="button" class="icon-btn xs danger"
