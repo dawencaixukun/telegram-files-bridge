@@ -344,7 +344,10 @@ body.drawer-open .scrim {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 30;
+  /* 必须高于内容区的 .card（backdrop-filter 使其成为独立层叠上下文，
+     DOM 顺序又在顶栏之后 —— 历史缺陷：顶栏里的下拉菜单展开后，
+     顶部一行被下方卡片盖掉半个字）。 */
+  z-index: 80;
   height: var(--topbar-h);
   display: flex;
   align-items: center;
@@ -1480,7 +1483,7 @@ html.theme-anim *::after {
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-med) var(--ease);
-  z-index: 60;
+  z-index: 84;   /* 盖过顶栏(80)，低于模态(90+) */
 }
 .side-scrim.show { opacity: 1; pointer-events: auto !important; }
 .browse-side {
@@ -1496,7 +1499,7 @@ html.theme-anim *::after {
   width: min(320px, 86vw);
   max-height: none;
   overflow: hidden;                 /* 滚动只在 .side-scroll 内 */
-  z-index: 70;
+  z-index: 85;   /* 盖过顶栏(80)：面板滑出时压在其上，低于模态(90+) */
   transform: translateX(24px);
   opacity: 0;
   pointer-events: none;
