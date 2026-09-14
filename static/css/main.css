@@ -2021,8 +2021,9 @@ html.theme-anim *::after {
 
 .arch-dropdown {
   position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 60;
-  background: var(--glass-bg-strong);
-  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  /* 几乎实底：该面板压在密集设置文字上，半透明会双重曝光（用户反馈看不清） */
+  background: var(--surface-popover, rgba(15, 18, 30, 0.97));
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-card);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
