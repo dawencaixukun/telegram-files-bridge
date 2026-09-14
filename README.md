@@ -27,15 +27,6 @@ telegram-files-bridge 是一个面向 Telegram 媒体收藏者的自托管归档
 - 任务队列、本地库存、云端归档、日志中心（SSE 实时推送）、账号健康一页全览
 - 玻璃拟态深/浅双主题，零构建链（纯 HTML/CSS/JS + htmx + Alpine.js）
 
-## 部署
-
-```bash
-pip install -r requirements.txt
-uvicorn bridge_server:app --host 0.0.0.0 --port 8000
-```
-
-浏览器打开 `http://127.0.0.1:8000/`，首次访问完成初始化（管理员账号 + Telegram 登录）。
-
 ## 环境要求
 
 - 可直连 Telegram API 的网络环境
