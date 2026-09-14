@@ -1466,21 +1466,46 @@ html.theme-anim *::after {
 /* ====================================================================
    浏览下载（/browse）：聊天侧栏 + 文件表格
    ==================================================================== */
+/* 会话面板改为顶栏「切换会话」按钮唤起的弹层（原为左侧 280px 竖列） */
 .browse-layout {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
+.side-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-med) var(--ease);
+  z-index: 60;
+}
+.side-scrim.show { opacity: 1; pointer-events: auto !important; }
 .browse-side {
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: calc(100vh - 200px);
-  overflow-y: auto;
-  position: sticky;
+  /* 弹层：固定右上，宽度 300px，高度近满屏 */
+  position: fixed;
   top: var(--space-4);
+  right: var(--space-4);
+  bottom: var(--space-4);
+  width: min(320px, 86vw);
+  max-height: none;
+  overflow: hidden;                 /* 滚动只在 .side-scroll 内 */
+  z-index: 70;
+  transform: translateX(24px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--dur-med) var(--ease), opacity var(--dur-med) var(--ease);
+}
+.browse-side.open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto !important;
 }
 .browse-side .acc-group { display: flex; flex-direction: column; gap: 2px; }
 .browse-side .group-label {
@@ -1707,7 +1732,6 @@ html.theme-anim *::after {
 /* ---------- 侧栏：头部固定、仅列表滚动 ----------
    原先 .browse-side 整体 overflow-y:auto，导致「管理会话」按钮与提示条
    随会话列表一起滚走（用户反馈：一滚动管理会话就看不见了）。 */
-.browse-side { overflow: hidden; }
 .browse-side .side-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -1772,8 +1796,7 @@ html.theme-anim *::after {
   font-weight: 500;
 }
 @media (max-width: 960px) {
-  .browse-layout { grid-template-columns: 1fr; }
-  .browse-side { position: static; max-height: 280px; }
+  .browse-side { right: 4vw; top: 4vh; bottom: 4vh; width: min(320px, 92vw); }
 }
 
 /* ---- 顶栏聊天搜索（仅 /browse 的 ctx_chip 渲染） ---- */

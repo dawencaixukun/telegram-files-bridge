@@ -5,24 +5,31 @@
 {% block page_title %}浏览下载{% endblock %}
 {% block ctx_chip %}
 {# 聊天搜索直接放顶栏（仅本页出现）：输入实时过滤左侧会话列表 #}
-<div class="topbar-search" role="search">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#ic-search"/></svg>
-  <input class="input" type="search" placeholder="搜索聊天…" aria-label="搜索聊天"
-         id="browseSearchInput"
-         oninput="window.__browseFilterChats(this.value)">
-</div>
+<button type="button" class="btn sm ghost" id="browseSwitchChatBtn"
+        onclick="window.__browseToggleSidePanel()"
+        title="切换会话：打开会话列表面板（可搜索、可管理）">
+  <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+  切换会话
+</button>
 <span class="ctx-chip">浏览下载 · <span class="tnum" id="browseTopCount">{{ browse_count }}</span> 个文件</span>
 {% endblock %}
 
 {% block content %}
 <div class="browse-layout" id="browseLayout">
 
-  {# ---------------- 聊天侧栏（Jinja2 服务端直出，彻底免疫客户端组件切页竞态） ---------------- #}
-  {# .browse-side 自身不滚动，改为内部列表滚动：这样「会话 + 管理会话」头部
-     固定在顶端，滚动会话时不会一起滚走（用户反馈：一滚动管理会话就看不见了）。 #}
+  {# ---------------- 会话面板（原左侧竖列，改为顶栏「切换会话」弹层） ----------------
+     用户要求把左列让给文件网格。Jinja2 服务端直出保留（免疫切页竞态）；
+     .browse-side 加 .open 类显示，点按钮开、点遮罩/Esc 关。
+     .browse-side 内部不滚动，列表在 .side-scroll 里滚（头部恒定可见）。 #}
+  <div class="side-scrim" id="browseSideScrim" onclick="window.__browseToggleSidePanel()"></div>
   <aside class="card browse-side" id="browseSide">
     <div class="side-tools">
       <span class="side-title">会话</span>
+      <span style="flex:1;"></span>
+      <button type="button" class="icon-btn xs" aria-label="关闭会话面板"
+              onclick="window.__browseToggleSidePanel()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
       <button type="button" class="btn xs ghost" id="browseManageBtn"
               onclick="window.__browseOpenManage()"
               title="从全部会话里挑选要在侧栏显示的（只保留需要的，不再全部罗列）">
@@ -154,6 +161,7 @@
     });
     var titleEl = document.getElementById('browseCurTitle');
     if (titleEl) titleEl.textContent = title;
+    window.__browseToggleSidePanel(true);   // 弹层形态：选中即收起
     window.__browseReload();
   };
 
@@ -508,6 +516,19 @@
     var bd = document.getElementById('browseManageBackdrop');
     if (bd) bd.classList.remove('show');
   };
+
+  /* ---------------- 会话面板开关（顶栏「切换会话」按钮） ---------------- */
+  window.__browseToggleSidePanel = function (forceClose) {
+    var side = document.getElementById('browseSide');
+    var scrim = document.getElementById('browseSideScrim');
+    if (!side) return;
+    var open = !side.classList.contains('open') && forceClose !== true;
+    side.classList.toggle('open', open);
+    if (scrim) scrim.classList.toggle('show', open);
+  };
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') window.__browseToggleSidePanel(true);
+  });
 
   /* 监听顶栏自定义事件与数量同步 */
   window.addEventListener('browse-q', function (evt) {
