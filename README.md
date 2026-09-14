@@ -1,72 +1,50 @@
-# TG 视频下载与归档管理系统 — 前端预览
+# telegram-files-bridge
 
-> 📖 **安装教程请看 [install.md](install.md)**
+把 Telegram 频道/群组里的视频媒体**自动下载、归档到自己的网盘**的自托管工具。提供一个网页控制台：提交视频链接或频道订阅，后台自动下载并转存到 OpenList 网盘（OneDrive、Google Drive 等），浏览器里随时浏览、取回、观看。
 
-纯 HTML/CSS/Jinja2 服务端渲染的玻璃拟态（Glassmorphism）管理台前端。
-**本阶段仅做 UI 外壳**：完整模板 + 模拟数据 + 全部视觉与交互，不含任何真实业务逻辑。
+## 这是做什么的
 
-## 目录结构
+- **提交下载**：粘贴 Telegram 消息链接（或频道 + 消息 ID）即可入队，支持批量；自动解析媒体大小/时长/清晰度
+- **自动归档**：下载完成后按你设定的目录规则自动上传到 OpenList 网盘（默认 `/onedrive/yello`），支持同名覆盖/跳过/重命名策略
+- **浏览取回**：网页上直接浏览频道历史媒体，点选下载；支持**断点续传**（中断后从已传字节继续）
+- **云端浏览**：已归档文件在网页里网格展示，一键跳转 OpenList 定位原文件
 
-```
-webapi/
-├── preview_server.py            # 最小预览服务器（FastAPI，~100 行核心渲染）
-├── requirements.txt             # fastapi / uvicorn / jinja2 锁版
-├── static/
-│   ├── css/
-│   │   ├── tokens.css           # design tokens（深/浅两套主题，CSS 变量切换）
-│   │   └── main.css             # 布局 / 玻璃卡片 / 组件 / 响应式
-│   └── js/
-│       └── app.js               # 主题 / toast / 抽屉 / 提交模态 / SSE 胶水
-└── templates/
-    ├── base.html                # 根布局：侧边栏 + 顶栏 + 图标 sprite
-    ├── login.html               # /login 和 /init 共用（variant）
-    ├── dashboard.html           # /  KPI + 趋势图 + 最近任务 + 告警
-    ├── tasks.html               # /tasks 任务队列
-    ├── task_detail.html         # /tasks/{id} 详情
-    ├── library_local.html       # /library/local 本地在存（网格/表格切换）
-    ├── library_cloud.html       # /library/cloud 云端归档（只读）
-    ├── submit.html              # /submit 提交下载（实时校验）
-    ├── tg_login.html            # /tg-login 三步登录向导
-    ├── settings.html            # /settings 设置
-    ├── logs.html                # /logs 日志中心（SSE 流）
-    ├── account.html             # /account 账号健康（ApexCharts）
-    └── partials/
-        ├── _macros.html         # Jinja 宏（状态胶囊等）
-        ├── _tasks_table.html    # 任务表格（htmx 局部刷新目标）
-        └── _submit_modal.html   # 全局提交下载模态框
-```
+## 关键功能
 
-## 路由表（9+1）
+**下载与传输**
+- 多任务并发队列，实时进度、限速、失败重试与自动隔离
+- 频道监听：订阅规则开启后新消息**实时入库**，无需手动翻历史
+- 断点续传：大文件取回中断后继续，不从头来
+- FloodWait 预防与自动冷却恢复，账号状态页可视化健康度
 
-| 路由 | 页面 |
-|------|------|
-| `/` | Dashboard |
-| `/login` | 登录 |
-| `/init` | 首启初始化 |
-| `/tasks` | 任务队列 |
-| `/tasks/{id}` | 任务详情 |
-| `/library/local` | 本地在存 |
-| `/library/cloud` | 云端归档 |
-| `/submit` | 提交下载 |
-| `/tg-login` | TG 登录向导 |
-| `/settings` | 设置 |
-| `/logs` | 日志中心 |
-| `/account` | 账号健康 |
+**归档与管理**
+- 归档目录模板化（按频道/日期组合命名），文件名广告自动清洗（Emby/Jellyfin 友好）
+- OpenList 改名自愈：网盘里改了文件名，归档链接自动重新定位
+- 磁盘高低水位熔断：占用达高水位自动暂停下载并清理，回落低水位恢复
+- 会话备份与恢复：本地快照 + 一键上传云端，快照可手动管理
 
-## 启动（两条命令）
+**浏览台（Web UI）**
+- 玻璃拟态深/浅双主题，响应式布局，零构建链（纯 HTML/CSS/JS + htmx + Alpine.js）
+- 会话侧栏自由管理：隐藏/显示即时生效，收藏置顶不可隐藏
+- 任务队列、本地库存、云端归档、日志中心（SSE 实时推送）、账号健康一页全览
+
+## 技术栈
+
+Python 3.11 · FastAPI · Telethon（MTProto 直连） · Jinja2 服务端渲染 · htmx + Alpine.js · SSE 实时推送 · SQLite
+
+## 部署
 
 ```bash
 pip install -r requirements.txt
-uvicorn preview_server:app --host 127.0.0.1 --port 8000
+uvicorn bridge_server:app --host 0.0.0.0 --port 8000
 ```
 
-浏览器打开 http://127.0.0.1:8000/
+浏览器打开 `http://127.0.0.1:8000/`，首次访问完成初始化（管理员账号 + Telegram 登录）。
 
-## 特点
+> 📖 安装教程详见 [install.md](install.md)
 
-- **零构建链**：无 npm / Vite / Webpack / Tailwind，所有文件原样运行
-- **纯 CSS 渐变背景**：多层 radial-gradient 叠加，无远程图片
-- **图标**：内联 SVG（lucide 风格 sprite），无图标字体
-- **交互**：htmx（CDN）局部刷新 + Alpine.js（CDN）下拉/模态/向导；Chart.js、ApexCharts（CDN）仅 Dashboard/account 使用
-- **SSE**：`/sse/logs`、`/sse/tasks` 推送模拟事件，断线自动静默降级
-- **主题**：深色默认，浅色切换存 localStorage，CSS 变量整体切换无 FOUC
+## 环境要求
+
+- 可直连 Telegram API 的网络环境
+- 一个 OpenList 实例（用于网盘转存）
+- Telegram API ID / Hash（[my.telegram.org](https://my.telegram.org) 免费申请）
