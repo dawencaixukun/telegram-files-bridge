@@ -20,6 +20,7 @@ services/watch_service.py — 频道消息监听，实时入库（Watch Service�
 """
 import asyncio
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -222,6 +223,113 @@ async def _watch_tick() -> int:
             fresh.reverse()
             n = await _enqueue_new(rule, fresh)
             total += n
+
+    total += await _watch_text_links(rules)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 文本链接监听：收藏里"复制链接发过来"的消息（纯文本）不会进文件库，这里
+# 用 TDLib SearchChatMessages 直接搜会话消息，提取 t.me 链接并解析入队。
+# ---------------------------------------------------------------------------
+
+# 文本消息里的 t.me 链接（公开频道/私密频道/话题消息均覆盖，宽松提取后走严格解析）
+_LINK_IN_TEXT = re.compile(
+    r"https?://t(?:elegram)?\.(?:me|dog)/[A-Za-z0-9_/+\-]+",
+    re.IGNORECASE)
+
+
+def _extract_links(text: str) -> List[str]:
+    out: List[str] = []
+    for m in _LINK_IN_TEXT.finditer(text or ""):
+        u = m.group(0).rstrip("/_")
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def _link_msg_key(telegram_id: Any, chat_id: Any, message_id: Any) -> str:
+    """文本链接消息的已见键：与媒体 uid 空间隔离（加前缀），避免互撞。"""
+    return f"link-{telegram_id}-{chat_id}-{message_id}"
+
+
+async def _search_text_messages(tg: Any, ch: Any, limit: int = 30) -> List[Dict[str, Any]]:
+    """TDLib SearchChatMessages：搜该会话最近的文本消息（不过滤类型、无关键词 →
+    TdLib 要求 query 非空时才全量检索；空 query 配 sender/filter 亦可，这里
+    用 query='t.me' 直接命中含链接的消息，省掉逐条拉文本的开销）。"""
+    from core.backend import telegram_api_call
+    res = await telegram_api_call("SearchChatMessages", {
+        "chatId": int(ch),
+        "query": "t.me",
+        "offsetMessageId": 0,
+        "limit": limit,
+    }, timeout=25.0)
+    if not isinstance(res, dict):
+        return []
+    msgs = res.get("messages") or res.get("totalMessages") and [] or []
+    if not isinstance(msgs, list):
+        return []
+    return [m for m in msgs if isinstance(m, dict)]
+
+
+async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
+    """对每条监听规则搜文本链接消息：新出现的 → resolve_link 解析入队。
+
+    已见键带 link- 前缀与媒体 uid 隔离；基线规则与媒体监听一致（首次只记录）。
+    """
+    total = 0
+    for rule in rules:
+        tg = rule.get("telegramId")
+        ch = rule.get("chatId")
+        key = _seen_key(rule.get("id"), ch)
+        seen = _seen_of(key)
+        try:
+            msgs = await _search_text_messages(tg, ch)
+        except Exception as e:  # noqa: BLE001
+            log.warning("监听文本消息失败（chat=%s）: %s", ch, e)
+            continue
+        if not msgs:
+            continue
+
+        fresh_links: List[str] = []
+        newly: Set[str] = set()
+        for m in msgs:
+            mid = m.get("id") or m.get("messageId")
+            if mid is None:
+                continue
+            mkey = _link_msg_key(tg, ch, mid)
+            if mkey in seen:
+                continue
+            newly.add(mkey)
+            # 消息文本：TDLib MessageText.text.text；转发消息可能嵌套
+            content = m.get("content") or {}
+            text_obj = content.get("text") or {}
+            text = str(text_obj.get("text") or "")
+            if not text:
+                # 引用/标题等其它文本载体也扫一眼（低成本）
+                caption = content.get("caption") or {}
+                text = str(caption.get("text") or "")
+            if seen:  # 基线轮不入队
+                fresh_links.extend(_extract_links(text))
+
+        if newly:
+            _seen_put(key, newly)
+            _watch_save()
+
+        if not fresh_links:
+            continue
+
+        # 链接解析 + 入队（复用任务服务的两跳解析，含去重与熔断语义）
+        try:
+            from services.task_service import _resolve_links_to_files
+            n, err = await _resolve_links_to_files(fresh_links)
+            if err:
+                log.warning("监听链接解析失败（chat=%s）: %s", ch, err)
+            total += n
+            if n:
+                log.info("监听自动解析 %d 条文本链接（chat=%s）", n, ch)
+        except Exception as e:  # noqa: BLE001
+            log.warning("监听链接入队异常（chat=%s）: %s", ch, e)
     return total
 
 

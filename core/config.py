@@ -110,6 +110,8 @@ TG_API_METHOD_WHITELIST = {
     "getAuthorizationState",
     "GetRemoteFile",
     "GetMessage",
+    # 频道/收藏监听：搜索会话消息（转发即下载的文本链接轮询用）
+    "SearchChatMessages",
     "DownloadFile",
     "SendMessage",
 }

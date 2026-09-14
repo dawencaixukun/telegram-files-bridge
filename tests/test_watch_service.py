@@ -165,6 +165,92 @@ class TestWatchService(unittest.TestCase):
         self.assertEqual(asyncio.run(self.W._watch_tick()), 0)
         self.assertEqual(self.fb.calls, [])
 
+    # ---------------- 文本链接监听（转发即下载：链接发到收藏） ----------------
+
+    @staticmethod
+    def _text_msg(mid, text):
+        return {"id": mid, "content": {"text": {"text": text}}}
+
+    def test_extract_links_basic(self):
+        """从文本提取 t.me 链接：公开/私密/去尾部标点/去重。"""
+        text = ("看这个 https://t.me/mychannel/123 ，还有 https://t.me/c/2333333/456。"
+                "重复 https://t.me/mychannel/123 结尾）")
+        self.assertEqual(
+            self.W._extract_links(text),
+            ["https://t.me/mychannel/123", "https://t.me/c/2333333/456"])
+
+    def test_extract_links_telegram_dog(self):
+        self.assertEqual(
+            self.W._extract_links("https://telegram.dog/foo/9"),
+            ["https://telegram.dog/foo/9"])
+
+    def test_text_link_baseline_then_enqueue(self):
+        """文本链接消息：首次见面建基线不入队；新出现的链接消息才解析入队。"""
+        self._rule()
+        self.st._WATCH_SEEN.clear()
+        orig = self.W._search_text_messages
+        self.W._search_text_messages = \
+            lambda tg, ch, limit=30: asyncio.sleep(0, result=[self._text_msg(501, "https://t.me/ch/1")])
+        try:
+            # 基线轮：不解析
+            self.assertEqual(asyncio.run(self.W._watch_tick()), 0)
+            key = self.W._seen_key("r1", "-1001")
+            self.assertIn("link-8652569586--1001-501", self.st._WATCH_SEEN.get(key, []))
+
+            # 第二轮出现新链接消息：解析入队（mock 解析函数）
+            self.W._search_text_messages = \
+                lambda tg, ch, limit=30: asyncio.sleep(0, result=[
+                    self._text_msg(501, "https://t.me/ch/1"),
+                    self._text_msg(502, "看 https://t.me/ch/2 与 https://t.me/ch/3"),
+                ])
+            import services.task_service as ts
+            calls = []
+
+            async def fake_resolve(links, force=False):
+                calls.append(list(links))
+                return len(links), ""
+
+            orig_resolve = ts._resolve_links_to_files
+            ts._resolve_links_to_files = fake_resolve
+            try:
+                n = asyncio.run(self.W._watch_tick())
+            finally:
+                ts._resolve_links_to_files = orig_resolve
+            self.assertEqual(n, 2)
+            self.assertEqual(calls, [["https://t.me/ch/2", "https://t.me/ch/3"]])
+        finally:
+            self.W._search_text_messages = orig
+
+    def test_text_link_no_dup(self):
+        """同一条链接消息不会被二次解析（已见键生效）。"""
+        self._rule()
+        self.st._WATCH_SEEN.clear()
+        orig = self.W._search_text_messages
+        msg = self._text_msg(601, "https://t.me/ch/9")
+        self.W._search_text_messages = lambda tg, ch, limit=30: asyncio.sleep(0, result=[msg])
+        import services.task_service as ts
+        calls = []
+
+        async def fake_resolve(links, force=False):
+            calls.append(list(links))
+            return len(links), ""
+
+        orig_resolve = ts._resolve_links_to_files
+        ts._resolve_links_to_files = fake_resolve
+        try:
+            asyncio.run(self.W._watch_tick())                    # 基线
+            self.W._search_text_messages = lambda tg, ch, limit=30: asyncio.sleep(0, result=[msg])
+            self.assertEqual(asyncio.run(self.W._watch_tick()), 0)   # 已见，0
+            self.assertEqual(calls, [])
+        finally:
+            self.W._search_text_messages = orig
+            ts._resolve_links_to_files = orig_resolve
+
+    def test_whitelist_has_search_chat_messages(self):
+        """TDLib 白名单必须放行 SearchChatMessages（文本链接轮询依赖）。"""
+        from core.config import TG_API_METHOD_WHITELIST
+        self.assertIn("SearchChatMessages", TG_API_METHOD_WHITELIST)
+
 
 if __name__ == "__main__":
     unittest.main()
