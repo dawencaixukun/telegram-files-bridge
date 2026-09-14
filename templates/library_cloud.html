@@ -88,14 +88,20 @@ window.cloudLibrary = function cloudLibrary() {
       await this.saveDomain();
     },
 
-    getOpenListUrl: function (cloudPath, fallbackUrl) {
+    getOpenListUrl: function (locateUrl, cloudPath, fallbackUrl) {
       var base = this.formatBase(this.openlistBase);
       if (!base) {
-        return fallbackUrl || '';
+        // 没有可用域名时退回服务端算好的定位 URL
+        return locateUrl || fallbackUrl || '';
       }
       if (!cloudPath || cloudPath === '—') return base;
-      var clean = String(cloudPath).replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
-      return base + '/' + clean;
+      // OpenList 前端把 URL 路径当目录去列：对文件路径调 fs/list 会返回
+      // 500「not a folder」，前端渲染失败即回落根目录（症状：点了只开网盘首页）。
+      // 因此定位链接必须指向文件所在的【父目录】。
+      var parts = String(cloudPath).replace(/^\/+/, '').split('/').filter(Boolean);
+      parts.pop();  // 去掉文件名，只保留目录
+      if (!parts.length) return base + '/';
+      return base + '/' + parts.map(encodeURIComponent).join('/');
     },
 
     handleOpenListClick: function (cloudPath, fallbackUrl, evt) {
@@ -508,15 +514,20 @@ window.cloudLibrary = function cloudLibrary() {
             <div class="cloud-path" title="{{ f.cloud_path }}">{{ f.cloud_path }}</div>
             <div class="t-foot cloud-actions-cell">
               <!-- 1. 在 OpenList 中打开直达链接 -->
-              {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
+              {% if f.locate_url or f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
               <!-- 用 data-* 传递 + Alpine 读取，避免把 Jinja 值插进属性里的 JS 字符串
-                   （Jinja 的 HTML 转义在 Alpine 表达式解析前会被解码，单引号可逃逸出字符串） -->
-              <a :href="getOpenListUrl($el.dataset.path, $el.dataset.url)"
+                   （Jinja 的 HTML 转义在 Alpine 表达式解析前会被解码，单引号可逃逸出字符串）
+
+                   注意优先用 locate_url：OpenList 前端把 URL 路径当目录去列，指向
+                   文件本身会触发 fs/list 500「not a folder」并回落首页（症状：点了
+                   只打开网盘首页、没定位到文件）。locate_url 已指向文件所在父目录。 -->
+              <a :href="getOpenListUrl($el.dataset.locate, $el.dataset.path, $el.dataset.url)"
+                 :data-locate="'{{ f.locate_url }}'"
                  :data-path="'{{ f.cloud_path }}'"
                  :data-url="'{{ f.openlist_url }}'"
                  target="_blank" rel="noopener noreferrer"
-                 @click="handleOpenListClick($el.dataset.path, $el.dataset.url, $event)"
-                 class="btn sm ghost" title="在 OpenList 中直达打开此文件" aria-label="在 OpenList 中打开 {{ f.filename }}">
+                 @click="handleOpenListClick($el.dataset.locate or $el.dataset.path, $el.dataset.url, $event)"
+                 class="btn sm ghost" title="在 OpenList 中定位到此文件所在文件夹" aria-label="在 OpenList 中打开 {{ f.filename }}">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
                 OpenList
               </a>

@@ -27,7 +27,7 @@ from core.logging import log, LOG_STORE
 from services.openlist_service import (
     _openlist_token, _openlist_relogin, _openlist_mkdir_tree,
     _openlist_exists, _openlist_put_once, _openlist_ready,
-    _openlist_direct_url, _openlist_client, _openlist_env,
+    _openlist_direct_url, _openlist_locate_url, _openlist_client, _openlist_env,
     _OpenListAuthErr, _openlist_stat
 )
 from services.notification_service import (
@@ -275,6 +275,9 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
         # _openlist_direct_url 内部有 rstrip + normpath + quote，循环里是纯浪费。
         _t = _fmt_time(j.get("archived_at") or j.get("created_at"))
         _url = _openlist_direct_url(rp)
+        # 管理页定位 URL 必须指向父目录：OpenList 对文件路径调 fs/list 会 500
+        # 「not a folder」，前端渲染失败即回落首页（用户症状：点了只开网盘首页）。
+        _locate = _openlist_locate_url(rp)
         out.append({
             "id": j.get("id"),
             "unique_id": j.get("unique_id"),
@@ -299,6 +302,8 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
             "openlist_url": _url,
             "directUrl": _url,
             "openlistUrl": _url,
+            "locateUrl": _locate,
+            "locate_url": _locate,
             "exists": exists,
             "deleteLocal": bool(j.get("delete_local")),
             "localDeleted": bool(j.get("local_deleted")),
