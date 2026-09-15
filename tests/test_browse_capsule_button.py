@@ -54,6 +54,21 @@ class TestCapBtn(unittest.TestCase):
         html = _render([_row("x.mp4", False)])
         self.assertNotIn("border-radius:var(--radius-sm);padding:2px 6px", html)
 
+    def test_local_present_card_renders_footer(self):
+        """本地在存卡片必须渲染出底部按钮。
+
+        历史缺陷：模板里 `{% elif f.is_downloaded or f.dl == 'completed' %}`
+        连写两遍，第一个命中且体为空，第二个永不执行 —— 「本地在存」按钮成了
+        死代码，该卡片底部整块渲染为空。修胶囊时一并删掉重复分支。
+        """
+        html = _render([_row("local.mp4", False, dl="completed")])
+        self.assertIn("本地在存", html, "本地在存卡片应渲染出胶囊按钮")
+        self.assertIn("cap-btn", html)
+        # 底部操作区不能为空
+        import re as _re
+        m = _re.search(r'<div class="t-foot">(.*?)</div>\s*</div>', html, _re.S)
+        self.assertTrue(m and m.group(1).strip(), "底部操作区不应为空")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
