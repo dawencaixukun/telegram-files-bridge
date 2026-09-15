@@ -77,22 +77,23 @@
         </button>
       </span>
       {% elif f.is_archived %}
-      <button type="button" class="badge ghost" title="点击查看资产详情与操作"
-              style="font-size:11px;color:var(--ok);cursor:pointer;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.25);border-radius:var(--radius-sm);padding:2px 6px;"
+      <button type="button" class="cap-btn" title="点击查看资产详情与操作"
               onclick="event.stopPropagation(); window.__openBrowseAssetDrawer(this)">
-        ✓ 资产详情
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><use href="#ic-cloud"/></svg><span>资产详情</span>
       </button>
       {% elif f.is_downloaded or f.dl == 'completed' %}
-      {% elif f.is_downloaded or f.dl == 'completed' %}
-      <button type="button" class="badge ghost" title="本地在存：{{ f.local_path }}，点击查看资产详情与操作"
-              style="font-size:11px;color:var(--brand-b);cursor:pointer;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.25);border-radius:var(--radius-sm);padding:2px 6px;"
+      <button type="button" class="cap-btn" title="本地在存：{{ f.local_path }}，点击查看资产详情与操作"
               onclick="event.stopPropagation(); window.__openBrowseAssetDrawer(this)">
-        💾 本地在存
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><use href="#ic-hdd"/></svg><span>本地在存</span>
       </button>
       {% elif f.dl not in ('completed', 'downloading') %}
-      <button type="button" class="icon-btn xs" title="下载" aria-label="下载 {{ f.name }}"
+      {# 下载按钮与 OpenList 胶囊同构（.cap-btn）：圆角药丸 + 图标 + 文字。
+         历史缺陷：原本是 30×30 圆角方块 .icon-btn.xs 纯图标，与同排的
+         OpenList 胶囊形状不一致（用户圈出要求统一）；提交后的「已提交」态
+         还是内联样式的直角小块（用户第二条红线）。现两者共用同一胶囊几何。 #}
+      <button type="button" class="cap-btn cap-dl" title="下载" aria-label="下载 {{ f.name }}"
               onclick="event.stopPropagation(); window.__browseDownloadOne(this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-download"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><use href="#ic-download"/></svg><span>下载</span>
       </button>
       {% endif %}
     </div>

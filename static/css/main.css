@@ -1992,6 +1992,54 @@ html.theme-anim *::after {
   background: rgba(56, 189, 248, 0.16);
   color: var(--brand-b);
 }
+
+/* ---- 卡片底部的通用胶囊按钮（.cap-btn）----
+   与 OpenList 胶囊（.pill-group）同构，让同排操作按钮形状统一：
+   圆角药丸 + 图标 + 文字，纵向节奏一致，悬停抬起。
+
+   历史缺陷：
+   1. 下载按钮是 30×30 圆角方块 .icon-btn.xs 纯图标，和旁边的 OpenList
+      胶囊明显不是一个形状（用户圈出要求「做成 OpenList 这样的胶囊」）；
+   2. 提交成功后的「已提交」态是内联样式的直角小块（用户第二条红线），
+      同样与胶囊不一致。
+   现统一走 .cap-btn 一套几何：pill 圆角、图标 11px、字号 11px/600，
+   与 .pill-group .seg 逐项对齐，保证同排等高不错位。 */
+.cap-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;                          /* 不被卡片 flex 挤压变形 */
+  margin-left: auto;                   /* 右对齐（与旧 .badge / .pill-group 一致） */
+  padding: 5px 10px;                   /* 与 .pill-group .seg 逐项一致，同排等高 */
+  border-radius: var(--radius-pill);   /* 胶囊：与 OpenList 同一圆角 */
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;                 /* 绝不换行（历史缺陷：文字被挤成竖排） */
+  min-width: 0;
+  cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  color: var(--text-1);
+  transition: background var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+.cap-btn svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  display: block;                      /* 与文字同排，不参与基线穿模 */
+}
+.cap-btn:hover { color: var(--text-1); background: var(--hover-bg); border-color: rgba(148,163,184,.4); }
+
+/* 下载：品牌青，主操作色（与 OpenList 的绿同权重） */
+.cap-btn.cap-dl { color: var(--brand-b); background: rgba(56, 189, 248, 0.10); border-color: rgba(56, 189, 248, 0.28); }
+.cap-btn.cap-dl:hover { background: rgba(56, 189, 248, 0.18); color: var(--brand-b); border-color: rgba(56, 189, 248, 0.45); }
+
+[data-theme="light"] .cap-btn.cap-dl { color: #0284c7; background: rgba(2, 132, 199, 0.08); border-color: rgba(2, 132, 199, 0.30); }
+[data-theme="light"] .cap-btn.cap-dl:hover { background: rgba(2, 132, 199, 0.14); }
 /* 浅色主题下的对比度微调 */
 [data-theme="light"] .pill-group { border-color: rgba(16, 150, 110, 0.32); background: rgba(16, 185, 129, 0.08); }
 [data-theme="light"] .pill-group .seg { color: #0e9f6e; }

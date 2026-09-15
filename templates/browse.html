@@ -817,10 +817,13 @@
       if (badge) {
         badge.innerHTML = '<span class="badge accent">下载中</span>';
       }
-      // 底部按钮 → 禁用下载图标（提交中状态，任务队列页可看进度）
+      // 底部按钮 → 胶囊「已提交」态（与 OpenList 胶囊同构，不再用内联直角小块）
       var foot = card.querySelector('.t-foot');
       if (foot) {
-        foot.innerHTML = '<span class="badge" title="已加入下载队列，进度见任务队列页" style="font-size:11px;color:var(--text-3);background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.25);border-radius:var(--radius-sm);padding:2px 6px;">已提交</span>';
+        foot.innerHTML = '<button type="button" class="cap-btn" disabled ' +
+          'title="已加入下载队列，进度见任务队列页">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">' +
+          '<use href="#ic-check"/></svg><span>已提交</span></button>';
       }
     });
   };
