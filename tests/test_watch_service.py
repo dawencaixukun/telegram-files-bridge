@@ -248,6 +248,57 @@ class TestWatchService(unittest.TestCase):
             self.W._search_text_messages = orig
             ts._resolve_links_to_files = orig_resolve
 
+    def test_text_link_baseline_independent_of_media(self):
+        """恶性 bug 回归：媒体基线先写入 seen 后，链接消息首轮只建基线不入队。
+
+        34 实测事故：seen 被媒体键填满 → 链接轮询误判"非基线轮" → 历史链接
+        全部解析入队（37 条连环下载）。
+        """
+        self._rule()
+        self.st._WATCH_SEEN.clear()
+        # 先让媒体轮询建基线（模拟真实时序）
+        self.fb.files = [self._f(101, "A")]
+        asyncio.run(self.W._watch_tick())
+        key = self.W._seen_key("r1", "-1001")
+        self.assertTrue(self.st._WATCH_SEEN.get(key))       # 媒体基线已在
+
+        orig = self.W._search_text_messages
+        orig_resolve = None
+        import services.task_service as ts
+        calls = []
+
+        async def fake_resolve(links, force=False):
+            calls.append(list(links))
+            return len(links), ""
+
+        try:
+            self.W._search_text_messages = \
+                lambda tg, ch, limit=30: asyncio.sleep(0, result=[
+                    self._text_msg(701, "https://t.me/ch/old1"),
+                    self._text_msg(702, "https://t.me/ch/old2"),
+                ])
+            orig_resolve = ts._resolve_links_to_files
+            ts._resolve_links_to_files = fake_resolve
+            # 链接首轮：只建基线，绝不入队历史链接
+            self.assertEqual(asyncio.run(self.W._watch_tick()), 0)
+            self.assertEqual(calls, [])
+            k = self.W._seen_key("r1", "-1001")
+            self.assertIn("link-8652569586--1001-701", self.st._WATCH_SEEN.get(k, []))
+
+            # 之后新链接消息正常入队
+            self.W._search_text_messages = \
+                lambda tg, ch, limit=30: asyncio.sleep(0, result=[
+                    self._text_msg(701, "https://t.me/ch/old1"),
+                    self._text_msg(703, "https://t.me/ch/new3"),
+                ])
+            n = asyncio.run(self.W._watch_tick())
+            self.assertEqual(n, 1)
+            self.assertEqual(calls, [["https://t.me/ch/new3"]])
+        finally:
+            self.W._search_text_messages = orig
+            if orig_resolve is not None:
+                ts._resolve_links_to_files = orig_resolve
+
     def test_whitelist_has_search_chat_messages(self):
         """TDLib 白名单必须放行 SearchChatMessages（文本链接轮询依赖）。"""
         from core.config import TG_API_METHOD_WHITELIST

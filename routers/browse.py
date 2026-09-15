@@ -196,6 +196,15 @@ async def browse_watch_rules_set(request: Request):
                                  "message": "已开启：新转发将自动下载并归档"})
         if len(_SUB_RULES) >= _SUBS_MAX_RULES:
             return JSONResponse({"ok": False, "message": "规则数量已达上限（%d 条）" % _SUBS_MAX_RULES})
+        # 默认目录不写死网盘前缀（各机器 OpenList 挂载不同：本机是 /阿里云盘，34 是 /onedrive…）。
+        # 以归档设置里的 defaultDir 为根（用户在设置页自己配的、必然是其 OpenList 实际存在的挂载）；
+        # 未配置则拒绝开启并明确引导，绝不瞎猜挂载名（瞎猜 = "storage not found" 归档全挂）。
+        base_dir = str(_ARCHIVE_CONFIG.get("defaultDir") or "").strip().rstrip("/")
+        if not base_dir or base_dir == "/":
+            return JSONResponse({
+                "ok": False,
+                "message": "请先在「归档设置 → 默认归档目录」里配置你的网盘目录（如 /onedrive 或 /阿里云盘），再开启转发即下载",
+            })
         rule = {
             "id": secrets.token_hex(6),
             "telegramId": tg,
@@ -203,7 +212,7 @@ async def browse_watch_rules_set(request: Request):
             "chatTitle": title,
             "enabled": True,
             "priority": 0,
-            "dirTemplate": _WATCH_DEFAULT_TEMPLATE,
+            "dirTemplate": f"{base_dir}/tg-archive/{{chat_title}}/{{YYYY-MM}}",
             "deleteLocal": True,
             "policy": "skip",
             "watch": True,

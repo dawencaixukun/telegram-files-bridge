@@ -308,6 +308,10 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
 
         fresh_links: List[str] = []
         newly: Set[str] = set()
+        # 链接消息基线独立判定：只看该会话是否已有 link- 前缀键（媒体键与本键同存一个
+        # 集合，媒体基线先写会让 seen 非空——不能拿它当"链接已建基线"的依据，
+        # 否则首轮就会把全部历史链接消息解析入队（34 实测 37 条连环下载事故）。
+        link_seen = {k for k in seen if k.startswith("link-")}
         for m in msgs:
             mid = m.get("id") or m.get("messageId")
             if mid is None:
@@ -324,7 +328,7 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
                 # 引用/标题等其它文本载体也扫一眼（低成本）
                 caption = content.get("caption") or {}
                 text = str(caption.get("text") or "")
-            if seen:  # 基线轮不入队
+            if link_seen:  # 链接基线轮不入队
                 fresh_links.extend(_extract_links(text))
 
         if newly:
