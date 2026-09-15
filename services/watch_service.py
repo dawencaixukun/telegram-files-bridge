@@ -64,21 +64,36 @@ def _watch_rules() -> List[Dict[str, Any]]:
 
 
 async def _tg_authorized() -> bool:
-    """账号是否已授权可查。未授权时不轮询，避免刷错误日志。"""
+    """账号是否已授权可查。未授权时不轮询，避免刷错误日志。
+
+    判定顺序：
+    1. BACKEND.get_authorization_state（测试桩提供；生产 BackendClient 无此方法）
+    2. 兜底：/telegrams 里任一账号 status == active（后端实况，34 VPS 实测有效）
+    """
+    getter = getattr(BACKEND, "get_authorization_state", None)
+    if getter is not None:
+        try:
+            st = await getter()
+        except Exception:  # noqa: BLE001
+            return False
+        if isinstance(st, dict):
+            code = st.get("code") or st.get("status")
+            try:
+                if int(code) in _NOT_READY_STATES:
+                    return False
+            except (TypeError, ValueError):
+                pass
+            if st.get("authorized") is False:
+                return False
+        return True
+    # 生产路径：后端 /telegrams 的 status 即授权实况（active=在线）
     try:
-        st = await BACKEND.get_authorization_state()
+        tgs = await BACKEND.list_telegrams(force=True)
     except Exception:  # noqa: BLE001
         return False
-    if isinstance(st, dict):
-        code = st.get("code") or st.get("status")
-        try:
-            if int(code) in _NOT_READY_STATES:
-                return False
-        except (TypeError, ValueError):
-            pass
-        if st.get("authorized") is False:
-            return False
-    return True
+    if not isinstance(tgs, list) or not tgs:
+        return False
+    return any(str(t.get("status") or "") == "active" for t in tgs if isinstance(t, dict))
 
 
 def _seen_key(rule_id: Any, chat_id: Any) -> str:

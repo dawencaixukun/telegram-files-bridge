@@ -23,11 +23,13 @@ class TestWatchService(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="watch-test-")
         os.environ["TG_DATA_DIR"] = self._tmp
-        import importlib
+        # 刻意不 importlib.reload（与 test_browse_hide 同理）：reload(core.state) 会
+        # 替换 _SUB_RULES 等单例对象，别的模块还持旧引用 → 单跑组合时跨文件失败。
+        # 这里只清内存态 + 用隔离数据目录，等价"干净状态"。
         import core.state as st
         import services.watch_service as W
-        importlib.reload(st)
-        importlib.reload(W)
+        st._SUB_RULES.clear()
+        st._WATCH_SEEN.clear()
         self.st = st
         self.W = W
 
