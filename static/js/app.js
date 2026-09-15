@@ -3041,6 +3041,63 @@
             }
           })
           .catch(function () {});
+      },
+      /* 删除失败记录：从告警中心移除死记录（只删记录，不动文件本体）。
+         即时生效 + toast 反馈，无确认框（用户交互偏好）。
+         前端本地同步移除，让按钮点击立即消失而不是等 load() 回来。 */
+      dismissOne: function (id) {
+        var self = this;
+        fetch('/api/archive/failed/dismiss', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ jobId: id })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) {
+              self.failedJobs = self.failedJobs.filter(function (j) { return j.id !== id; });
+              self.total = Math.max(0, self.total - (d.deletedCount || 0));
+              window.__toast('已删除', 'success',
+                (d.message || '已从告警中心移除该失败记录'));
+            } else {
+              window.__toast('删除失败', 'error', (d && d.message) || '无法删除该记录');
+              self.load();
+            }
+          })
+          .catch(function (e) {
+            window.__toast('删除请求失败', 'error', '网络异常: ' + e);
+          });
+      },
+      /* 一键清空全部失败记录（告警中心右上角，全删无遗漏）。 */
+      dismissAll: function () {
+        var self = this;
+        var n = this.failedJobs.length;
+        if (!n) return;
+        fetch('/api/archive/failed/dismiss', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ allFailed: true })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) {
+              self.failedJobs = [];
+              self.total = 0;
+              window.__toast('已清空', 'success',
+                (d.message || ('已删除 ' + n + ' 条失败记录')));
+            } else {
+              window.__toast('清空失败', 'error', (d && d.message) || '无法删除失败记录');
+            }
+          })
+          .catch(function (e) {
+            window.__toast('清空请求失败', 'error', '网络异常: ' + e);
+          });
       }
     };
   };

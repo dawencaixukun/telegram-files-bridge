@@ -1223,6 +1223,11 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   border-radius: var(--radius-card);
   overflow: hidden;
   transition: transform var(--dur-med) var(--ease), box-shadow var(--dur-med) var(--ease);
+  /* 卡片做成纵向 flex：缩略图固定、内容区撑满、底部操作区贴底。
+     见下方 .t-body / .t-foot 说明 —— 这是「胶囊按钮七上八下」的根治点。 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 .thumb:hover { transform: translateY(-3px); box-shadow: var(--glass-shadow); }
 .thumb .t-img {
@@ -1232,6 +1237,7 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   place-items: center;
   color: var(--text-3);
   position: relative;
+  flex: none;                          /* 缩略图不吃弹性空间，始终 16:10 */
 }
 .thumb .t-img svg { width: 34px; height: 34px; }
 /* 本地在存网格真实缩略图（同 browse-card：铺满 16:10 框，徽标浮于其上） */
@@ -1244,9 +1250,67 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   inset: 0;
 }
 .thumb .t-img .t-badge { position: absolute; top: 10px; right: 10px; }
-.thumb .t-body { padding: var(--space-3) var(--space-4) var(--space-4); }
-.thumb .t-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; word-break: break-word; }
-.thumb .t-meta { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-bottom: var(--space-3); }
+.thumb .t-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  /* 内容区吃掉剩余高度，成为纵向 flex 的容器，让 .t-foot 能贴底 */
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.thumb .t-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  word-break: break-word;
+  /* 固定两行高度：无论标题 1 行还是 3 行，标题块都占同样高度，
+     保证「缩略图 → 标题 → 元信息 → 操作行」的纵向节奏在所有卡片上一致。
+     历史缺陷：只有 browse 页做了 clamp，云端归档页/本地在存页没有，
+     短标题的卡片按钮会明显偏高（用户报「胶囊七上八下」）。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: calc(2em * 1.5);         /* = 两行高度（line-height 1.5 继承自 body） */
+}
+/* 标题独占两行的卡片里，元信息行也需要固定高度，否则 1 行/2 行标题
+   会让下面的操作行再错一次位。 */
+.thumb .t-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--space-3);
+  min-height: calc(1em * 1.5);
+}
+
+/* ---- 卡片底部操作行：整行贴底，按钮纵向对齐 ----
+   历史缺陷（用户可见：「胶囊按钮每个页面排序都不一致，七上八下」）：
+   卡片是纯块级流，.t-name 没有行数上限，标题 1 行 / 2 行 / 3 行时
+   下面的 .t-meta 与 .t-foot 被逐级推下去；同行卡片虽然被 grid 拉成等高，
+   但内容顶端对齐，于是底部的 OpenList / 本地在存 / 下载 胶囊在每张卡上
+   高度各不相同。
+
+   修法（三处配合，缺一不可）：
+     1. .thumb 纵向 flex + height:100%（grid 项默认 stretch，已有整行等高）
+     2. .t-body flex:1（吃掉剩余空间）+ .t-foot margin-top:auto（贴到最底）
+     3. .t-name 固定两行高度（下方 .thumb .t-name 的 clamp），
+        这样即使只有一行标题，卡片内部节奏也完全一致。 */
+.thumb .t-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: auto;                    /* 关键：把操作行压到卡片最底部 */
+  min-height: 30px;
+  flex: none;
+}
+/* 本地在存页的操作行用的是 .row 而非 .t-foot（内含归档+删除两个按钮），
+   同样必须贴底，否则标题行数变化照样把按钮推得七上八下。 */
+.thumb .card-actions {
+  margin-top: auto;
+  flex-wrap: nowrap;
+  flex: none;
+}
 
 /* segmented control (view toggle) */
 .seg {
@@ -1930,9 +1994,11 @@ html.theme-anim *::after {
 .browse-card .t-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-2);
   min-height: 30px;
+  margin-top: auto;                    /* 与通用 .thumb .t-foot 一致：贴底 */
+  flex: none;
 }
 .browse-card .t-foot .sub { margin-top: 0; }
 

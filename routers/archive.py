@@ -329,6 +329,71 @@ async def api_archive_retry_failed(request: Request):
         }
 
 
+@router.delete("/api/archive/failed")
+@router.post("/api/archive/failed/dismiss")
+async def api_archive_failed_dismiss(request: Request):
+    """删除失败归档记录（支持单个/批量，供告警中心的胶囊删除按钮调用）。
+
+    背景：永久性失败（本地文件已丢失等）被熔断后既修不好也删不掉，
+    永远挂在告警中心。死记录没有出口，列表只会越积越长。
+
+    Body: {"jobId": "..."} / {"jobIds": ["a","b"]} / {"allFailed": true}
+    只删 state=='failed' 的记录；其它状态跳过并如实说明。
+    删除的只是「失败记录」本身，不触碰云端/本地任何文件本体。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+
+    ids: List[str] = []
+    if body.get("jobIds") is not None:
+        raw = body.get("jobIds")
+        if isinstance(raw, (str, int)):
+            raw = [raw]
+        if not isinstance(raw, list):
+            return JSONResponse({"ok": False, "message": "jobIds 必须是数组"}, status_code=400)
+        ids = [str(i).strip() for i in raw if str(i).strip()]
+    elif body.get("jobId") is not None:
+        ids = [str(body["jobId"]).strip()]
+    elif body.get("allFailed") is True:
+        ids = [str(j.get("id")) for j in _ARCHIVE_JOBS.values() if j.get("state") == "failed"]
+
+    ids = [i for i in ids if i]
+    if not ids:
+        return JSONResponse({"ok": False, "message": "缺少 jobId / jobIds / allFailed"}, status_code=400)
+    if len(ids) > 100:
+        return JSONResponse({"ok": False, "message": "单次最多删除 100 条失败记录"}, status_code=400)
+
+    deleted: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for jid in ids:
+        job = _ARCHIVE_JOBS.get(jid)
+        if job is None:
+            skipped.append({"id": jid, "reason": "记录不存在或已被清理"})
+            continue
+        if job.get("state") != "failed":
+            skipped.append({"id": jid,
+                            "reason": f"状态为 {job.get('state')}，仅 failed 记录可删除（进行中的请先取消）"})
+            continue
+        _ARCHIVE_JOBS.pop(jid, None)
+        deleted.append(jid)
+
+    if deleted:
+        _archive_save()
+        LOG_STORE.append("INFO", "已删除 %d 条失败归档记录（用户手动清理）" % len(deleted))
+
+    return {
+        "ok": True,
+        "deletedCount": len(deleted),
+        "deletedJobIds": deleted,
+        "skipped": skipped,
+        "skippedCount": len(skipped),
+        "message": (f"已删除 {len(deleted)} 条失败记录"
+                    + (f"，另有 {len(skipped)} 条跳过" if skipped else "")),
+    }
+
+
 @router.get("/archive/config")
 async def archive_config_get():
     """获取当前归档配置（默认网盘目录、自动归档开关、冲突策略等）。"""
