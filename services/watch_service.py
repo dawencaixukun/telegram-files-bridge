@@ -222,10 +222,15 @@ async def _watch_tick() -> int:
                 uid = f"mid-{mid}" if mid is not None else ""
             if not uid:
                 continue
-            # 首次见到该会话：只记录基线，不入队。
-            # 否则规则一启用就会把历史消息一次性全下载（几十上百个文件）。
             if uid not in seen:
                 newly.add(uid)
+                # watch 只自动下载视频：图片/音频/文档记入基线但跳过。
+                # 与浏览页口径一致（browse_service 已把 photo 移出可下载类型）。
+                ftype = str(f.get("type") or "").lower()
+                if ftype != "video":
+                    continue
+                # 首次见到该会话：只记录基线，不入队。
+                # 否则规则一启用就会把历史消息一次性全下载（几十上百个文件）。
                 if seen:
                     fresh.append(f)
 

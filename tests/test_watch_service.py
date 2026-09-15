@@ -70,9 +70,30 @@ class TestWatchService(unittest.TestCase):
         return r
 
     @staticmethod
-    def _f(mid, uid):
+    def _f(mid, uid, ftype="video"):
         return {"telegramId": 8652569586, "chatId": -1001, "messageId": mid,
-                "fileId": 100 + mid, "uniqueId": uid, "filename": "v%d.mp4" % mid}
+                "fileId": 100 + mid, "uniqueId": uid, "filename": "v%d.mp4" % mid,
+                "type": ftype}
+
+    def test_watch_skips_non_video(self):
+        """watch 只自动下载视频：图片/音频/文档记基线但跳过（用户明确要求）。"""
+        self._rule()
+        self.st._WATCH_SEEN.clear()
+        self.fb.files = [self._f(11, "u11", "video"),
+                         self._f(12, "u12", "photo"),
+                         self._f(13, "u13", "audio"),
+                         self._f(14, "u14", "document")]
+        n = asyncio.run(self.W._watch_tick())   # 首轮=基线，0 入队
+        self.assertEqual(n, 0)
+        k = self.W._seen_key("r1", "-1001")
+        seen = self.st._WATCH_SEEN.get(k, [])
+        for uid in ("u11", "u12", "u13", "u14"):
+            self.assertIn(uid, seen)    # 全部记基线，图片不会反复扫
+        # 第二轮：新视频入队、新图片仍跳过
+        self.fb.files = [self._f(15, "u15", "video"),
+                         self._f(16, "u16", "photo")]
+        n = asyncio.run(self.W._watch_tick())
+        self.assertEqual(n, 1)          # 只有视频入队
 
     def test_no_rule_no_polling(self):
         """未开启 watch -> 一次后端请求都不发。"""
@@ -163,8 +184,12 @@ class TestWatchService(unittest.TestCase):
         """账号未授权 -> 不轮询。"""
         self._rule()
         self.fb.authorized = False
+        orig = self.W._tg_authorized
         self.W._tg_authorized = lambda: asyncio.sleep(0, result=False)
-        self.assertEqual(asyncio.run(self.W._watch_tick()), 0)
+        try:
+            self.assertEqual(asyncio.run(self.W._watch_tick()), 0)
+        finally:
+            self.W._tg_authorized = orig
         self.assertEqual(self.fb.calls, [])
 
     # ---------------- 文本链接监听（转发即下载：链接发到收藏） ----------------
