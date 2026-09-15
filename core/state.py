@@ -108,15 +108,27 @@ _NOTIFY_LAST_DISK_ALERT = 0.0
 # ---------------------------------------------------------------------
 # 6. OpenList 状态与客户端
 # ---------------------------------------------------------------------
+# 【必须 trust_env=False】OpenList 与 Java 后端都在本机回环地址上
+# (OPENLIST_URL/TG_API_URL 默认 http://127.0.0.1:...)。httpx 默认会读环境变量里的
+# ALL_PROXY/HTTP_PROXY，把这些回环请求也塞进代理：
+#   1) 请求绕远路甚至失败；2) 若代理是 socks5h://（本机 clash 默认就是），
+#   而 httpx 没装 socksio 依赖，会在建 client 时直接抛
+#      ValueError: Unknown scheme for proxy URL URL('socks5h://127.0.0.1:7890')
+#      —— 这是 import 期异常，整个应用起不来。
+# 本机 /root/.bashrc 里 clashctl 的 watch_proxy 会在每个登录 shell 自动导出该变量，
+# 所以「在交互 shell 里跑测试/服务」和「nohup/systemd 直接起」的行为会完全不同。
+# 回环流量永远不该走代理，这里显式关掉环境变量解析。
 _openlist_client = httpx.AsyncClient(
     base_url=OPENLIST_URL,
     timeout=httpx.Timeout(10.0),
     follow_redirects=False,
+    trust_env=False,
 )
 _openlist_upload_client = httpx.AsyncClient(
     base_url=OPENLIST_URL,
     timeout=httpx.Timeout(connect=10.0, read=3600.0, write=3600.0, pool=10.0),
     follow_redirects=False,
+    trust_env=False,
 )
 _OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 _OPENLIST: Dict[str, Any] = {}

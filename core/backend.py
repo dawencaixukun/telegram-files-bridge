@@ -45,10 +45,15 @@ class BackendClient:
     """封装对真实后端的所有 HTTP 调用，自动处理鉴权头与缓存。"""
 
     def __init__(self, base_url: str, ttl: float = CACHE_TTL):
+        # trust_env=False：后端是 http://127.0.0.1:8123/api 的回环地址，
+        # 绝不能被环境变量里的 ALL_PROXY 劫走（本机 .bashrc 的 clashctl
+        # watch_proxy 会自动导出 socks5h://，httpx 无 socksio 时 import 即崩）。
+        # 详见 core/state.py 同处注释。
         self.client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(10.0),
             follow_redirects=False,
+            trust_env=False,
         )
         self.ttl = ttl
         self._cache: Dict[str, tuple] = {}
