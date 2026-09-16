@@ -47,6 +47,11 @@
           <span x-show="!busy" x-text="retryableCount ? '⚡ 一键重试全部失败任务' : '无可重试任务'">⚡ 一键重试全部失败任务</span>
           <span x-show="busy">正在重新调度…</span>
         </button>
+        <button type="button" class="btn sm ghost" :disabled="busy" @click="dismissAll()"
+                title="删除全部失败记录（只删记录，不动云端/本地文件）">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-trash"/></svg>
+          <span>清空记录</span>
+        </button>
         <button type="button" class="btn sm ghost" :disabled="busy" @click="load()" title="刷新异常列表">
           <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
         </button>
@@ -95,9 +100,17 @@
           </div>
           <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
             <span class="sub tnum" x-text="j.size"></span>
-            <button type="button" class="btn xs ghost" :disabled="j.retryable === false"
-                    :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : '单项重试'"
-                    @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : '重试'">重试</button>
+            <!-- 胶囊按钮组（与 OpenList 胶囊同几何）：左段重试（永久失败禁用），右段删除（随时可点，只删记录不动文件） -->
+            <span class="pill-btns">
+              <button type="button" class="btn xs ghost pill-seg-l" :disabled="j.retryable === false"
+                      :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : '单项重试'"
+                      @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : '重试'">重试</button>
+              <button type="button" class="btn xs danger pill-seg-r"
+                      title="从告警中心删除该失败记录（只删记录，不动云端/本地文件）"
+                      @click="dismissOne(j.id)">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-trash"/></svg>
+              </button>
+            </span>
           </div>
         </div>
       </template>

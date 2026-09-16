@@ -75,7 +75,11 @@ class TestRetrieveResume(unittest.TestCase):
         if resume_from > 0:
             hdrs["Range"] = "bytes=%d-" % resume_from
         known = TOTAL
-        async with httpx.AsyncClient() as cli:
+        # trust_env=False：本用例打的是 127.0.0.1 上的本地测试服务器（回环），
+        # 不能被环境变量代理劫持。开发机 .bashrc 会导出 socks5h:// 代理，裸
+        # httpx.AsyncClient() 会因「Unknown scheme for proxy URL」直接抛错。
+        # 生产侧对应代码用的是同样 trust_env=False 的 _openlist_upload_client。
+        async with httpx.AsyncClient(trust_env=False) as cli:
             async with cli.stream("GET", "http://127.0.0.1:%d/f" % self.port,
                                   headers=hdrs) as r:
                 partial = (r.status_code == 206)

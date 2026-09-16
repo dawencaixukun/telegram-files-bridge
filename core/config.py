@@ -27,6 +27,29 @@ WS_RECONNECT_DELAY = float(os.environ.get("BRIDGE_WS_DELAY", "3"))
 LOGIN_RATE_LIMIT = int(os.environ.get("BRIDGE_LOGIN_LIMIT", "10"))
 LOGIN_RATE_WINDOW = float(os.environ.get("BRIDGE_LOGIN_WINDOW", "300"))
 TRUSTED_PROXIES = [s.strip() for s in os.environ.get("BRIDGE_TRUSTED_PROXIES", "").split(",") if s.strip()]
+
+# ---------------------------------------------------------------------
+# socks5h:// → socks5:// 兼容层
+# ---------------------------------------------------------------------
+# 背景：httpx 0.27 的 Proxy 只接受 http/https/socks5 三种 scheme，
+# 遇到 socks5h:// 直接抛 ValueError（import 期 / 建 client 时崩）。
+# 而通过 clash/clashctl 之类工具导出的代理恰恰常用 socks5h://（本机 .bashrc
+# 的 watch_proxy 就是）。httpx 的 socks5 传输本来就是把主机名交给代理解析
+# （远程 DNS），语义与 socks5h 一致，只是 scheme 名字不认。
+# 所以在**启动最早期**把环境里的 socks5h 归一化成 socks5，让任何 httpx 客户端
+# （包括第三方库内部创建的）都能正常工作。
+_SOCKS_SCHEME_FIX_KEYS = ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy",
+                          "HTTPS_PROXY", "https_proxy")
+
+
+def _normalize_socks_proxy_scheme() -> None:
+    for key in _SOCKS_SCHEME_FIX_KEYS:
+        val = os.environ.get(key)
+        if val and val.lower().startswith("socks5h://"):
+            os.environ[key] = "socks5://" + val[len("socks5h://"):]
+
+
+_normalize_socks_proxy_scheme()
 _LOGIN_FAILURE_MAX = 10000
 
 APP_ROOT_DIR = os.environ.get("TG_DATA_DIR", "/root/tg-files/app-data")
@@ -110,6 +133,8 @@ TG_API_METHOD_WHITELIST = {
     "getAuthorizationState",
     "GetRemoteFile",
     "GetMessage",
+    # 频道/收藏监听：搜索会话消息（转发即下载的文本链接轮询用）
+    "SearchChatMessages",
     "DownloadFile",
     "SendMessage",
 }

@@ -543,6 +543,18 @@ window.cloudLibrary = function cloudLibrary() {
               </span>
               {% endif %}
 
+              <!-- 2.5 云端改名（同步 OpenList） -->
+              <button type="button" class="icon-btn xs"
+                      data-cloud-rename-btn
+                      data-cloud-path="{{ f.cloud_path }}"
+                      data-job-id="{{ f.id }}"
+                      data-filename="{{ f.filename }}"
+                      {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法改名"{% else %}title="重命名（云端与记录同步修改）"{% endif %}
+                      aria-label="重命名 {{ f.filename }}"
+                      onclick="window.__renameCloudFile(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              </button>
+
               <!-- 3. 云端删除 -->
               <button type="button" class="icon-btn xs danger"
                       data-cloud-delete-btn

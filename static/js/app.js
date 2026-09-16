@@ -1039,14 +1039,21 @@
       return;
     }
     if (unarchivable > 0) {
-      if (!confirm('选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？')) {
-        return;
-      }
-      items = items.filter(function (it) { return it.archEnabled; });
-      if (!items.length) {
-        window.__toast('没有已完成下载、可归档的文件', 'error');
-        return;
-      }
+      var proceed = window.__uiConfirm && window.__uiConfirm({
+        title: '部分文件无法归档',
+        body: '选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？',
+        okText: '跳过并继续'
+      }) || Promise.resolve(window.confirm('选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？'));
+      proceed.then(function (ok) {
+        if (!ok) return;
+        items = items.filter(function (it) { return it.archEnabled; });
+        if (!items.length) {
+          window.__toast('没有已完成下载、可归档的文件', 'error');
+          return;
+        }
+        window.__openArchive(items);
+      });
+      return;
     }
     window.__openArchive(items);
   };
@@ -1058,9 +1065,17 @@
       window.__toast('缺少文件 ID，无法删除', 'error');
       return;
     }
-    if (!window.confirm('确定要彻底删除本地原文件吗？\n\n文件名: ' + filename + '\n\n删除后将永久释放磁盘空间，无法恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '删除本地原文件',
+          danger: true,
+          okText: '删除',
+          meta: [['文件名', filename]],
+          warn: '删除后立即释放磁盘空间，无法恢复'
+        })
+      : Promise.resolve(window.confirm('确定要彻底删除本地原文件吗？\n\n文件名: ' + filename + '\n\n删除后将永久释放磁盘空间，无法恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     postJSON('/library/local/delete', { uniqueId: uid })
       .then(function (r) { return r.json(); })
@@ -1080,6 +1095,7 @@
         btn.disabled = false;
         window.__toast('删除本地文件失败', 'error', '网络错误');
       });
+    });
   };
 
   window.__bulkDeleteLocal = function () {
@@ -1092,9 +1108,16 @@
       window.__toast('单次最多批量删除 100 个文件', 'error');
       return;
     }
-    if (!window.confirm('确定要彻底删除选中的 ' + uids.length + ' 个本地原文件吗？\n\n此操作将永久释放磁盘空间，无法恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '批量删除本地原文件',
+          danger: true,
+          okText: '删除 ' + uids.length + ' 个',
+          warn: '此操作将永久释放磁盘空间，无法恢复'
+        })
+      : Promise.resolve(window.confirm('确定要彻底删除选中的 ' + uids.length + ' 个本地原文件吗？\n\n此操作将永久释放磁盘空间，无法恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     var btn = document.getElementById('btnBatchDelete');
     if (btn) btn.disabled = true;
     postJSON('/library/local/delete', { uniqueIds: uids })
@@ -1117,9 +1140,77 @@
         if (btn) btn.disabled = false;
         window.__toast('批量删除失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---------------- 云端归档增强：云端删除、失效清理、文件取回与轮询 ---------------- */
+  /* ---- 云端改名：OpenList 与本地记录同步 ---- */
+  window.__renameCloudFile = function (btn) {
+    var path = btn.getAttribute('data-cloud-path');
+    var filename = btn.getAttribute('data-filename') || '';
+    if (!path) {
+      window.__toast('缺少云端路径，无法改名', 'error');
+      return;
+    }
+    window.__uiPrompt({
+      title: '重命名云端文件',
+      label: '新文件名',
+      value: filename,
+      okText: '改名',
+      meta: [['云端路径', path]],
+      hint: '只改文件名，目录不变；不带后缀时自动保留原后缀。改名同步 OpenList 云端与本地记录。'
+    }).then(function (newName) {
+      if (newName == null) return;               // 取消
+      newName = String(newName || '').trim();
+      if (!newName || newName === filename) return;
+      btn.disabled = true;
+      postJSON('/library/cloud/rename', { remotePath: path, newName: newName })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          btn.disabled = false;
+          if (d && d.ok) {
+            var nn = d.newName || newName;
+            var np = d.newPath || '';
+            window.__toast('已改名', 'success', filename + ' → ' + nn);
+            // 就地更新卡片文本，免整页刷新
+            var card = btn.closest('.cloud-card, tr');
+            if (card) {
+              var nameEl = card.querySelector('.t-name');
+              if (nameEl) { nameEl.textContent = nn; nameEl.title = nn; }
+              var pathEl = card.querySelector('.cloud-path');
+              if (pathEl && np) { pathEl.textContent = np; pathEl.title = np; }
+            }
+            // 同卡片内其他按钮的 data-cloud-path / data-filename 一并更新，取回/删除照常工作
+            if (card) {
+              card.querySelectorAll('[data-cloud-path]').forEach(function (el) {
+                if (np) el.setAttribute('data-cloud-path', np);
+              });
+              card.querySelectorAll('[data-filename]').forEach(function (el) {
+                el.setAttribute('data-filename', nn);
+              });
+              var ol = card.querySelector('a[data-openlist-url]');
+              if (ol && np) {
+                ol.setAttribute('data-cloud-path', np);
+                // 重拼 OpenList 直达地址：有公网域名用域名拼，否则退回服务端 base
+                var newUrl = (window.__cloudOpenListUrl && window.__cloudOpenListUrl(np, '')) || '';
+                if (newUrl) {
+                  ol.setAttribute('href', newUrl);
+                  ol.setAttribute('data-openlist-url', newUrl);
+                }
+              }
+            }
+          } else {
+            window.__toast('改名失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          return null;
+        })
+        .catch(function () {
+          btn.disabled = false;
+          window.__toast('改名失败', 'error', '网络错误');
+        });
+    });
+  };
+
   window.__deleteCloudFile = function (btn) {
     var path = btn.getAttribute('data-cloud-path');
     var jid = btn.getAttribute('data-job-id');
@@ -1128,9 +1219,17 @@
       window.__toast('缺少云端路径，无法删除', 'error');
       return;
     }
-    if (!window.confirm('确定要从云端删除文件吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知') + '\n\n此操作将调用 OpenList 删除云端文件并清理本地归档记录，不可恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '从云端删除文件',
+          danger: true,
+          okText: '删除',
+          meta: [['文件名', filename], ['云端路径', path || '未知']],
+          warn: '将删除云端文件并清理本地归档记录，不可恢复'
+        })
+      : Promise.resolve(window.confirm('确定要从云端删除文件吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知') + '\n\n此操作将调用 OpenList 删除云端文件并清理本地归档记录，不可恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     postJSON('/library/cloud/delete', { remotePath: path, id: jid })
       .then(function (r) { return r.json(); })
@@ -1149,14 +1248,22 @@
         btn.disabled = false;
         window.__toast('云端删除失败', 'error', '网络错误');
       });
+    });
   };
 
   var clearingMissing = false;
   window.__clearMissingCloudFiles = function () {
     if (clearingMissing) return;
-    if (!window.confirm('确定要清理所有云端已失效的记录吗？\n\n将清理所有在 OpenList 云端已找不到原文件的归档记录。')) {
-      return;
-    }
+    var confirmClear = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '清理云端失效记录',
+          danger: true,
+          okText: '清理',
+          body: '将清理所有在 OpenList 云端已找不到原文件的归档记录。'
+        })
+      : Promise.resolve(window.confirm('确定要清理所有云端已失效的记录吗？\n\n将清理所有在 OpenList 云端已找不到原文件的归档记录。'));
+    confirmClear.then(function (ok) {
+      if (!ok) return;
     clearingMissing = true;
     postJSON('/library/cloud/clear-missing', {})
       .then(function (r) { return r.json(); })
@@ -1177,6 +1284,7 @@
         clearingMissing = false;
         window.__toast('清理失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---- 云端取回与状态轮询 ---- */
@@ -1309,9 +1417,16 @@
       window.__toast('缺少云端文件路径，无法取回', 'error');
       return;
     }
-    if (!window.confirm('确定要将该文件从云端取回并下载到本地磁盘吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知'))) {
-      return;
-    }
+    var confirmRet = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '从云端取回文件',
+          okText: '取回',
+          meta: [['文件名', filename], ['云端路径', path || '未知']],
+          warn: '文件将下载到本地磁盘并占用空间'
+        })
+      : Promise.resolve(window.confirm('确定要将该文件从云端取回并下载到本地磁盘吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知')));
+    confirmRet.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     var textEl = btn.querySelector('.ret-text') || btn;
     textEl.textContent = '提交中…';
@@ -1346,6 +1461,7 @@
         textEl.textContent = '取回';
         window.__toast('取回提交失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---------------- Task actions (real backend calls) ---------------- */
@@ -2053,10 +2169,20 @@
         var key = it.origin + ':' + it.name;
         if (this.deleting) return;
         var where = it.origin === 'remote' ? '云端（OpenList）' : '本地';
-        if (!window.confirm('确定要删除这一份快照吗？\n\n文件: ' + it.name + '\n位置: ' + where +
-              '\n\n只删除这一份，不影响其它快照。删除后无法恢复。')) return;
         var self = this;
-        this.deleting = key;
+        var confirmDel = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '删除这份快照',
+              danger: true,
+              okText: '删除',
+              meta: [['文件', it.name], ['位置', where]],
+              warn: '只删除这一份，不影响其它快照；删除后无法恢复'
+            })
+          : Promise.resolve(window.confirm('确定要删除这一份快照吗？\n\n文件: ' + it.name + '\n位置: ' + where +
+                '\n\n只删除这一份，不影响其它快照。删除后无法恢复。'));
+        confirmDel.then(function (ok) {
+          if (!ok) return;
+          self.deleting = key;
         fetch('/api/session/backups/delete', {
           method: 'POST',
           headers: {
@@ -2075,6 +2201,7 @@
         }).catch(function () {
           self.deleting = '';
           window.__toast('删除失败', 'error', '网络连接超时或异常');
+        });
         });
       },
       load: function () {
@@ -2221,7 +2348,16 @@
         var self = this;
         var where = it.origin === 'remote' ? 'OpenList 云端' : '本地';
         var kind = it.encrypted ? '（加密包）' : '（明文快照）';
-        var ok = window.confirm(
+        var confirmRestore = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '用这份快照还原 Session',
+              danger: true,
+              okText: '开始还原',
+              meta: [['快照', it.name], ['位置', where + kind], ['时间', (it.mtimeStr || '—')], ['大小', (it.sizeStr || '—')]],
+              body: '还原过程将：\n1) 先自动生成一份「还原前快照」以便回滚；\n2) 短暂停止下载后端容器，把 td.binlog 与管理台凭据写回；\n3) 自动重新启动后端容器。',
+              warn: '期间下载会中断数十秒'
+            })
+          : Promise.resolve(window.confirm(
           '确定要用这份快照还原 Session 吗？\n\n' +
           '快照: ' + it.name + '\n' +
           '位置: ' + where + kind + '\n' +
@@ -2231,9 +2367,10 @@
           '2) 短暂停止下载后端容器，把 td.binlog 与管理台凭据写回；\n' +
           '3) 自动重新启动后端容器。\n\n' +
           '期间下载会中断数十秒，确定继续？'
-        );
+        ));
+        confirmRestore.then(function (ok) {
         if (!ok) return;
-        this.restoring = true;
+        self.restoring = true;
         fetch('/api/session/restore', {
           method: 'POST',
           headers: {
@@ -2252,6 +2389,7 @@
         }).catch(function () {
           self.restoring = false;
           window.__toast('还原请求失败', 'error', '网络连接超时或异常');
+        });
         });
       }
     };
@@ -3041,6 +3179,63 @@
             }
           })
           .catch(function () {});
+      },
+      /* 删除失败记录：从告警中心移除死记录（只删记录，不动文件本体）。
+         即时生效 + toast 反馈，无确认框（用户交互偏好）。
+         前端本地同步移除，让按钮点击立即消失而不是等 load() 回来。 */
+      dismissOne: function (id) {
+        var self = this;
+        fetch('/api/archive/failed/dismiss', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ jobId: id })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) {
+              self.failedJobs = self.failedJobs.filter(function (j) { return j.id !== id; });
+              self.total = Math.max(0, self.total - (d.deletedCount || 0));
+              window.__toast('已删除', 'success',
+                (d.message || '已从告警中心移除该失败记录'));
+            } else {
+              window.__toast('删除失败', 'error', (d && d.message) || '无法删除该记录');
+              self.load();
+            }
+          })
+          .catch(function (e) {
+            window.__toast('删除请求失败', 'error', '网络异常: ' + e);
+          });
+      },
+      /* 一键清空全部失败记录（告警中心右上角，全删无遗漏）。 */
+      dismissAll: function () {
+        var self = this;
+        var n = this.failedJobs.length;
+        if (!n) return;
+        fetch('/api/archive/failed/dismiss', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ allFailed: true })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) {
+              self.failedJobs = [];
+              self.total = 0;
+              window.__toast('已清空', 'success',
+                (d.message || ('已删除 ' + n + ' 条失败记录')));
+            } else {
+              window.__toast('清空失败', 'error', (d && d.message) || '无法删除失败记录');
+            }
+          })
+          .catch(function (e) {
+            window.__toast('清空请求失败', 'error', '网络异常: ' + e);
+          });
       }
     };
   };

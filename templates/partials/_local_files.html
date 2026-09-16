@@ -59,7 +59,7 @@
     <div class="t-body">
       <div class="t-name" title="{{ f.filename }}">{{ f.filename }}</div>
       <div class="t-meta tnum">{{ f.size }} · {{ f.source }}</div>
-      <div class="row" style="gap:6px;margin-top:6px;">
+      <div class="row card-actions" style="gap:6px;">
         <button class="btn sm primary" style="flex:1;justify-content:center;"
                 {% if not ab.enabled %}disabled{% endif %}
                 title="{{ ab.title }}"

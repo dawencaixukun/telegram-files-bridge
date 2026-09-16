@@ -5,10 +5,11 @@ core/templates.py — Jinja2 模板渲染配置、状态映射与过滤器
 提供 Jinja2Templates 实例、静态资源处理与全局模板过滤器。
 """
 from typing import Any, Dict, List, Optional, Tuple
+import os
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from core.config import (
-    TEMPLATES_DIR, _fmt_size, _fmt_time, _fmt_dur
+    TEMPLATES_DIR, STATIC_DIR, _fmt_size, _fmt_time, _fmt_dur
 )
 
 
@@ -26,6 +27,42 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 templates.env.filters["fmt_size"] = _fmt_size
 templates.env.filters["fmt_time"] = _fmt_time
 templates.env.filters["fmt_dur"] = _fmt_dur
+
+
+# ---------------------------------------------------------------------
+# 静态资源版本戳：按文件内容哈希自动生成
+# ---------------------------------------------------------------------
+# 历史缺陷（用户可见）：base.html 里把版本写成手写的固定字符串
+# （main.css?v=20260910_v4 / app.js?v=20260910_v4）。改了 CSS/JS 后忘了改这个
+# 字符串，浏览器就继续用本地缓存里的旧文件（Cache-Control: max-age=86400，
+# 一天内不会回源）——用户刷新也看不到改动，报「改了没生效」。
+# 实测：main.css 加了 .cap-btn 胶囊样式并重启服务，服务端返回的 CSS 已含新样式，
+# 但 URL 仍是 ?v=20260910_v4，浏览器拿的是这条 URL 的旧缓存 → 页面毫无变化。
+# 现在改成读文件内容算哈希：内容一变 URL 就变，缓存自动失效，无需人工维护。
+import hashlib as _hashlib  # noqa: E402
+
+
+def _asset_version(rel_path: str) -> str:
+    """返回静态资源的内容哈希前 10 位；读不到时退回 '0'（不阻塞渲染）。"""
+    try:
+        full = os.path.join(STATIC_DIR, rel_path)
+        with open(full, "rb") as fh:
+            return _hashlib.sha256(fh.read()).hexdigest()[:10]
+    except OSError:
+        return "0"
+
+
+def _asset_versions() -> Dict[str, str]:
+    """一次算好模板用到的全部版本戳（每请求调用，文件小、开销可忽略）。"""
+    return {
+        "tokens_css": _asset_version("css/tokens.css"),
+        "main_css": _asset_version("css/main.css"),
+        "app_js": _asset_version("js/app.js"),
+        "ui_confirm_js": _asset_version("js/ui_confirm.js"),
+    }
+
+
+templates.env.globals["asset_v"] = _asset_versions
 
 
 def _stages(status: str, rec: Optional[Dict[str, Any]] = None, arch_job: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:

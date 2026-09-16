@@ -122,6 +122,17 @@
       <input class="input" type="search" id="browseManageSearch" placeholder="筛选会话…" autocomplete="off"
              oninput="window.__browseManageFilter(this.value)" style="margin-bottom:12px;">
     </div>
+    <div style="padding:0 20px 10px;">
+      <div class="manage-group" style="position:static;background:none;padding:0 8px 6px;">
+        转发即下载
+      </div>
+      <p style="font-size:12px;color:var(--text-3);margin:0 0 8px;line-height:1.5;padding:0 8px;">
+        开关打开后，把视频<b style="color:var(--text-1);">转发到收藏</b>即自动下载并转存网盘（免翻页面勾选）。
+        归档目录默认 <code style="font-size:11px;">/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}</code>，可在订阅页修改。
+        想监听其它会话：在订阅页新建规则并打开监听，这里会出现对应开关。
+      </p>
+      <div id="browseWatchList" style="padding:0 8px;"></div>
+    </div>
     <div class="manage-list" id="browseManageList">
       <div class="manage-empty">正在加载会话…</div>
     </div>
@@ -258,28 +269,133 @@
 
   /* ---------------- 管理会话弹窗 ---------------- */
   window.__BROWSE_MANAGE = { tree: [], hidden: {}, q: '' };
+  /* 转发即下载状态：watchRules = chatKey("tg:chat") -> 规则信息；
+     watchOn = chatKey -> 开关是否打开（渲染与失败回滚共用）。 */
+  window.__BROWSE_MANAGE.watchRules = {};
+  window.__BROWSE_MANAGE.watchOn = {};
+
+  /* ---- 转发即下载：加载状态 + 渲染开关列表 ---- */
+  window.__browseLoadWatchRules = function () {
+    return fetch('/browse/watch-rules', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) throw new Error((d && d.message) || '加载失败');
+        window.__BROWSE_MANAGE.watchRules = d.rules || {};
+        window.__BROWSE_MANAGE.watchOn = {};
+        Object.keys(window.__BROWSE_MANAGE.watchRules).forEach(function (k) {
+          window.__BROWSE_MANAGE.watchOn[k] = true;
+        });
+      });
+  };
+
+  window.__browseRenderWatch = function () {
+    var box = document.getElementById('browseWatchList');
+    if (!box) return;
+    var q = (window.__BROWSE_MANAGE.q || '').toLowerCase();
+    var esc = window.__escHtml || function (s) { return String(s); };
+    /* 只列出两类会话的开关，其它会话不出现：
+       1. 收藏（saved）—— 转发即下载的主入口，恒显示；
+       2. 已在订阅页手动开了监听（watch）的会话 —— 让用户能在面板里关掉它。 */
+    var watchKeys = window.__BROWSE_MANAGE.watchRules || {};
+    var html = '';
+    var shown = 0;
+    (window.__BROWSE_MANAGE.tree || []).forEach(function (acc) {
+      (acc.chats || []).forEach(function (c) {
+        var key = String(acc.telegramId) + ':' + String(c.chatId);
+        var isSaved = !!c.saved;
+        var isWatch = !!watchKeys[key];
+        if (!isSaved && !isWatch) return;
+        var title = String(c.title || '聊天');
+        if (q && title.toLowerCase().indexOf(q) === -1) return;
+        var on = !!window.__BROWSE_MANAGE.watchOn[key];
+        shown++;
+        var rowHtml = '<label class="manage-row" title="' + esc(title)
+          + (on ? '：转发即下载已开启（关掉即停止自动下载）' : '：未开启（打开后转发到该会话的视频自动下载）') + '">'
+          + '<span class="manage-title">' + esc(title) + (isSaved ? ' <span class="manage-tag">转发入口</span>' : '') + '</span>'
+          + '<span class="switch"><input type="checkbox" data-watch-key="' + esc(key) + '"'
+          + ' aria-label="转发即下载 ' + esc(title) + '"'
+          + (on ? ' checked' : '') + '><span class="track"></span></span>'
+          + '</label>';
+        html += rowHtml;
+      });
+    });
+    if (!shown) {
+      html = '<div class="manage-empty">没有匹配的会话</div>';
+    }
+    box.innerHTML = html;
+  };
+
+  /* ---- 转发即下载：开关即时生效（无确认，失败回滚 + toast） ---- */
+  window.__browseWatchPost = function (tg, chat, title, on) {
+    return fetch('/browse/watch-rules', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: JSON.stringify({ tg: String(tg), chat: String(chat), title: String(title || ''), on: !!on })
+    }).then(function (r) { return r.json(); });
+  };
+
+  /* 开关事件用 change 委托：与隐藏开关同一监听器风格，但按 data-watch-key 区分 */
+  document.addEventListener('change', function (evt) {
+    var el = evt.target;
+    if (!el || !el.matches || !el.matches('#browseWatchList input[type=checkbox]')) return;
+    var key = el.dataset.watchKey || '';
+    var parts = key.split(':');
+    var tg = parts[0] || '';
+    var chat = parts.slice(1).join(':');
+    var on = !!el.checked;
+    var title = '';
+    var lab = el.closest('.manage-row');
+    if (lab) {
+      var t = lab.querySelector('.manage-title');
+      title = t ? t.textContent : '';
+    }
+    window.__browseWatchPost(tg, chat, title, on).then(function (d) {
+      if (d && d.ok) {
+        if (on) window.__BROWSE_MANAGE.watchOn[key] = true;
+        else delete window.__BROWSE_MANAGE.watchOn[key];
+        if (window.__toast) window.__toast(on ? ('已开启：' + title) : ('已关闭：' + title), 'success', d.message || '');
+      } else {
+        el.checked = !on;  // 回滚 UI，避免显示与服务端不一致
+        if (window.__toast) window.__toast('操作失败', 'error', (d && d.message) || '请重试');
+      }
+    }).catch(function () {
+      el.checked = !on;
+      if (window.__toast) window.__toast('操作失败', 'error', '网络异常，请重试');
+    });
+  });
 
   window.__browseOpenManage = function () {
     var bd = document.getElementById('browseManageBackdrop');
     if (bd) bd.classList.add('show');
     var list = document.getElementById('browseManageList');
     if (list) list.innerHTML = '<div style="color:var(--text-3);font-size:13px;padding:16px 0;">正在加载会话…</div>';
-    fetch('/browse/account-tree', { headers: { 'Accept': 'application/json' } })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (!d || !d.ok) throw new Error((d && d.message) || '加载失败');
-        // hidden = 被隐藏的会话集合（黑名单）。开关 checked = 显示（不在集合里）。
-        var hidden = {};
-        (d.hidden || d.pins || []).forEach(function (c) { hidden[String(c)] = true; });
-        window.__BROWSE_MANAGE.tree = d.tree || [];
-        window.__BROWSE_MANAGE.hidden = hidden;
-        window.__browseRenderManage();
-        window.__browseManageCount();
-      })
-      .catch(function (e) {
-        var msg = window.__escHtml ? window.__escHtml(String(e.message || e)) : String(e.message || e);
-        if (list) list.innerHTML = '<div class="alert error" style="margin:12px 0;">加载会话失败：' + msg + '</div>';
-      });
+    var watchBox = document.getElementById('browseWatchList');
+    if (watchBox) watchBox.innerHTML = '<div style="color:var(--text-3);font-size:13px;padding:10px 0;">正在加载…</div>';
+    // 会话树与监听规则并行加载；树渲染依赖两者（监听列表要用树），一起渲染
+    Promise.all([
+      fetch('/browse/account-tree', { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); }),
+      window.__browseLoadWatchRules()
+    ]).then(function (results) {
+      var d = results[0];
+      if (!d || !d.ok) throw new Error((d && d.message) || '加载失败');
+      // hidden = 被隐藏的会话集合（黑名单）。开关 checked = 显示（不在集合里）。
+      var hidden = {};
+      (d.hidden || d.pins || []).forEach(function (c) { hidden[String(c)] = true; });
+      window.__BROWSE_MANAGE.tree = d.tree || [];
+      window.__BROWSE_MANAGE.hidden = hidden;
+      window.__browseRenderManage();
+      window.__browseRenderWatch();
+      window.__browseManageCount();
+    })
+    .catch(function (e) {
+      var msg = window.__escHtml ? window.__escHtml(String(e.message || e)) : String(e.message || e);
+      if (list) list.innerHTML = '<div class="alert error" style="margin:12px 0;">加载会话失败：' + msg + '</div>';
+      if (watchBox) watchBox.innerHTML = '<div class="alert error" style="margin:12px 0;">加载失败：' + msg + '</div>';
+    });
   };
 
   window.__browseRenderManage = function () {
@@ -324,6 +440,7 @@
   window.__browseManageFilter = function (v) {
     window.__BROWSE_MANAGE.q = String(v || '');
     window.__browseRenderManage();
+    window.__browseRenderWatch();
   };
 
   /* 批量显示/隐藏：只作用于**当前筛选可见**的行。
@@ -700,10 +817,13 @@
       if (badge) {
         badge.innerHTML = '<span class="badge accent">下载中</span>';
       }
-      // 底部按钮 → 禁用下载图标（提交中状态，任务队列页可看进度）
+      // 底部按钮 → 胶囊「已提交」态（与 OpenList 胶囊同构，不再用内联直角小块）
       var foot = card.querySelector('.t-foot');
       if (foot) {
-        foot.innerHTML = '<span class="badge" title="已加入下载队列，进度见任务队列页" style="font-size:11px;color:var(--text-3);background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.25);border-radius:var(--radius-sm);padding:2px 6px;">已提交</span>';
+        foot.innerHTML = '<button type="button" class="cap-btn" disabled ' +
+          'title="已加入下载队列，进度见任务队列页">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">' +
+          '<use href="#ic-check"/></svg><span>已提交</span></button>';
       }
     });
   };

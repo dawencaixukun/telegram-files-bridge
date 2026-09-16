@@ -14,7 +14,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from core import *
 from services import *
 
-
+# 「转发即下载」默认目录模板：转发场景会话名统一是收藏，按月份分目录。
+# 用户可在订阅页改掉这条规则的目录模板，这里只是开箱即用的默认值。
+_WATCH_DEFAULT_TEMPLATE = "/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}"
 
 router = APIRouter()
 
@@ -132,6 +134,106 @@ async def browse_clear_pins(request: Request):
         body = {}
     removed = _browse_pins_clear()
     return JSONResponse({"ok": True, "removed": removed, "pins": _browse_pins_all()})
+
+
+@router.get("/browse/watch-rules")
+async def browse_watch_rules():
+    """返回「转发即下载」状态：chatKey => watch 规则 id 映射。
+
+    管理会话面板据此渲染每个会话的开关：一条 watch 订阅规则 = 一个自动下载会话。
+    只输出 watch 规则（普通订阅规则不进这个面板，避免语义混淆）。
+    """
+    rules: Dict[str, Any] = {}
+    for r in _SUB_RULES.values():
+        if not r.get("watch"):
+            continue
+        key = f"{r.get('telegramId')}:{r.get('chatId')}"
+        rules[key] = {
+            "id": r.get("id"),
+            "chatTitle": str(r.get("chatTitle") or ""),
+            "enabled": bool(r.get("enabled")),
+            "dirTemplate": str(r.get("dirTemplate") or ""),
+        }
+    return JSONResponse({"ok": True, "rules": rules})
+
+
+@router.post("/browse/watch-rules")
+async def browse_watch_rules_set(request: Request):
+    """设置单个会话的「转发即下载」开关（无确认、即时落盘）。
+
+    体：{"tg": "<telegramId>", "chat": "<chatId>", "title": "<会话名>", "on": true|false}
+    on=true  => 建一条 watch=True 的订阅规则（默认目录模板，订阅页可改）
+    on=false => 删除该会话的 watch 规则（规则不存在按成功处理，幂等）
+    开关语义与「管理会话」一致：拨上去立即生效，成功失败都弹 toast，不弹确认框。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    tg = str(body.get("tg") or "").strip()
+    chat = str(body.get("chat") or "").strip()
+    title = str(body.get("title") or "聊天").strip() or "聊天"
+    on = bool(body.get("on"))
+    if not tg or not chat:
+        return JSONResponse({"ok": False, "message": "缺少账号或会话 ID"}, status_code=400)
+
+    # 定位该会话已有的规则（无论是否 watch —— 同一会话只允许一条规则）
+    existing = None
+    for r in _SUB_RULES.values():
+        if str(r.get("telegramId")) == tg and str(r.get("chatId")) == chat:
+            existing = r
+            break
+
+    if on:
+        if existing is not None:
+            # 已有规则：只翻 watch 开关，不动用户的目录模板等配置
+            if not existing.get("watch"):
+                existing["watch"] = True
+                _subs_save()
+            return JSONResponse({"ok": True, "on": True, "ruleId": existing.get("id"),
+                                 "message": "已开启：新转发将自动下载并归档"})
+        if len(_SUB_RULES) >= _SUBS_MAX_RULES:
+            return JSONResponse({"ok": False, "message": "规则数量已达上限（%d 条）" % _SUBS_MAX_RULES})
+        # 默认目录不写死网盘前缀（各机器 OpenList 挂载不同：本机是 /阿里云盘，34 是 /onedrive…）。
+        # 以归档设置里的 defaultDir 为根（用户在设置页自己配的、必然是其 OpenList 实际存在的挂载）；
+        # 未配置则拒绝开启并明确引导，绝不瞎猜挂载名（瞎猜 = "storage not found" 归档全挂）。
+        base_dir = str(_ARCHIVE_CONFIG.get("defaultDir") or "").strip().rstrip("/")
+        if not base_dir or base_dir == "/":
+            return JSONResponse({
+                "ok": False,
+                "message": "请先在「归档设置 → 默认归档目录」里配置你的网盘目录（如 /onedrive 或 /阿里云盘），再开启转发即下载",
+            })
+        rule = {
+            "id": secrets.token_hex(6),
+            "telegramId": tg,
+            "chatId": chat,
+            "chatTitle": title,
+            "enabled": True,
+            "priority": 0,
+            "dirTemplate": f"{base_dir}/tg-archive/{{chat_title}}/{{YYYY-MM}}",
+            "deleteLocal": True,
+            "policy": "skip",
+            "watch": True,
+            "created_at": time.time(),
+            "stats": {"enqueued": 0, "done": 0, "failed": 0, "last_hit_at": 0.0},
+        }
+        _SUB_RULES[rule["id"]] = rule
+        _subs_save()
+        LOG_STORE.append("INFO", "开启转发即下载：%s（监听新消息自动下载归档）" % title)
+        return JSONResponse({"ok": True, "on": True, "ruleId": rule["id"],
+                             "message": "已开启：新转发将自动下载并归档"})
+
+    # on=false：关掉监听。普通订阅规则只关 watch 开关（保留归档配置）；
+    # 没有规则视为从未开启，幂等返回成功。
+    if existing is None:
+        return JSONResponse({"ok": True, "on": False, "message": "已关闭"})
+    if existing.get("watch"):
+        existing["watch"] = False
+        _subs_save()
+        LOG_STORE.append("INFO", "关闭转发即下载：%s" % str(existing.get("chatTitle") or title))
+    return JSONResponse({"ok": True, "on": False, "message": "已关闭"})
 
 
 @router.get("/partials/browse-files", response_class=HTMLResponse)

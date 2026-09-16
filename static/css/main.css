@@ -1223,6 +1223,11 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   border-radius: var(--radius-card);
   overflow: hidden;
   transition: transform var(--dur-med) var(--ease), box-shadow var(--dur-med) var(--ease);
+  /* 卡片做成纵向 flex：缩略图固定、内容区撑满、底部操作区贴底。
+     见下方 .t-body / .t-foot 说明 —— 这是「胶囊按钮七上八下」的根治点。 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 .thumb:hover { transform: translateY(-3px); box-shadow: var(--glass-shadow); }
 .thumb .t-img {
@@ -1232,6 +1237,7 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   place-items: center;
   color: var(--text-3);
   position: relative;
+  flex: none;                          /* 缩略图不吃弹性空间，始终 16:10 */
 }
 .thumb .t-img svg { width: 34px; height: 34px; }
 /* 本地在存网格真实缩略图（同 browse-card：铺满 16:10 框，徽标浮于其上） */
@@ -1244,9 +1250,67 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   inset: 0;
 }
 .thumb .t-img .t-badge { position: absolute; top: 10px; right: 10px; }
-.thumb .t-body { padding: var(--space-3) var(--space-4) var(--space-4); }
-.thumb .t-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; word-break: break-word; }
-.thumb .t-meta { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-bottom: var(--space-3); }
+.thumb .t-body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  /* 内容区吃掉剩余高度，成为纵向 flex 的容器，让 .t-foot 能贴底 */
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.thumb .t-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  word-break: break-word;
+  /* 固定两行高度：无论标题 1 行还是 3 行，标题块都占同样高度，
+     保证「缩略图 → 标题 → 元信息 → 操作行」的纵向节奏在所有卡片上一致。
+     历史缺陷：只有 browse 页做了 clamp，云端归档页/本地在存页没有，
+     短标题的卡片按钮会明显偏高（用户报「胶囊七上八下」）。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: calc(2em * 1.5);         /* = 两行高度（line-height 1.5 继承自 body） */
+}
+/* 标题独占两行的卡片里，元信息行也需要固定高度，否则 1 行/2 行标题
+   会让下面的操作行再错一次位。 */
+.thumb .t-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--space-3);
+  min-height: calc(1em * 1.5);
+}
+
+/* ---- 卡片底部操作行：整行贴底，按钮纵向对齐 ----
+   历史缺陷（用户可见：「胶囊按钮每个页面排序都不一致，七上八下」）：
+   卡片是纯块级流，.t-name 没有行数上限，标题 1 行 / 2 行 / 3 行时
+   下面的 .t-meta 与 .t-foot 被逐级推下去；同行卡片虽然被 grid 拉成等高，
+   但内容顶端对齐，于是底部的 OpenList / 本地在存 / 下载 胶囊在每张卡上
+   高度各不相同。
+
+   修法（三处配合，缺一不可）：
+     1. .thumb 纵向 flex + height:100%（grid 项默认 stretch，已有整行等高）
+     2. .t-body flex:1（吃掉剩余空间）+ .t-foot margin-top:auto（贴到最底）
+     3. .t-name 固定两行高度（下方 .thumb .t-name 的 clamp），
+        这样即使只有一行标题，卡片内部节奏也完全一致。 */
+.thumb .t-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: auto;                    /* 关键：把操作行压到卡片最底部 */
+  min-height: 30px;
+  flex: none;
+}
+/* 本地在存页的操作行用的是 .row 而非 .t-foot（内含归档+删除两个按钮），
+   同样必须贴底，否则标题行数变化照样把按钮推得七上八下。 */
+.thumb .card-actions {
+  margin-top: auto;
+  flex-wrap: nowrap;
+  flex: none;
+}
 
 /* segmented control (view toggle) */
 .seg {
@@ -1930,9 +1994,11 @@ html.theme-anim *::after {
 .browse-card .t-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--space-2);
   min-height: 30px;
+  margin-top: auto;                    /* 与通用 .thumb .t-foot 一致：贴底 */
+  flex: none;
 }
 .browse-card .t-foot .sub { margin-top: 0; }
 
@@ -1992,6 +2058,54 @@ html.theme-anim *::after {
   background: rgba(56, 189, 248, 0.16);
   color: var(--brand-b);
 }
+
+/* ---- 卡片底部的通用胶囊按钮（.cap-btn）----
+   与 OpenList 胶囊（.pill-group）同构，让同排操作按钮形状统一：
+   圆角药丸 + 图标 + 文字，纵向节奏一致，悬停抬起。
+
+   历史缺陷：
+   1. 下载按钮是 30×30 圆角方块 .icon-btn.xs 纯图标，和旁边的 OpenList
+      胶囊明显不是一个形状（用户圈出要求「做成 OpenList 这样的胶囊」）；
+   2. 提交成功后的「已提交」态是内联样式的直角小块（用户第二条红线），
+      同样与胶囊不一致。
+   现统一走 .cap-btn 一套几何：pill 圆角、图标 11px、字号 11px/600，
+   与 .pill-group .seg 逐项对齐，保证同排等高不错位。 */
+.cap-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;                          /* 不被卡片 flex 挤压变形 */
+  margin-left: auto;                   /* 右对齐（与旧 .badge / .pill-group 一致） */
+  padding: 5px 10px;                   /* 与 .pill-group .seg 逐项一致，同排等高 */
+  border-radius: var(--radius-pill);   /* 胶囊：与 OpenList 同一圆角 */
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;                 /* 绝不换行（历史缺陷：文字被挤成竖排） */
+  min-width: 0;
+  cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  color: var(--text-1);
+  transition: background var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
+}
+.cap-btn svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  display: block;                      /* 与文字同排，不参与基线穿模 */
+}
+.cap-btn:hover { color: var(--text-1); background: var(--hover-bg); border-color: rgba(148,163,184,.4); }
+
+/* 下载：品牌青，主操作色（与 OpenList 的绿同权重） */
+.cap-btn.cap-dl { color: var(--brand-b); background: rgba(56, 189, 248, 0.10); border-color: rgba(56, 189, 248, 0.28); }
+.cap-btn.cap-dl:hover { background: rgba(56, 189, 248, 0.18); color: var(--brand-b); border-color: rgba(56, 189, 248, 0.45); }
+
+[data-theme="light"] .cap-btn.cap-dl { color: #0284c7; background: rgba(2, 132, 199, 0.08); border-color: rgba(2, 132, 199, 0.30); }
+[data-theme="light"] .cap-btn.cap-dl:hover { background: rgba(2, 132, 199, 0.14); }
 /* 浅色主题下的对比度微调 */
 [data-theme="light"] .pill-group { border-color: rgba(16, 150, 110, 0.32); background: rgba(16, 185, 129, 0.08); }
 [data-theme="light"] .pill-group .seg { color: #0e9f6e; }
@@ -2681,3 +2795,36 @@ html.theme-anim *::after {
 #browseManageList::-webkit-scrollbar-thumb {
   border-width: 2px;
 }
+
+/* ---------- 全局确认弹窗 __uiConfirm / 输入弹窗 __uiPrompt ---------- */
+.ui-confirm-backdrop { z-index: 120; }
+.ui-confirm { max-width: 420px; padding: var(--space-5); }
+.ui-confirm-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
+.ui-confirm-head h2 { margin: 0; font-size: 17px; }
+.ui-confirm-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(139, 92, 246, 0.16); color: var(--brand);
+}
+.ui-confirm-icon .icon { width: 18px; height: 18px; }
+.ui-confirm-icon.danger { background: rgba(248, 113, 113, 0.16); color: var(--err); }
+.ui-confirm-body { display: flex; flex-direction: column; gap: var(--space-2); }
+.ui-confirm-text { font-size: 14px; line-height: 1.6; opacity: 0.9; white-space: pre-line; }
+.ui-confirm-meta {
+  display: flex; gap: var(--space-3); font-size: 13px; line-height: 1.5;
+  padding: 6px 10px; border-radius: 8px;
+  background: rgba(127, 127, 127, 0.08);
+}
+.ui-confirm-meta-k { opacity: 0.55; flex-shrink: 0; }
+.ui-confirm-meta-v { word-break: break-all; }
+.ui-confirm-warn {
+  font-size: 13px; color: var(--err); margin-top: var(--space-1);
+  display: flex; align-items: center; gap: 6px;
+}
+.ui-confirm-warn::before { content: '!'; font-weight: 700; flex-shrink: 0;
+  width: 16px; height: 16px; border-radius: 50%; font-size: 11px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(248, 113, 113, 0.18); }
+.ui-confirm-foot { margin-top: var(--space-5); }
+.ui-confirm-field { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-2); }
+.ui-confirm-field label { font-size: 13px; opacity: 0.7; }

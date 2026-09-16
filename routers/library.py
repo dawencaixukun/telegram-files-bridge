@@ -8,6 +8,7 @@ import re
 import time
 import json
 import asyncio
+import posixpath
 from typing import Any, Dict, List, Optional, Tuple, Union
 from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
@@ -288,6 +289,126 @@ async def library_cloud_delete(request: Request):
         "cleanedJobs": len(to_pop),
         "errors": errors,
         "message": f"成功删除 {len(deleted_paths) or len(to_pop)} 个云端记录" if not errors else f"已处理删除，存在 {len(errors)} 个报错"
+    }
+
+
+@router.post("/library/cloud/rename")
+@router.post("/archive/cloud/rename")
+async def library_cloud_rename(request: Request):
+    """网页端重命名已归档文件：OpenList 云端 fs/rename + 本地归档记录回写。
+
+    请求体：{"remotePath": "/网盘/目录/旧名.mkv", "newName": "新名字.mkv", "jobId": "可选"}
+    约束：
+    - 只允许改最后一段（文件名），目录不动 —— 目录改名会破坏整套 remote_dir/模板语义；
+    - 新名字禁出现路径分隔符与控制字符；不带扩展名时自动沿用旧名后缀；
+    - 改名成功后回写 _ARCHIVE_JOBS 中所有 remote_path 匹配的 job（done 记录），
+      保证「管理台云端页 / OpenList 直链 / 取回」三处口径一致。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "message": "请求体格式错误"}, status_code=400)
+
+    old_path = str(body.get("remotePath") or "").strip().replace("\\", "/")
+    new_name = str(body.get("newName") or "").strip()
+    if not old_path or old_path == "/":
+        return JSONResponse({"ok": False, "message": "缺少云端路径"}, status_code=400)
+    if not new_name:
+        return JSONResponse({"ok": False, "message": "请输入新文件名"}, status_code=400)
+    if "/" in new_name or "\\" in new_name or any(ord(ch) < 32 for ch in new_name):
+        return JSONResponse({"ok": False, "message": "新文件名不能包含路径分隔符或控制字符"}, status_code=400)
+    if new_name in (".", ".."):
+        return JSONResponse({"ok": False, "message": "新文件名不合法"}, status_code=400)
+
+    old_path_norm = posixpath.normpath("/" + old_path.lstrip("/"))
+    old_name = posixpath.basename(old_path_norm)
+    parent_dir = posixpath.dirname(old_path_norm)
+    if not old_name or not parent_dir or parent_dir == "/":
+        return JSONResponse({"ok": False, "message": "云端路径不合法（无法解析目录）"}, status_code=400)
+    if new_name == old_name:
+        return JSONResponse({"ok": True, "changed": False, "newPath": old_path_norm,
+                             "message": "名字未变化"})
+
+    # 扩展名保护：用户忘了写后缀时自动沿用旧后缀（否则云端文件会丢类型，播放器/刮削器认不出）
+    if not posixpath.splitext(new_name)[1] and posixpath.splitext(old_name)[1]:
+        new_name += posixpath.splitext(old_name)[1]
+
+    new_path = posixpath.join(parent_dir, new_name)
+
+    # 目标名冲突预检：OpenList 的 rename 对"已存在同名"的行为不可靠，先 fs/list 查重。
+    token = ""
+    try:
+        token = await _openlist_token()
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": f"OpenList 未就绪: {e}"}, status_code=502)
+
+    try:
+        resp = await _openlist_client.post(
+            "/api/fs/list",
+            json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
+            headers={"Authorization": token})
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _openlist_client.post(
+                "/api/fs/list",
+                json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
+                headers={"Authorization": token})
+            code, data, msg = _openlist_env(resp)
+        if code == 200:
+            existing = {str(c.get("name") or "") for c in (data.get("content") or [])}
+            if new_name in existing:
+                return JSONResponse({"ok": False,
+                                     "message": f"云端目录已存在同名文件「{new_name}」，请换一个名字"},
+                                    status_code=409)
+        # 列目录失败不阻断：交给 rename 本身报错
+    except Exception as e:  # noqa: BLE001
+        log.warning("改名预检列目录失败（继续尝试 rename）: %s", e)
+
+    # ---- 执行 OpenList fs/rename ----
+    try:
+        resp = await _openlist_client.post(
+            "/api/fs/rename",
+            json={"path": old_path_norm, "name": new_name},
+            headers={"Authorization": token})
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _openlist_client.post(
+                "/api/fs/rename",
+                json={"path": old_path_norm, "name": new_name},
+                headers={"Authorization": token})
+            code, data, msg = _openlist_env(resp)
+        if resp.status_code != 200 or code != 200:
+            raise RuntimeError(msg or f"OpenList 返回业务码 {code}")
+    except Exception as e:  # noqa: BLE001
+        log.error("云端改名失败 (%s -> %s): %s", old_path_norm, new_name, e)
+        return JSONResponse({"ok": False, "message": f"云端改名失败: {e}"}, status_code=502)
+
+    # ---- 回写本地归档记录（所有 remote_path 匹配的 job）----
+    old_lc = old_path_norm.lower()
+    changed = 0
+    for j in _ARCHIVE_JOBS.values():
+        if str(j.get("remote_path") or "").strip().replace("\\", "/").lower() == old_lc:
+            j["remote_path"] = new_path
+            if str(j.get("filename") or "") == old_name or posixpath.splitext(str(j.get("filename") or ""))[0] == posixpath.splitext(old_name)[0]:
+                j["filename"] = new_name
+            if str(j.get("raw_filename") or "") == old_name:
+                j["raw_filename"] = new_name
+            changed += 1
+    if changed:
+        _archive_save()
+        log.info("云端改名成功: %s -> %s（回写 %d 条归档记录）", old_path_norm, new_path, changed)
+
+    return {
+        "ok": True,
+        "changed": True,
+        "newPath": new_path,
+        "newName": new_name,
+        "updatedJobs": changed,
+        "message": f"已改名「{old_name}」→「{new_name}」",
     }
 
 

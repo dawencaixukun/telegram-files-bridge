@@ -26,6 +26,17 @@ from fastapi.templating import Jinja2Templates
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# base.html 里用 asset_v() 生成静态资源版本戳（按文件内容哈希）。
+# preview_server 是独立于 bridge_server 的第二套 Jinja2Templates 实例，
+# 必须同样注册这个全局，否则渲染 base.html 时 'asset_v' is undefined。
+# （历史缺陷：只给 core/templates.py 注册，preview_server 的页面全崩。）
+try:
+    from core.templates import _asset_versions as _asset_v_func
+    templates.env.globals["asset_v"] = _asset_v_func
+except Exception:  # noqa: BLE001 —— 预览器可独立运行，缺 core 时退回常量
+    templates.env.globals["asset_v"] = lambda: {
+        "tokens_css": "0", "main_css": "0", "app_js": "0"}
+
 app = FastAPI(title="TG 归档台 · 前端预览")
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 

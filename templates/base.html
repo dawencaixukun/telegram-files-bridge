@@ -24,13 +24,18 @@
       } catch (e) { /* default dark */ }
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/tokens.css?v=20260909_v3">
-  <link rel="stylesheet" href="/static/css/main.css?v=20260910_v4">
+  {# 静态资源版本戳由 core/templates.py 的 asset_v() 按文件内容哈希自动生成。
+     绝不要改回手写固定字符串：改了 CSS/JS 但忘了改版本号，浏览器会一直用
+     max-age=86400 的旧缓存，用户刷新也看不到改动（历史缺陷）。 #}
+  {% set _v = asset_v() %}
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ _v.tokens_css }}">
+  <link rel="stylesheet" href="/static/css/main.css?v={{ _v.main_css }}">
   {% block head %}{% endblock %}
   {# 基础运行库与通用胶水统一在 head defer 按序加载：
      htmx -> app.js (先注册全部全局工具函数与组件) -> alpinejs (安全挂载) #}
   <script defer src="/static/js/vendor/htmx.min.js?v=20260902j"></script>
-  <script defer src="/static/js/app.js?v=20260910_v4"></script>
+  <script defer src="/static/js/app.js?v={{ _v.app_js }}"></script>
+  <script defer src="/static/js/ui_confirm.js?v={{ _v.ui_confirm_js }}"></script>
   <script defer src="/static/js/vendor/alpinejs.min.js?v=20260902j"></script>
 </head>
 <body data-page="{% block page_id %}dashboard{% endblock %}"
@@ -266,6 +271,7 @@
       <symbol id="ic-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
       <symbol id="ic-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
       <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+      <symbol id="ic-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
     </defs>
   </svg>
 </body>
