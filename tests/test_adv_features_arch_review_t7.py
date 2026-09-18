@@ -11,13 +11,12 @@ test_adv_features_arch_review_t7.py — Task t7 架构与代码审查同行评�
 import asyncio
 import json
 import os
-import re
 import shutil
 import stat
 import tempfile
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 import bridge_server
 

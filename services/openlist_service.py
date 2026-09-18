@@ -8,16 +8,13 @@ import os
 import time
 import asyncio
 import posixpath
-from urllib.parse import quote, urlparse
-from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
+from typing import Any, Dict, Optional, Tuple
 import httpx
 from fastapi.responses import JSONResponse
-from core.config import (
-    OPENLIST_URL, _archive_norm_dir
-)
+from core.config import OPENLIST_URL, _archive_norm_dir
 from core.state import (
-    _OPENLIST, _openlist_client, _openlist_upload_client,
-    _openlist_save, _openlist_update_base_url, _archive_save, _ARCHIVE_CONFIG
+    _OPENLIST, _openlist_client, _openlist_upload_client, _openlist_save, _archive_save, _ARCHIVE_CONFIG
 )
 from core.logging import log
 

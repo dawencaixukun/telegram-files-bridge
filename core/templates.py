@@ -18,8 +18,8 @@ class CachedStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):
         resp = await super().get_response(path, scope)
-        if getattr(resp, "status_code", 500) == 200:
-            resp.headers["Cache-Control"] = "public, max-age=86400"
+        if 200 <= getattr(resp, "status_code", 500) < 300:
+            resp.headers.setdefault("Cache-Control", "public, max-age=86400")
         return resp
 
 

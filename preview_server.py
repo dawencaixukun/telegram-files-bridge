@@ -272,9 +272,6 @@ ALERTS = [
     {"title": "任务 #101 下载完成", "time": "08:31:57", "color": "var(--ok)", "unread": False},
 ]
 
-# 任务状态机六态 + 失败，保证每种至少一条
-STATUS_OPTIONS = ["pending", "download", "downloaded", "verify", "upload", "archived", "isolated", "failed"]
-
 
 def _stats():
     """模拟 dashboard 数据（与 bridge_server._dashboard_stats 同形：

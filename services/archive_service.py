@@ -16,23 +16,14 @@ from core.config import (
     _ensure_archive_ext, _same_file_name,
 )
 from core.state import (
-    _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS,
-    _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save,
-    _archive_config_save, _archive_sem, _TASKS_CACHE,
-    _archive_registry_lookup, _ARCH_PILL, _archive_public,
-    _archive_state_of, _archive_active_of, _archive_latest_raw_of
+    _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS, _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save, _archive_config_save, _archive_sem, _archive_registry_lookup, _archive_public, _archive_state_of, _archive_latest_raw_of
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
 from services.openlist_service import (
-    _openlist_token, _openlist_relogin, _openlist_mkdir_tree,
-    _openlist_exists, _openlist_put_once, _openlist_ready,
-    _openlist_direct_url, _openlist_client, _openlist_env,
-    _OpenListAuthErr, _openlist_stat
+    _openlist_token, _openlist_relogin, _openlist_mkdir_tree, _openlist_put_once, _openlist_ready, _openlist_direct_url, _openlist_client, _openlist_env, _OpenListAuthErr, _openlist_stat
 )
-from services.notification_service import (
-    notify_archive_success, notify_archive_failed
-)
+from services.notification_service import notify_archive_success, notify_archive_failed
 from services.bot_command_service import remember_archive_error as _remember_archive_error
 
 _ARCHIVE_TASKS: Dict[str, Any] = {}
@@ -98,9 +89,7 @@ def _enrich_archive(f: Dict[str, Any], openlist_ready: bool,
     return f
 
 
-from services.watermark_service import (
-    _safe_delete_local_path, _notify_backend_remove_uid, _delete_local_file_by_job
-)
+from services.watermark_service import _delete_local_file_by_job
 
 
 async def _archive_worker(job: Dict[str, Any]) -> None:
@@ -363,7 +352,6 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
     # 联查数据源二辅助：回源 Java 后端原始 /api/files 记录（不经
     # downloadStatus 过滤）。独立成闭包便于测试 patch 与复用。
     async def _raw_files():
-        from core.backend import BACKEND
         _r = await BACKEND.list_all_files_page_info(force=False)
         return list(BACKEND._unwrap_files(_r) or [])
 

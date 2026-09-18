@@ -3,21 +3,14 @@
 """
 routers/browse.py — 表现层路由模块：Telegram 频道资源浏览与文件批量下载
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import time
+from typing import Any, Dict, List
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 # 「转发即下载」默认目录模板：转发场景会话名统一是收藏，按月份分目录。
-# 用户可在订阅页改掉这条规则的目录模板，这里只是开箱即用的默认值。
-_WATCH_DEFAULT_TEMPLATE = "/阿里云盘/tg-archive/{chat_title}/{YYYY-MM}"
-
 router = APIRouter()
 
 @router.get("/browse", response_class=HTMLResponse)
@@ -359,32 +352,14 @@ async def browse_download(request: Request):
         return JSONResponse({"ok": False, "message": msg, "skippedDup": skipped_dup})
 
     # 磁盘高低水位熔断保护：85% 熔断挂起 / 75% 唤醒
-    high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-    if high_exceeded:
-        await _disk_guard_check()
-        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-
-    if high_exceeded:
-        low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
-        enqueued_count = _enqueue_waiting_disk_files(raw, payload_files, cur_pct, high_threshold, low_threshold)
-        global _TASKS_CACHE
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
-        msg = f"本地磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），新提交的 {enqueued_count} 个任务已安全置入 waiting_disk 挂起队列，等待磁盘回落至 {low_threshold:.1f}% 以下自动恢复调度"
-        log.warning("磁盘水位熔断拦截 [/browse/download]：%s", msg)
-        return JSONResponse({
-            "ok": False,
-            "code": "DISK_WATERMARK_EXCEEDED",
-            "state": "waiting_disk",
-            "count": enqueued_count,
-            "message": msg,
-            "skippedDuplicates": skipped_dup
-        })
+    guard = await _disk_guard_or_enqueue(raw, payload_files, "/browse/download")
+    if guard is not None:
+        guard["skippedDuplicates"] = skipped_dup
+        return JSONResponse(guard)
 
     try:
         await BACKEND.start_download_multiple({"files": payload_files})
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None  # 任务页/角标立即可见新任务
+        _tasks_cache_invalidate()  # 任务页/角标立即可见新任务
         # 关键：/files 在 BackendClient._cached 还有独立 TTL 缓存，不清的话
         # 任务重建拿到的是提交前的旧数据 —— 新任务既进不了任务列表，也触发不了告警
         BACKEND._cache.clear()

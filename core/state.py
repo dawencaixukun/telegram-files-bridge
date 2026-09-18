@@ -13,10 +13,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from core.config import (
-    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _WAITING_DISK_TASKS_MAX,
-    _ARCHIVE_FILE, _ARCHIVE_CFG_FILE, _SUBS_FILE, _SUBS_RULES_MAX,
-    _NOTIFY_FILE, _OPENLIST_FILE, _SESSION_BACKUP_STATUS_FILE,
-    _FLOOD_WAIT_FILE, _mask_token, _same_file_name,
+    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _mask_token, _same_file_name
 )
 from core.logging import log
 
@@ -41,7 +38,16 @@ _FLOOD_WAIT_TIMER_TASK: Optional[asyncio.Task] = None
 # ---------------------------------------------------------------------
 _TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
 
+
+def _tasks_cache_invalidate() -> None:
+    """任务列表缓存统一失效入口（新任务入队/任务取消/状态变更后调用）。"""
+    global _TASKS_CACHE
+    _TASKS_CACHE["expire"] = 0.0
+    _TASKS_CACHE["value"] = None
+
+
 _WAITING_DISK_TASKS: Dict[str, Dict[str, Any]] = {}
+_WAITING_DISK_TASKS_MAX = 500  # 挂起队列上限：超过后拒绝新挂起入队（防无界增长）
 
 # ---------------------------------------------------------------------
 # 3. 归档与取回状态
@@ -130,7 +136,6 @@ _openlist_upload_client = httpx.AsyncClient(
     follow_redirects=False,
     trust_env=False,
 )
-_OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 _OPENLIST: Dict[str, Any] = {}
 
 # ---------------------------------------------------------------------
@@ -221,9 +226,7 @@ def _trigger_flood_wait(account: str = "default", wait_seconds: int = 30, reason
 
     _ensure_flood_wait_timer()
 
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     return new_until
 
 
@@ -269,9 +272,7 @@ def _reset_flood_wait(account: str = "default") -> None:
     _FLOOD_WAIT_STATE["reason"] = ""
     _FLOOD_WAIT_STATE["suspended_tasks"] = {}
     _flood_wait_save()
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     log.info("管理员已强制清除 Telegram FloodWait 冷却状态")
 
 
@@ -279,9 +280,7 @@ async def _wake_flood_wait_tasks() -> int:
     suspended = dict(_FLOOD_WAIT_STATE.get("suspended_tasks", {}))
     _FLOOD_WAIT_STATE["suspended_tasks"].clear()
     _flood_wait_save()
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     woken = len(suspended)
     if woken > 0:
         log.info("已自动唤醒 %d 条 FloodWait 挂起任务", woken)

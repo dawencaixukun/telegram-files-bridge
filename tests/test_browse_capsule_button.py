@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """渲染 _browse_files.html，检查下载按钮已改成胶囊（.cap-btn）。"""
 import os, sys, tempfile, unittest
-from unittest import mock
 
 TMP = tempfile.mkdtemp(prefix="capbtn-")
 os.environ["TG_DATA_DIR"] = TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) or ".")
 
-from test_browse_openlist_button import _render, _row, _cards
+from test_browse_openlist_button import _render, _row
 
 
 class TestCapBtn(unittest.TestCase):

@@ -26,7 +26,6 @@ test_security_audit_t7.py — Task t7: Session 加密、凭据存储与防爆破
    - 消除明文弱口令暴力破解风险 (ED25519 256 位高强度抗爆破)
 """
 import asyncio
-import hashlib
 import io
 import json
 import math
@@ -34,12 +33,11 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import sys
 import tarfile
 import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 import bridge_server
 

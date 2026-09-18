@@ -10,7 +10,7 @@ import json
 import time
 import hashlib
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import httpx
 import websockets
 from core.config import (
@@ -18,9 +18,7 @@ from core.config import (
     CSRF_WHITELIST, TG_API_METHOD_WHITELIST, _CREDS_FILE,
     _pick, _extract_flood_wait_seconds
 )
-from core.state import (
-    _trigger_flood_wait, _TASKS_CACHE
-)
+from core.state import _trigger_flood_wait
 from core.logging import log, HUB, LOG_STORE, _log_line_from_event
 
 _API_PENDING: Dict[str, asyncio.Future] = {}
@@ -208,14 +206,6 @@ class BackendClient:
         self._bs_cache = await self.bootstrap_status()
         self._bs_cache_expire = time.monotonic() + 60
 
-    async def auth_logout(self) -> None:
-        try:
-            await self._request("POST", "/auth/logout")
-        except Exception:  # noqa: BLE001
-            log.warning("后端 logout 调用失败（本地清理照常进行）", exc_info=True)
-        finally:
-            self._cache.clear()
-
     async def list_telegrams(self, force: bool = False) -> List[Dict[str, Any]]:
         return await self._cached("telegrams", lambda: self._request("GET", "/telegrams"), force)
 
@@ -300,12 +290,6 @@ class BackendClient:
                                    params={"link": link, "limit": 50})
         return self._unwrap_files(data)
 
-    async def count_files(self, telegram_id: Any, chat_id: Any) -> Dict[str, Any]:
-        tg = self._safe_id(telegram_id)
-        ch = self._safe_id(chat_id)
-        data = await self._request("GET", f"/telegram/{tg}/chat/{ch}/files/count")
-        return data if isinstance(data, dict) else {}
-
     async def delete_telegram(self, telegram_id: Any) -> Dict[str, Any]:
         tg = self._safe_id(telegram_id)
         data = await self._request("POST", f"/telegram/{tg}/delete", json={})
@@ -323,11 +307,6 @@ class BackendClient:
     async def cancel_download(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         tg = self._safe_id(telegram_id)
         data = await self._request("POST", f"/{tg}/file/cancel-download", json=payload)
-        return data if isinstance(data, dict) else {}
-
-    async def toggle_pause_download(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-        tg = self._safe_id(telegram_id)
-        data = await self._request("POST", f"/{tg}/file/toggle-pause-download", json=payload)
         return data if isinstance(data, dict) else {}
 
     async def remove_file(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -364,11 +343,6 @@ class BackendClient:
 
     async def create_setting(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = await self._request("POST", "/settings/create", json=payload)
-        return data if isinstance(data, dict) else {}
-
-    async def create_telegram(self, proxy_name: str = "") -> Dict[str, Any]:
-        body = {"proxyName": proxy_name} if proxy_name else {}
-        data = await self._request("POST", "/telegram/create", json=body)
         return data if isinstance(data, dict) else {}
 
     async def telegram_api(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -438,38 +412,6 @@ async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
     CHAT_SOURCE_CACHE["key"] = key
     CHAT_SOURCE_CACHE["value"] = value
     return value
-
-
-def _tg_err(e: Exception) -> str:
-    """从 httpx.HTTPError / 后端错误体里提取可读信息。"""
-    resp = getattr(e, "response", None)
-    if resp is not None:
-        try:
-            data = resp.json()
-            err = data.get("error")
-            if isinstance(err, dict):
-                return str(err.get("message") or err.get("code") or resp.status_code)
-            if isinstance(err, str):
-                return err
-        except Exception:  # noqa: BLE001
-            pass
-        return f"后端返回 {resp.status_code}"
-    msg = str(e).strip()
-    return msg if msg else e.__class__.__name__
-
-
-def _tg_err_public(e: Exception) -> str:
-    """客户端安全版错误文案：不回显后端错误结构/内网 URL/部署拓扑。"""
-    resp = getattr(e, "response", None)
-    if resp is not None:
-        code = resp.status_code
-        if code == 429:
-            return "操作过于频繁，请稍后重试"
-        if code in (401, 403):
-            return "没有权限执行该操作，请重新登录后重试"
-        if code >= 500:
-            return "后端服务暂时不可用，请稍后重试"
-    return "操作失败，请重试"
 
 
 def _save_backend_credentials(username: str, password: str) -> None:

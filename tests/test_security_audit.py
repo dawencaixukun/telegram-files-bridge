@@ -8,38 +8,15 @@ test_security_audit.py — 进阶特性深度安全渗透与权限合规专项�
 4. Telegram FloodWait 智能冷却状态机防死锁、防畸形数值 DoS 与并发击穿（Deadlock & DoS Prevention）
 """
 import asyncio
-import inspect
 import json
 import os
-import shutil
-import sys
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from starlette.testclient import TestClient
 import bridge_server
 from bridge_server import (
-    app,
-    _make_portal_token,
-    PORTAL_COOKIE,
-    CSRF_COOKIE,
-    CSRF_HEADER,
-    APP_ROOT_DIR,
-    _FLOOD_WAIT_STATE,
-    _trigger_flood_wait,
-    _is_flood_wait_active,
-    _reset_flood_wait,
-    _get_flood_wait_status,
-    _wake_flood_wait_tasks,
-    _ensure_flood_wait_timer,
-    _render_dir_template,
-    _sub_clean_seg,
-    _archive_norm_dir,
-    _archive_join,
-    _is_safe_subpath,
-    _mask_secret,
-    _OPENLIST,
-    _PROTECTED_MEDIA_EXTENSIONS,
+    app, _make_portal_token, PORTAL_COOKIE, CSRF_COOKIE, CSRF_HEADER, APP_ROOT_DIR, _trigger_flood_wait, _reset_flood_wait, _get_flood_wait_status, _render_dir_template, _sub_clean_seg, _archive_norm_dir, _archive_join, _is_safe_subpath, _OPENLIST
 )
 
 

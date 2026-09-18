@@ -11,7 +11,7 @@ import hashlib
 import hmac as _hmac
 import secrets
 import ipaddress
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from core.config import (

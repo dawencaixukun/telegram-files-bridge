@@ -3,17 +3,15 @@
 """
 routers/library.py — 表现层路由模块：本地/云端资产库浏览、删除、失效清理与云端取回
 """
-import os
-import re
-import time
-import json
-import asyncio
-import posixpath
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import os
+import time
+import asyncio
+import posixpath
+from typing import Any, Dict, List
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 
 
@@ -175,9 +173,7 @@ async def library_local_delete(request: Request):
 
     if deleted:
         BACKEND._cache.clear()
-        global _TASKS_CACHE
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
 
     if not deleted and errors:
         return {"ok": False, "deleted": 0, "errors": errors, "message": errors[0]["message"]}
@@ -524,6 +520,14 @@ async def library_cloud_retrieve(request: Request):
         "finished_at": 0.0,
     }
     _RETRIEVE_JOBS[job["id"]] = job
+    # 超上限裁剪：终态且最旧的先出局，防止取回记录无界累积。
+    if len(_RETRIEVE_JOBS) > _RETRIEVE_JOBS_MAX:
+        _done = sorted(
+            (j for j in _RETRIEVE_JOBS.values()
+             if str(j.get("status") or "") not in ("queued", "running")),
+            key=lambda j: j.get("created_at") or 0.0)
+        for j in _done[: len(_RETRIEVE_JOBS) - _RETRIEVE_JOBS_MAX]:
+            _RETRIEVE_JOBS.pop(j.get("id"), None)
     _RETRIEVE_TASKS[job["id"]] = asyncio.create_task(_retrieve_worker(job))
 
     return {

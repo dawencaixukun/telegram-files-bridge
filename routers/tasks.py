@@ -3,16 +3,11 @@
 """
 routers/tasks.py — 表现层路由模块：任务列表、任务详情、链接直投提交与任务重试/取消
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import time
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 
 
@@ -103,16 +98,9 @@ async def submit_post(request: Request):
     error = ""
     ok_count = 0
     if lines:
-        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-        if high_exceeded:
-            await _disk_guard_check()
-            high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-
-        if high_exceeded:
-            low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
-            enqueued = await _enqueue_waiting_disk_links(lines, cur_pct, high_threshold, low_threshold)
-            error = f"磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），已将 {enqueued} 条下载安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复"
-            _TASKS_CACHE["expire"] = 0.0
+        guard = await _disk_guard_or_enqueue_links(lines, "submit")
+        if guard is not None:
+            error = guard["message"]
             log.warning("磁盘水位熔断拦截 [/submit]：%s", error)
         else:
             ok_count, error = await _resolve_links_to_files(lines, force=force)
@@ -158,6 +146,7 @@ async def task_retry(request: Request):
             "messageId": int(msg_id),
             "fileId": int(file_id),
         })
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已重新加入下载队列"}
     except Exception as e:  # noqa: BLE001
         log.error("任务重试失败: %s", e)
@@ -179,16 +168,13 @@ async def task_cancel(request: Request):
     if unique_id in _WAITING_DISK_TASKS:
         _WAITING_DISK_TASKS.pop(unique_id, None)
         _waiting_disk_save()
-        global _TASKS_CACHE
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
     for tid, w in list(_WAITING_DISK_TASKS.items()):
         if str(w.get("uniqueId")) == unique_id or str(w.get("id")) == unique_id:
             _WAITING_DISK_TASKS.pop(tid, None)
             _waiting_disk_save()
-            _TASKS_CACHE["expire"] = 0.0
-            _TASKS_CACHE["value"] = None
+            _tasks_cache_invalidate()
             return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
 
     rec = _find_task_by_uid(await tasks_all(force=True), unique_id)

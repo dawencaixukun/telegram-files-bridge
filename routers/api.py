@@ -3,16 +3,14 @@
 """
 routers/api.py — 表现层路由模块：全局聚合搜索、文件指纹查重、链接解析与流媒体切片分发
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import JSONResponse
 from core import *
 from services import *
+import os
+import time
+import asyncio
+from typing import Any, Dict, List
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import JSONResponse
 
 
 
@@ -517,26 +515,9 @@ async def api_tg_quick_download(request: Request):
         payload_files = clean_payload
 
     # 磁盘高低水位熔断保护：85% 熔断挂起 / 75% 唤醒
-    high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-    if high_exceeded:
-        await _disk_guard_check()
-        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-
-    if high_exceeded:
-        low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
-        enqueued_count = _enqueue_waiting_disk_files(raw_files or recs, payload_files, cur_pct, high_threshold, low_threshold)
-        global _TASKS_CACHE
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
-        msg = f"本地磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），已将 {enqueued_count} 个任务安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复"
-        log.warning("磁盘水位熔断拦截 [quick-download]：%s", msg)
-        return JSONResponse({
-            "ok": False,
-            "code": "DISK_WATERMARK_EXCEEDED",
-            "state": "waiting_disk",
-            "count": enqueued_count,
-            "message": msg
-        })
+    guard = await _disk_guard_or_enqueue(raw_files or recs, payload_files, "quick-download")
+    if guard is not None:
+        return JSONResponse(guard)
 
     if _is_flood_wait_active():
         st = _get_flood_wait_status()
@@ -572,8 +553,7 @@ async def api_tg_quick_download(request: Request):
             for f in payload_files
         ]
         await BACKEND.start_download_multiple({"files": backend_files})
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
         BACKEND._cache.clear()
 
         log.info("直投下载成功提交 %d 个文件 (auto_archive=%s, dir=%s)", len(payload_files), auto_archive, archive_dir)

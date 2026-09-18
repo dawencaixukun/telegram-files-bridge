@@ -14,7 +14,6 @@
 import time
 import unittest
 from services.task_service import _task_sort_key, tasks_all, _TASK_RANK
-import core.state as _state_mod
 
 
 def _mk(filename, status, age_sec, uid):

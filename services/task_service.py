@@ -17,7 +17,7 @@ from core.config import (
     APP_ROOT_DIR, BASE_DIR, CACHE_TTL, TG_READY, _pick, _pick_id,
     _fmt_size, _fmt_time, _match_size_bucket, _classify_file_type,
     ALLOWED_TG_DOMAINS, RE_TG_PRIVATE, RE_TG_PUBLIC, _LINK_PATTERNS, _tg_err_public,
-    _resolve_host_local_path
+    _resolve_host_local_path, _chat_title, _human_name
 )
 from core.templates import _stages, _spark_points, _speed_chart_points
 from core.state import (
@@ -90,18 +90,6 @@ def _stable_task_id(unique_id: Any, index: int) -> int:
         h = hashlib.sha1(str(unique_id).encode()).hexdigest()[:12]
         return int(h, 16) >> 4
     return index
-
-
-def _human_name(rec: Dict[str, Any]) -> str:
-    name = _pick(rec, "fileName", "filename", "title", "name", "message", default="")
-    if name:
-        return str(name)
-    chat = _pick(rec, "chatTitle", "chat_title", "chatName", "channel", default="")
-    return "文件 " + str(_pick_id(rec) or (chat or ""))
-
-
-def _chat_title(rec: Dict[str, Any]) -> str:
-    return str(_pick(rec, "chatTitle", "chat_title", "chatName", "channel", default=""))
 
 
 def _to_task(rec: Dict[str, Any], index: int, chat_titles: Optional[Dict[str, str]] = None,
@@ -263,22 +251,11 @@ def _to_local_file_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _to_cloud_file_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "archived_time": task.get("_archived_at_formatted") or task.get("time", "—"),
-        "filename": task.get("filename", "—"),
-        "size": task.get("size", "—"),
-        "cloud_path": "—",
-        "status": task.get("status", "archived"),
-    }
-
-
 async def _chat_title_map() -> Dict[str, str]:
     if _CHAT_TITLE_CACHE["expire"] > time.monotonic():
         return _CHAT_TITLE_CACHE["value"] or {}
     out: Dict[str, str] = {}
     try:
-        from core.backend import chat_sources
         sources = await chat_sources()
         for s in sources:
             if s.get("chatId") is not None:
@@ -328,7 +305,6 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
     if have_all_files:
         return tasks
 
-    from core.backend import chat_sources
     try:
         sources = await chat_sources(force=force)
     except Exception as e:  # noqa: BLE001
@@ -469,6 +445,14 @@ def _enrich_download_speed(tasks: List[Dict[str, Any]]) -> None:
         else:
             _DL_SPEED_STATE.pop(uid, None)
             _UL_SPEED_STATE.pop(uid, None)
+
+    # 快照表收敛：终态/离场任务（含后端 idle 重置）不再进任务列表，
+    # 其 uid 快照按清理，防止速率基准无界累积。
+    for _st in (_DL_SPEED_STATE, _UL_SPEED_STATE):
+        if len(_st) > 256:
+            keep = {str(t.get("_unique_id") or "") for t in tasks}
+            for k in [k for k in _st if k not in keep][:-256]:
+                _st.pop(k, None)
 
 
 async def _upload_speed_snapshot() -> float:
@@ -827,9 +811,8 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
     _dl_uids_with_size = set()
     _raw_files = []
     try:
-        from core.backend import BACKEND as _BK
-        _raw = await _BK.list_all_files_page_info(force=False)
-        _raw_files = list(_BK._unwrap_files(_raw) or [])
+        _raw = await BACKEND.list_all_files_page_info(force=False)
+        _raw_files = list(BACKEND._unwrap_files(_raw) or [])
         for f in _raw_files:
             v = f.get("downloadedSize")
             if not v and str(f.get("downloadStatus") or "") == "completed":

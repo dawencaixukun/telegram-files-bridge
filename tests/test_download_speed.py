@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import core.state as core_state
 import services.task_service as ts
 import bridge_server
 from fastapi.testclient import TestClient

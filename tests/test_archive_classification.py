@@ -267,7 +267,6 @@ class TestArchiveClassification(unittest.TestCase):
         import asyncio as _aio
         from services.task_service import _dashboard_stats, _SPEED_HISTORY
         from core.templates import _spark_points
-        from core import state as core_state
 
         now = _t.time()
         tasks = [

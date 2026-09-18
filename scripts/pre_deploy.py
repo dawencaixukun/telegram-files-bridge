@@ -16,7 +16,7 @@ import time
 import argparse
 import subprocess
 import py_compile
-from typing import Dict, List, Set, Tuple
+from typing import Set
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT_DIR not in sys.path:
@@ -176,7 +176,7 @@ def stage3_security_and_credential_audit() -> bool:
     print("  -> deploy.js 与 exec.js 静态审计通过：纯 SSH 私钥免密通道")
 
     # 3. 路由安全门禁审计
-    from core.auth import _is_public, portal_auth_gate, security_headers
+    from core.auth import _is_public
     if _is_public("/tasks") or _is_public("/api/subscriptions") or _is_public("/library/cloud"):
         print("[FAIL] 受保护的业务路由被意外纳入白名单！")
         return False

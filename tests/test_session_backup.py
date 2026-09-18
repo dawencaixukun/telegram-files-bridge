@@ -28,7 +28,6 @@ test_session_backup.py — Telegram Session 异地加密冷备与秒级自愈还
    - 验证 python bridge_server.py --restore-session <file> 能够正确解密并完成就地恢复
 """
 import asyncio
-import hashlib
 import io
 import json
 import os

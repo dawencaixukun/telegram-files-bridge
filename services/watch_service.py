@@ -22,11 +22,11 @@ import asyncio
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from core.state import (
     _SUB_RULES, _ARCHIVE_JOBS, _WATCH_SEEN, _WATCH_SEEN_MAX, _watch_save,
-    _is_flood_wait_active, _get_flood_wait_status,
+    _is_flood_wait_active, _tasks_cache_invalidate
 )
 from core.backend import BACKEND
 from core.logging import log
@@ -123,9 +123,7 @@ async def _enqueue_new(rule: Dict[str, Any], files: List[Dict[str, Any]]) -> int
 
     返回入队条数。
     """
-    from services.watermark_service import (
-        _is_disk_high_watermark_exceeded, _is_disk_low_watermark_reached,
-    )
+    from services.watermark_service import _is_disk_high_watermark_exceeded
 
     payload: List[Dict[str, Any]] = []
     for f in files:
@@ -182,6 +180,7 @@ async def _enqueue_new(rule: Dict[str, Any], files: List[Dict[str, Any]]) -> int
 
     try:
         await BACKEND.start_download_multiple({"files": payload})
+        _tasks_cache_invalidate()
         log.info("监听自动入队 %d 个新文件（rule=%s, chat=%s）",
                  len(payload), rule.get("id"), rule.get("chatId"))
         return len(payload)
@@ -376,20 +375,3 @@ async def watch_loop() -> None:
         return
 
 
-def watch_state() -> Dict[str, Any]:
-    """给设置页/诊断用的监听状态。"""
-    rules = _watch_rules()
-    out = []
-    for r in rules:
-        key = _seen_key(r.get("id"), r.get("chatId"))
-        out.append({
-            "ruleId": r.get("id"),
-            "chatId": str(r.get("chatId") or ""),
-            "chatTitle": str(r.get("chatTitle") or ""),
-            "seen": len(_seen_of(key)),
-        })
-    return {
-        "intervalSec": _WATCH_INTERVAL,
-        "rules": out,
-        "count": len(out),
-    }

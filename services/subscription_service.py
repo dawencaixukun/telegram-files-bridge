@@ -7,14 +7,10 @@ services/subscription_service.py — 自动化订阅与规则匹配引擎
 import os
 import re
 import time
-import asyncio
 from typing import Any, Dict, List, Optional
 from fastapi import Request
 from core.config import _archive_norm_dir
-from core.state import (
-    _SUB_RULES, _ARCHIVE_CONFIG, _subs_save, _archive_config_save
-)
-from core.logging import log
+from core.state import _SUB_RULES, _ARCHIVE_CONFIG, _subs_save, _archive_config_save
 
 _SUB_TPL_PATTERN = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
 _AUTO_ARCHIVE_INTERVAL = float(os.environ.get("BRIDGE_AUTO_ARCHIVE_INTERVAL", "30"))

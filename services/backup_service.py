@@ -26,9 +26,7 @@ from core.config import (
     APP_ROOT_DIR, _SESSION_BACKUP_REMOTE_DIR, _SESSION_BACKUP_MAX_KEEP,
     _SESSION_BACKUP_CONTAINER, _SESSION_BACKUP_PRERESTORE, _archive_norm_dir
 )
-from core.state import (
-    _ARCHIVE_CONFIG, _archive_config_save
-)
+from core.state import _ARCHIVE_CONFIG
 from core.auth import _portal_secret
 from core.logging import log, LOG_STORE
 from services.openlist_service import (
@@ -213,8 +211,8 @@ def _rotate_local_backups(dest_dir: str, keep: int = _SESSION_BACKUP_MAX_KEEP) -
             try:
                 os.remove(path)
                 log.info("已轮转清理旧本地冷备: %s (%.2f GB)", path, sz / (1 << 30))
-            except Exception:
-                pass
+            except OSError as e:
+                log.warning("轮转清理失败（磁盘占用将继续累积）: %s: %s", path, e)
     except Exception as e:
         log.warning("本地冷备轮转异常: %s", e)
 

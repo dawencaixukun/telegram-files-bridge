@@ -8,7 +8,7 @@ import re
 import time
 import asyncio
 from urllib.parse import urlsplit
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 import httpx
 from core.config import _fmt_size
 from core.state import _NOTIFY_CONFIG

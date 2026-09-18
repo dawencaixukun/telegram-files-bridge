@@ -175,7 +175,6 @@ _LOG_STORE_LEVELS = ("INFO", "WARN", "ERROR")
 _CREDS_FILE = os.path.join(APP_ROOT_DIR, ".backend_creds")
 
 _WAITING_DISK_FILE = os.path.join(APP_ROOT_DIR, ".waiting_disk.json")
-_WAITING_DISK_TASKS_MAX = 500
 # 注意：磁盘水位阈值不在此处定义。真实生效值来自运行时可变配置
 # _ARCHIVE_CONFIG["diskHighWatermarkPercent" / "diskLowWatermarkPercent"]
 # （core/state.py，可在设置页调整并持久化到 .archive_config.json）。
@@ -183,27 +182,21 @@ _WAITING_DISK_TASKS_MAX = 500
 # 且默认值与真实值不一致，容易让运维误以为改这里能调水位 —— 已移除。
 
 _ARCHIVE_FILE = os.path.join(APP_ROOT_DIR, ".archive_jobs.json")
-_ARCHIVE_CFG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
-_ARCHIVE_CONFIG_FILE = _ARCHIVE_CFG_FILE
+_ARCHIVE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
 # 归档任务上限与并发信号量的真实定义在 core/state.py（_ARCHIVE_MAX_JOBS=5000、
 # asyncio.Semaphore(2)），曾在此重复定义 _ARCHIVE_JOBS_MAX=1000 与
 # _ARCHIVE_SEMAPHORE_LIMIT=2，与实际生效值矛盾且从未被引用 —— 已移除。
 
 _RETRIEVE_FILE = os.path.join(APP_ROOT_DIR, ".retrieve_jobs.json")
-_RETRIEVE_JOBS_MAX = 500
 # _RETRIEVE_SEMAPHORE_LIMIT 的真实定义在 services/retrieve_service.py —— 已移除。
 
 _SUBS_FILE = os.path.join(APP_ROOT_DIR, ".subscriptions.json")
-_SUBS_RULES_MAX = 100
 
 _NOTIFY_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".notify_config.json")
-_NOTIFY_FILE = _NOTIFY_CONFIG_FILE
 _OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 
-_SESSION_BACKUP_STATUS_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_status.json")
 _SESSION_BACKUP_REMOTE_DIR = "/TG-Backups"
 _SESSION_BACKUP_SECRET_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_key")
-_SESSION_BACKUP_KEY_FILE = _SESSION_BACKUP_SECRET_FILE
 _SESSION_BACKUP_MAX_KEEP = 7
 # 还原会话时必须先停掉写入 td.binlog/data.db 的后端容器（docker 容器名，可用环境变量覆盖）。
 # 不停容器直接覆盖会被运行中的 TDLib 进程立即回写，属于静默失败。

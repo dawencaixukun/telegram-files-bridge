@@ -29,8 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import core.state as core_state
 import bridge_server
 from services.bot_command_service import (
-    build_ck_reply, build_yd_reply, build_st_reply, build_err_reply,
-    HELP_TEXT, _handle_update, remember_archive_error,
+    build_ck_reply, build_yd_reply, build_st_reply, build_err_reply, _handle_update, remember_archive_error
 )
 
 

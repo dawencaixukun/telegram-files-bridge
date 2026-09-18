@@ -10,20 +10,20 @@ bridge_server.py — Telegram Files Bridge 极简主入口与向后兼容装配�
 4. 静态资源托管与 Cache-Control 优化
 5. 应用全局生命周期管理 (WS Relay、自动归档巡检、FloodWait 保护)
 """
+from core import *
+from services import *
 import os
 import sys
 import types
-import time
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from core.templates import CachedStaticFiles
 
 # ---------------------------------------------------------------------
 # 1. 核心层与业务服务层 100% 兼容导出
 # ---------------------------------------------------------------------
-from core import *
-from services import *
 from routers import (
     auth_router,
     dashboard_router,
@@ -40,15 +40,6 @@ from routers import (
 # ---------------------------------------------------------------------
 # 2. 静态资源托管类
 # ---------------------------------------------------------------------
-class CachedStaticFiles(StaticFiles):
-    """带 Cache-Control 响应头的静态资源服务。"""
-    async def get_response(self, path: str, scope: Any):
-        response = await super().get_response(path, scope)
-        if 200 <= response.status_code < 300:
-            response.headers.setdefault("Cache-Control", "public, max-age=86400")
-        return response
-
-
 # ---------------------------------------------------------------------
 # 3. FastAPI 应用实例初始化与全局中间件
 # ---------------------------------------------------------------------
