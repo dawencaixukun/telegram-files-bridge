@@ -58,6 +58,99 @@
   </form>
 </div>
 
+<!-- 网页下载（浏览器插件提交的 m3u8 任务）：独立分区，不与 TG 任务混排 -->
+<div class="card pad-lg" id="m3u8Card" x-data="m3u8Card()" x-init="init()" style="margin-bottom:var(--space-5);">
+  <div class="card-head" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span style="font-size:20px;">🌐</span>
+      <div>
+        <h2 class="card-title" style="margin:0;">网页下载</h2>
+        <div class="card-sub">浏览器插件嗅探到的 m3u8 资源，下载合并后自动进入归档流程</div>
+      </div>
+    </div>
+    <div class="row" style="gap:8px;">
+      <span class="pill" :class="activeCount ? 'downloading' : 'archived'">
+        <span class="p-dot"></span>
+        <span x-text="activeCount ? ('进行中 ' + activeCount) : '空闲'"></span>
+      </span>
+      <button type="button" class="btn sm ghost" @click="load()" :disabled="loading" title="立即刷新">
+        <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+        刷新
+      </button>
+    </div>
+  </div>
+
+  <template x-if="!tasks.length">
+    <div class="empty" style="padding:22px 0;">
+      <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#ic-inbox"/></svg></div>
+      <h3>暂无网页下载任务</h3>
+      <p>在 Chrome 插件里嗅探到 m3u8 后点击下载，任务会出现在这里。</p>
+    </div>
+  </template>
+
+  <template x-if="tasks.length">
+    <div style="margin-top:14px;">
+      <template x-for="t in tasks" :key="t.id">
+        <div class="m3u8-row" style="padding:10px 0;border-top:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div style="min-width:0;flex:1;">
+              <div style="font-weight:600;word-break:break-all;" x-text="t.title || t.filename || t.url"></div>
+              <div class="sub" style="font-family:var(--font-mono);font-size:11px;opacity:0.7;word-break:break-all;" x-text="t.url"></div>
+              <div class="sub" style="font-size:12px;margin-top:4px;">
+                <span x-text="stateLabel(t.state)"></span>
+                <template x-if="t.total_segments">
+                  <span x-text="' · ' + t.done_segments + '/' + t.total_segments + ' 分片'"></span>
+                </template>
+                <template x-if="t.speed_bps">
+                  <span x-text="' · ' + fmtSpeed(t.speed_bps)"></span>
+                </template>
+                <template x-if="t.output_size">
+                  <span x-text="' · ' + fmtSize(t.output_size)"></span>
+                </template>
+                <template x-if="t.encrypted">
+                  <span> · AES-128</span>
+                </template>
+                <template x-if="t.remote_dir">
+                  <span x-text="' · → ' + t.remote_dir"></span>
+                </template>
+              </div>
+              <template x-if="t.error">
+                <div class="sub" style="color:var(--danger);font-size:12px;margin-top:4px;" x-text="t.error"></div>
+              </template>
+            </div>
+            <div class="row" style="gap:6px;">
+              <template x-if="t.state === 'failed' || t.state === 'cancelled'">
+                <button type="button" class="btn sm ghost" @click="retry(t)" title="重试（已下载分片会复用）">
+                  <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+                  重试
+                </button>
+              </template>
+              <template x-if="t.state === 'queued' || t.state === 'running'">
+                <button type="button" class="btn sm danger" @click="cancel(t)" title="取消下载">
+                  <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+                  取消
+                </button>
+              </template>
+              <template x-if="t.state === 'done' || t.state === 'failed' || t.state === 'cancelled'">
+                <button type="button" class="btn sm ghost" :disabled="!!removing[t.id]" @click="remove(t)" title="删除任务记录并回收分片缓存与本地成品">
+                  <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-trash"/></svg>
+                  删除
+                </button>
+              </template>
+            </div>
+          </div>
+          <template x-if="t.state === 'running' || t.state === 'queued'">
+            <div class="progress" style="margin-top:8px;"><span :style="'width:' + pct(t) + '%'"></span></div>
+          </template>
+          <template x-if="t.state === 'done' && t.archived_job_id">
+            <div class="sub" style="font-size:12px;margin-top:6px;color:var(--ok);">✓ 已下载完成，已进入归档队列（见下方归档任务）</div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </template>
+</div>
+
 <!-- Tasks table -->
 {% include "partials/_tasks_table.html" %}
 {% endblock %}

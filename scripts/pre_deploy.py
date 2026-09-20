@@ -120,7 +120,9 @@ def stage2_unit_and_regression_tests() -> bool:
     cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
     print(f"[*] 执行测试套件命令: {' '.join(cmd)}")
     start = time.time()
-    res = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, timeout=300)
+    # 超时 900s：全量套件现约 310s（503 用例），原先 300s 的预算已被击穿，
+    # subprocess 会抛 TimeoutExpired 且此处无捕获，直接把流水线炸掉。
+    res = subprocess.run(cmd, cwd=_ROOT_DIR, capture_output=True, text=True, timeout=900)
     dur = time.time() - start
 
     output = (res.stdout or "") + "\n" + (res.stderr or "")

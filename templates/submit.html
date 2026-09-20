@@ -6,51 +6,212 @@
 {% block ctx_chip %}<span class="ctx-chip">提交下载 · 进行中 {{ running_count }}</span>{% endblock %}
 
 {% block content %}
-<div x-data="submitForm()" style="max-width:760px;">
+<style>
+/* ---- 提交下载页专用排版 ----
+   原布局的两个问题：
+   1. 整页被 max-width:760px 卡死，宽屏下右侧近半屏空白，而输入框并不宽；
+   2. 三种链接格式被压成一整段 hint 挤在输入框下面，扫读困难。
+   现在改成「主列 + 格式说明侧栏」的自适应两栏：主列吃满剩余宽度（输入框
+   更长、能一眼看清长 URL），侧栏把格式拆成结构化条目。窄屏自动回落单列。 */
+.submit-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--space-5);
+  align-items: start;
+}
+.submit-ta { min-height: 208px; }
+
+/* 校验面板：独立成块（原先嵌套在卡片里形成"套娃"边框），
+   头部常驻计数，列表内滚动，行数再多也不会把页面顶长。 */
+.submit-check {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: rgba(127, 127, 127, 0.05);
+}
+.submit-check-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3); flex-wrap: wrap;
+  padding: 10px 14px;
+  background: rgba(127, 127, 127, 0.06);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.submit-check-head .ck-title { font-size: 13px; font-weight: 700; }
+.submit-check-body {
+  max-height: 264px; overflow-y: auto;
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+}
+.submit-empty {
+  padding: 20px 14px; text-align: center;
+  font-size: 13px; color: var(--text-3); line-height: 1.7;
+}
+
+/* 单行校验：图标 + 类型标签 + 链接正文。
+   .fmt-row 的既有样式是 mono 小字，这里只在页内扩展标签与内边距。 */
+.submit-check .fmt-row { padding: 6px 9px; border-radius: 8px; align-items: flex-start; }
+.submit-check .fmt-row:hover { background: rgba(127, 127, 127, 0.07); }
+.submit-check .fmt-row .ln { flex: 1; min-width: 0; word-break: break-all; line-height: 1.5; }
+.submit-check .fmt-row .t-icon { margin-top: 2px; }
+.fmt-kind {
+  flex: none; margin-top: 1px;
+  padding: 1px 7px; border-radius: var(--radius-pill);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+  font-family: var(--font-sans, inherit);
+}
+.fmt-kind.k-tg  { color: var(--brand-b); background: rgba(56, 189, 248, 0.15); }
+.fmt-kind.k-hls { color: var(--brand);   background: rgba(139, 92, 246, 0.18); }
+.fmt-kind.k-bad { color: var(--err);     background: rgba(248, 113, 113, 0.16); }
+
+/* 底部操作条：计数靠左、按钮靠右，与上方卡片同宽同圆角。 */
+.submit-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-4); flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding: 14px var(--space-5);
+}
+.submit-actions .cnt { font-size: 13px; color: var(--text-2); }
+.submit-actions .cnt b { color: var(--text-1); font-size: 15px; }
+.submit-actions .cnt .sep { margin: 0 6px; opacity: 0.4; }
+
+/* 侧栏：格式说明条目 */
+.fmt-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.fmt-legend li {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(127, 127, 127, 0.05);
+}
+.fmt-legend .lg-label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700; color: var(--text-2);
+}
+.fmt-legend code {
+  font-family: var(--font-mono); font-size: 11.5px;
+  color: var(--brand-b); word-break: break-all; line-height: 1.5;
+}
+.fmt-legend p { margin: 0; font-size: 11.5px; color: var(--text-3); line-height: 1.55; }
+
+@media (max-width: 1199px) {
+  .submit-layout { grid-template-columns: minmax(0, 1fr); }
+  .submit-ta { min-height: 168px; }
+}
+</style>
+
+<div x-data="submitForm()">
   <div class="page-header">
     <div>
       <h1>提交下载</h1>
-      <p>粘贴 Telegram 消息链接，支持批量（每行一条）</p>
+      <p>粘贴 Telegram 消息链接或 m3u8 直链，支持批量（每行一条，可混合粘贴）</p>
     </div>
   </div>
 
-  <div class="card pad-lg">
-    <div class="field">
-      <label for="submitLinks">消息链接</label>
-      <textarea class="textarea" id="submitLinks" name="links"
-        x-ref="text" @input="parse()"
-        placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456"></textarea>
-      <div class="hint">支持两种格式：公开频道 <code>https://t.me/channel/消息ID</code> 与私密频道 <code>https://t.me/c/频道ID/消息ID</code></div>
-    </div>
-
-    <!-- validation summary -->
-    <div class="card" style="padding:14px 16px;margin-bottom:var(--space-4);background:var(--glass-bg-strong);">
-      <div class="row between">
-        <span style="font-weight:600;font-size:13px;">格式校验</span>
-        <span style="font-size:13px;color:var(--text-2);">
-          <span class="tnum" x-text="validCount">0</span> 合法 · <span class="tnum" style="color:var(--err);" x-text="invalidCount">0</span> 非法
-        </span>
-      </div>
-      <div style="display:grid;gap:4px;margin-top:10px;max-height:160px;overflow-y:auto;">
-        <template x-for="row in rows" :key="row.line">
-          <div class="fmt-row" :class="row.valid ? 'ok' : 'bad'">
-            <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <template x-if="row.valid"><polyline points="20 6 9 17 4 12"/></template>
-              <template x-if="!row.valid"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></template>
-            </svg>
-            <span x-text="row.line" style="word-break:break-all;"></span>
+  <div class="submit-layout">
+    <!-- ============ 主列：输入 + 校验 ============ -->
+    <div>
+      <div class="card pad-lg">
+        <div class="card-head" style="justify-content:space-between;">
+          <div>
+            <h2 class="card-title" style="margin:0;">链接列表</h2>
+            <div class="card-sub">每行一条，空行与首尾空格会自动忽略</div>
           </div>
-        </template>
-        <div x-show="rows.length===0" style="color:var(--text-3);font-size:13px;padding:8px 0;">尚未输入，输入后实时显示每行的合法性。</div>
+          <button type="button" class="btn sm ghost" x-show="rows.length" @click="clear()"
+                  style="flex:none;" aria-label="清空输入">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+            清空
+          </button>
+        </div>
+
+        <label class="sr-only" for="submitLinks" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">链接列表</label>
+        <textarea class="textarea submit-ta" id="submitLinks" name="links"
+          x-ref="text" @input="parse()" spellcheck="false" autocomplete="off"
+          placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456&#10;https://cdn.example.com/video/index.m3u8"></textarea>
+
+        <!-- 校验面板 -->
+        <div class="submit-check">
+          <div class="submit-check-head">
+            <span class="ck-title">格式校验</span>
+            <span class="row" style="gap:6px;">
+              <span class="pill ok"><span class="p-dot"></span><span class="tnum" x-text="validCount">0</span> 合法</span>
+              <span class="pill err" x-show="invalidCount" x-cloak><span class="p-dot"></span><span class="tnum" x-text="invalidCount">0</span> 非法</span>
+            </span>
+          </div>
+          <div class="submit-check-body">
+            <template x-for="row in rows" :key="row.id">
+              <div class="fmt-row" :class="row.valid ? 'ok' : 'bad'">
+                <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" x-show="row.valid"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" x-show="!row.valid"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span class="fmt-kind" :class="'k-' + row.kind" x-text="__kindLabel(row.kind)"></span>
+                <span class="ln" x-text="row.line"></span>
+              </div>
+            </template>
+            <div class="submit-empty" x-show="rows.length === 0">
+              尚未输入。<br>粘贴后这里会逐行显示识别结果与链接类型。
+            </div>
+          </div>
+      </div>
+      </div>
+
+      <!-- 操作条 -->
+      <div class="card submit-actions">
+        <div class="cnt">
+          <template x-if="validCount">
+            <span>将提交 <b class="tnum" x-text="validCount"></b> 条<span class="sep">·</span>
+              <span x-text="__summary()"></span></span>
+          </template>
+          <template x-if="!validCount">
+            <span style="color:var(--text-3);">请输入至少一条合法链接</span>
+          </template>
+        </div>
+        <button class="btn primary" @click="submit()" :disabled="validCount === 0 || sending" style="flex:none;">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
+          <span x-text="sending ? '提交中…' : '加入队列'">加入队列</span>
+        </button>
       </div>
     </div>
 
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn primary" @click="submit()" :disabled="validCount===0">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
-        加入队列
-      </button>
-    </div>
+    <!-- ============ 侧栏：格式说明 ============ -->
+    <aside>
+      <div class="card">
+        <h2 class="card-title" style="margin:0 0 var(--space-2);">支持的格式</h2>
+        <div class="card-sub" style="margin-bottom:var(--space-4);">三类链接可混在同一批提交</div>
+        <ul class="fmt-legend">
+          <li>
+            <span class="lg-label">
+              <span class="fmt-kind k-tg">频道</span>公开频道
+            </span>
+            <code>https://t.me/channel/123</code>
+            <p>频道用户名 + 消息 ID</p>
+          </li>
+          <li>
+            <span class="lg-label">
+              <span class="fmt-kind k-tg">频道</span>私密频道
+            </span>
+            <code>https://t.me/c/2333333/456</code>
+            <p>以 <code style="color:inherit;">c/</code> 开头的内部会话链接</p>
+          </li>
+          <li>
+            <span class="lg-label">
+              <span class="fmt-kind k-hls">m3u8</span>流媒体直链
+            </span>
+            <code>https://cdn.example.com/video/index.m3u8</code>
+            <p>以 <code style="color:inherit;">.m3u8</code> / <code style="color:inherit;">.m3u</code> 结尾，带查询参数也支持</p>
+          </li>
+        </ul>
+      </div>
+
+      <div class="card" style="margin-top:var(--space-4);">
+        <div class="row" style="gap:10px;align-items:flex-start;">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               style="color:var(--brand-b);flex:none;margin-top:2px;"><use href="#ic-info"/></svg>
+          <div style="font-size:12.5px;color:var(--text-2);line-height:1.65;">
+            m3u8 直链由服务端下载并合并为 MP4，完成后<b style="color:var(--text-1);">自动进入归档流程</b>，
+            与浏览器插件提交完全同一条管线；进度可在<a href="/tasks" style="color:var(--brand-b);">任务队列</a>页查看。
+          </div>
+        </div>
+      </div>
+    </aside>
   </div>
 </div>
 {% endblock %}
@@ -58,42 +219,91 @@
 {% block js %}
 <script>
   function submitForm() {
+    var seq = 0;   // 每行唯一 id：链接重复时也能稳定 diff，避免 x-for 重复 key
     return {
       rows: [],
-      get validCount() { return this.rows.filter(function(r){ return r.valid; }).length; },
-      get invalidCount() { return this.rows.filter(function(r){ return !r.valid; }).length; },
+      sending: false,
+
+      init: function () {
+        // 支持通过 # 传入预填内容（浏览页"提交下载"等处可直达），并立即校验一次
+        var pre = (window.location.hash || '').replace(/^#/, '');
+        if (pre) {
+          try { pre = decodeURIComponent(pre); } catch (e) { pre = ''; }
+          if (this.$refs.text) this.$refs.text.value = pre;
+        }
+        this.parse();
+      },
+
+      get validCount() { return this.rows.filter(function (r) { return r.valid; }).length; },
+      get invalidCount() { return this.rows.filter(function (r) { return !r.valid; }).length; },
+
+      __kindLabel: function (kind) {
+        return { tg: '频道', hls: 'm3u8', bad: '非法' }[kind] || kind;
+      },
+      __summary: function () {
+        var hls = this.rows.filter(function (r) { return r.kind === 'hls'; }).length;
+        var tg = this.rows.filter(function (r) { return r.kind === 'tg'; }).length;
+        var parts = [];
+        if (tg) parts.push('频道 ' + tg);
+        if (hls) parts.push('m3u8 ' + hls);
+        return parts.join(' · ') || '—';
+      },
+
       parse: function () {
         var text = (this.$refs.text && this.$refs.text.value) || '';
-        var seen = 0;
         var self = this;
-        this.rows = text.split(/\n+/).filter(function (l) { return l.trim(); }).map(function (l) {
-          seen++;
-          return { line: l.trim(), valid: self.__isValid(l.trim()) };
-        });
+        seq = 0;
+        this.rows = text.split(/\n+/).map(function (l) { return l.trim(); })
+          .filter(function (l) { return l; })
+          .map(function (l) {
+            var kind = self.__kindOf(l);
+            return { id: ++seq, line: l, kind: kind, valid: kind !== 'bad' };
+          });
       },
-      __isValid: function (l) {
+
+      clear: function () {
+        if (this.$refs.text) this.$refs.text.value = '';
+        this.parse();
+        if (this.$refs.text) this.$refs.text.focus();
+      },
+
+      // m3u8 直链判定：与后端 _is_m3u8_url 同一口径（只看路径后缀，忽略 query/fragment）
+      __isM3U8: function (l) {
+        if (!/^https?:\/\//i.test(l)) return false;
+        var path = l.split('#')[0].split('?')[0].toLowerCase();
+        return /\.(m3u8|m3u|m3u8\.gz)$/.test(path);
+      },
+
+      // 返回 'tg' | 'hls' | 'bad'，供逐行类型标签与计数使用
+      __kindOf: function (l) {
         var pub = /^https:\/\/t\.me\/[A-Za-z0-9_]{4,32}\/\d{1,12}$/;
         var priv = /^https:\/\/t\.me\/c\/\d{5,20}\/\d{1,12}$/;
-        return pub.test(l) || priv.test(l);
+        if (pub.test(l) || priv.test(l)) return 'tg';
+        if (this.__isM3U8(l)) return 'hls';
+        return 'bad';
       },
+
       submit: function () {
         var self = this;
+        if (this.sending) return;
         if (this.validCount === 0) { window.__toast('没有合法链接', 'error'); return; }
         var links = this.rows.filter(function (r) { return r.valid; }).map(function (r) { return r.line; });
+        this.sending = true;
         fetch('/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
           body: JSON.stringify({ links: links })
         }).then(function (r) { return r.json(); }).then(function (d) {
+          self.sending = false;
           if (d && d.ok) {
             window.__toast('已提交 ' + links.length + ' 条链接', 'success', '已加入下载队列');
-            self.rows = [];
-            if (self.$refs.text) self.$refs.text.value = '';
+            self.clear();
           } else {
             window.__toast('提交失败', 'error', (d && d.message) || '后端返回错误');
           }
           return null;
         }).catch(function (e) {
+          self.sending = false;
           window.__toast('提交失败', 'error', '网络错误：' + e);
           return null;
         });

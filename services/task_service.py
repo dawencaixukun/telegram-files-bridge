@@ -17,7 +17,8 @@ from core.config import (
     APP_ROOT_DIR, BASE_DIR, CACHE_TTL, TG_READY, _pick, _pick_id,
     _fmt_size, _fmt_time, _match_size_bucket, _classify_file_type,
     ALLOWED_TG_DOMAINS, RE_TG_PRIVATE, RE_TG_PUBLIC, _LINK_PATTERNS, _tg_err_public,
-    _resolve_host_local_path, _chat_title, _human_name
+    _resolve_host_local_path, _chat_title, _human_name,
+    _is_m3u8_url, _split_submit_links
 )
 from core.templates import _stages, _spark_points, _speed_chart_points
 from core.state import (
@@ -1113,16 +1114,66 @@ def _parse_link(line: str) -> Optional[str]:
     return None
 
 
-async def _resolve_links_to_files(links: List[str], force: bool = False) -> tuple:
-    """t.me 链接两跳解析：后端没有「按链接下载」端点。
+async def _submit_m3u8_links(urls: List[str]) -> tuple:
+    """把 m3u8 直链提交给 HLS 下载引擎。返回 (成功数, 失败原因)。
 
-    第一跳 GET /telegram/{tg}/chat/0/files?link=...（TDLib GetMessageLinkInfo）
-    解析出文件记录；第二跳把 {telegramId, chatId, messageId, fileId} 数组
-    交给 /files/start-download-multiple。返回 (成功数, 失败原因)。
+    与插件提交走**同一个** m3u8_submit：同样的 SSRF 校验、活动任务上限、
+    同 URL 幂等、磁盘水位门禁，以及完成后自动进入归档管线。网页提交因此
+    与插件提交完全同构，只是入口不同。
+
+    单条失败不拖累整批：逐条收集错误，全部失败才返回原因（用户输入里常
+    混着失效链接，一条坏链接不应把其余可用链接一起挡掉）。
+    """
+    from services.m3u8_service import m3u8_submit, M3u8Error
+    ok = 0
+    errors: List[str] = []
+    for url in urls:
+        try:
+            res = await m3u8_submit(url)
+            # duplicate=True 表示同 URL 已在跑：对用户而言同样是「已在队列」，计入成功
+            if res.get("task") is not None:
+                ok += 1
+        except M3u8Error as e:
+            errors.append(str(e))
+        except Exception as e:  # noqa: BLE001
+            log.warning("m3u8 链接提交失败(%s): %r", url, e)
+            errors.append("网页下载提交失败：" + e.__class__.__name__)
+    if ok:
+        return ok, ""
+    return 0, (errors[0] if errors else "网页下载链接无法提交")
+
+
+async def _resolve_links_to_files(links: List[str], force: bool = False) -> tuple:
+    """提交的链接分流后各自入队：t.me 消息链接走两跳解析，m3u8 直链走 HLS 引擎。
+
+    t.me 两跳：第一跳 GET /telegram/{tg}/chat/0/files?link=...（TDLib
+    GetMessageLinkInfo）解析出文件记录；第二跳把 {telegramId, chatId,
+    messageId, fileId} 数组交给 /files/start-download-multiple。
+
+    返回 (成功数, 失败原因)；两类链接可混在同一批，成功数取两者之和。
     """
     from services.archive_service import _check_file_dedup
-    parsed = [p for p in (_parse_link(l) for l in links) if p]
+    split = _split_submit_links(links)
+    m3u8_urls, tg_lines = split["m3u8"], split["tg"]
+
+    m3u8_ok = 0
+    m3u8_err = ""
+    if m3u8_urls:
+        m3u8_ok, m3u8_err = await _submit_m3u8_links(m3u8_urls)
+
+    # 纯 m3u8 批次：不再继续走 TG 解析，直接给出结果
+    if not tg_lines:
+        if m3u8_ok:
+            return m3u8_ok, ""
+        return 0, (m3u8_err or "没有可识别的链接")
+
+    parsed = [p for p in (_parse_link(l) for l in tg_lines) if p]
     if not parsed:
+        # 有 m3u8 成功就整体算成功，避免「部分成功」被后面的 TG 错误覆盖
+        if m3u8_ok:
+            return m3u8_ok, ""
+        if m3u8_urls:
+            return 0, (m3u8_err or "没有可识别的链接")
         return 0, "没有可识别的链接"
     try:
         sources = await chat_sources()
@@ -1200,6 +1251,14 @@ async def _resolve_links_to_files(links: List[str], force: bool = False) -> tupl
             if files:
                 break
     if files:
-        return len(files), ""
+        # 混合批次：m3u8 的成功数要一并计入，否则「3 条 m3u8 + 1 条 TG 链接」
+        # 只会回报 1 条，用户以为其余被丢了。
+        return len(files) + m3u8_ok, ""
+    if m3u8_ok:
+        # TG 侧全失败但 m3u8 侧成功：仍算整体成功，把 TG 的失败原因作为提示丢弃
+        # （前端 only 展示 message，成功时不该弹错误）。
+        return m3u8_ok, ""
+    if m3u8_urls and m3u8_err:
+        return 0, m3u8_err
     return 0, (errors[0] if errors else "链接解析不到可下载的文件")
 

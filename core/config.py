@@ -104,7 +104,11 @@ _SECRET_FILE = os.path.join(APP_ROOT_DIR, ".bridge_secret")
 _INIT_FLAG_FILE = os.path.join(APP_ROOT_DIR, ".bridge_initialized")
 PORTAL_TTL = 7 * 24 * 3600  # 7 天
 
-PUBLIC_PREFIXES = ("/static/",)
+# 公开门禁豁免前缀。/api/ext/m3u8/ 是浏览器插件的 Token 鉴权端点：
+# 豁免 Portal Cookie 门禁与 CSRF（插件无 Cookie），由 routers/extension.py
+# 自行做 X-Ext-Token 常量时间校验 + IP 限流。前缀必须精确到 /api/ext/m3u8/，
+# 绝不能放宽成 /api/ext/ —— token 管理端点(/api/ext-token/*)必须留在门禁之后。
+PUBLIC_PREFIXES = ("/static/", "/api/ext/m3u8/")
 PUBLIC_PATHS = {"/login", "/init", "/health"}
 
 def _ws_url() -> str:
@@ -190,6 +194,20 @@ _ARCHIVE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
 _RETRIEVE_FILE = os.path.join(APP_ROOT_DIR, ".retrieve_jobs.json")
 # _RETRIEVE_SEMAPHORE_LIMIT 的真实定义在 services/retrieve_service.py —— 已移除。
 
+_M3U8_FILE = os.path.join(APP_ROOT_DIR, ".m3u8_tasks.json")
+_EXT_TOKEN_FILE = os.path.join(APP_ROOT_DIR, ".ext_token")
+
+# ---------------------------------------------------------------------
+# M3U8(HLS) 下载引擎参数（浏览器插件）
+# ---------------------------------------------------------------------
+M3U8_DOWNLOAD_DIR = os.path.join(APP_ROOT_DIR, "m3u8-downloads")
+M3U8_CONCURRENCY = 6              # 单任务分片并发数
+M3U8_MAX_ACTIVE = 5               # 同时进行中的下载任务上限
+M3U8_MAX_SEGMENTS = 20000         # 单任务分片数上限
+M3U8_MAX_TOTAL_BYTES = 20 * 1024**3  # 单任务体积上限（20GB）
+M3U8_SEG_RETRIES = 3              # 单分片重试次数
+M3U8_REMUX_MP4 = True             # TS 成品探测到 ffmpeg 时无损 remux 为 MP4
+M3U8_MAX_PLAYLIST_BYTES = 32 * 1024 * 1024  # 播放列表响应上限（32MB）
 _SUBS_FILE = os.path.join(APP_ROOT_DIR, ".subscriptions.json")
 
 _NOTIFY_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".notify_config.json")
@@ -638,6 +656,45 @@ _LINK_PATTERNS = [
     re.compile(r"t\.me/([A-Za-z0-9_]{4,32})/(\d{1,12})"),
     re.compile(r"t\.me/c/(\d{5,20})/(\d{1,12})"),
 ]
+
+# ---------------------------------------------------------------------
+# m3u8 / HLS 直链识别（提交下载页与频道监听共用）
+# ---------------------------------------------------------------------
+# 「提交链接下载」原先只认 t.me 消息链接。用户希望同一个输入框也能直接吃
+# m3u8 直链（网页嗅探到的流媒体地址），不必先经浏览器插件。
+#
+# 判定只看 URL 路径后缀，且必须带 http(s) 方案——避免把 t.me 链接（不以
+# .m3u8 结尾）误判，也避免把任意含 "m3u8" 字样的内容当成直链。
+_M3U8_SUFFIXES = (".m3u8", ".m3u", ".m3u8.gz")
+
+
+def _is_m3u8_url(text: str) -> bool:
+    """判断一行输入是否为 m3u8/HLS 直链（带查询串也认）。"""
+    s = str(text or "").strip()
+    if not s.lower().startswith(("http://", "https://")):
+        return False
+    # 去掉 fragment 与 query 后再看路径后缀
+    path = s.split("#", 1)[0].split("?", 1)[0].lower()
+    return path.endswith(_M3U8_SUFFIXES)
+
+
+def _split_submit_links(lines: List[str]) -> Dict[str, List[str]]:
+    """把提交的原始行按类型分流，保持输入顺序、去重。
+
+    返回 {"tg": [...], "m3u8": [...]}。两类链接可以混在同一批里提交。
+    """
+    tg: List[str] = []
+    m3u8: List[str] = []
+    for raw in lines or []:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        if _is_m3u8_url(s):
+            if s not in m3u8:
+                m3u8.append(s)
+        elif s not in tg:
+            tg.append(s)
+    return {"tg": tg, "m3u8": m3u8}
 
 
 def _tg_err(e: Exception) -> str:

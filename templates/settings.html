@@ -416,6 +416,98 @@
     </div>
   </div>
 
+  <!-- 浏览器插件接入（Chrome 扩展 m3u8 下载）：Token 管理与接口说明 -->
+  <div class="card pad-lg mb-4" x-data="extPluginCard()" x-init="load()" style="margin-bottom:var(--space-5);">
+    <div class="card-head" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:22px;">🧩</span>
+        <div>
+          <h2 class="card-title" style="margin:0;">浏览器插件接入</h2>
+          <div class="card-sub">Chrome 扩展嗅探网页 m3u8 后提交下载，成品自动进入归档流程</div>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn sm ghost" @click="copyToken()" title="复制 Token 到剪贴板">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-copy"/></svg>
+          复制 Token
+        </button>
+        <button type="button" class="btn sm danger" :disabled="resetting" @click="resetToken()" title="旧 Token 立即失效，需在插件里重新填写">
+          <span x-show="resetting" class="spinner"></span>
+          <span x-text="resetting ? '重置中…' : '重置 Token'"></span>
+        </button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <div class="field" style="margin:0;">
+        <label>插件 Token（填入扩展设置，请求头 X-Ext-Token）</label>
+        <input class="input" type="text" readonly :value="token || '加载中…'"
+               style="font-family:var(--font-mono);font-size:12px;" @focus="$event.target.select()">
+      </div>
+      <div class="field" style="margin:16px 0 0;">
+        <label>默认归档位置（OpenList 网盘目录）</label>
+        <div class="arch-dir-field" style="position:relative;">
+          <input class="input" type="text" x-model="defaultDir"
+                 placeholder="留空则归档到 /m3u8；也可由插件在提交时逐单指定" autocomplete="off" spellcheck="false">
+          <button type="button" class="arch-dir-arrow" :class="{ 'open': dirOpen }"
+                  aria-label="浏览目录" @click="toggleDir()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
+          </button>
+          <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'block' : 'none' }">
+            <div class="arch-crumb">
+              <template x-for="(seg, idx) in crumbList" :key="idx">
+                <span>
+                  <a href="javascript:void(0)" class="crumb-link" :class="{ 'cur': idx === crumbList.length - 1 }"
+                     @click="loadDir(seg.path)" x-text="seg.label"></a>
+                  <span class="crumb-sep" x-show="idx < crumbList.length - 1">/</span>
+                </span>
+              </template>
+            </div>
+            <div class="arch-dir-list" style="max-height:200px;overflow-y:auto;">
+              <div class="arch-dir-row arch-up-row" x-show="browsePath && browsePath !== '/'"
+                   style="color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;"
+                   @click="goUpDir()">↰ 返回上一级</div>
+              <template x-if="loadingDirs">
+                <div class="arch-dir-row" style="color:var(--muted);">读取中…</div>
+              </template>
+              <template x-if="!loadingDirs && !dirs.length">
+                <div class="arch-dir-row" style="color:var(--muted);">（无子目录）</div>
+              </template>
+              <template x-for="d in dirs" :key="d.path">
+                <div class="arch-dir-row" @click="pickDir(d)">
+                  <span style="opacity:.7;margin-right:6px;">📁</span><span x-text="d.name"></span>
+                </div>
+              </template>
+            </div>
+            <div style="padding:6px 8px;border-top:1px solid var(--border);">
+              <button type="button" class="btn sm" style="width:100%;" @click="defaultDir = browsePath; dirOpen = false"
+                      x-text="'选用当前目录：' + browsePath"></button>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;">
+          <button type="button" class="btn sm" :disabled="savingDir" @click="saveDir()">
+            <span x-show="savingDir" class="spinner"></span>
+            <span x-text="savingDir ? '保存中…' : '保存默认归档位置'"></span>
+          </button>
+          <span class="sub" style="font-size:12px;color:var(--muted);align-self:center;"
+                x-text="defaultDir ? ('当前：' + defaultDir) : '当前：未指定（归档到 /m3u8）'"></span>
+        </div>
+      </div>
+      <div class="sub" style="margin-top:12px;color:var(--muted);font-size:12px;line-height:1.7;">
+        Token 保存在服务端 <span style="font-family:var(--font-mono);">.ext_token</span>（权限 0600）。
+        重置会立即吊销旧 Token。接口：<span style="font-family:var(--font-mono);">POST /api/ext/m3u8/resolve</span>（探测清晰度）、
+        <span style="font-family:var(--font-mono);">POST /api/ext/m3u8/submit</span>（提交下载）、
+        <span style="font-family:var(--font-mono);">GET /api/ext/m3u8/tasks</span>（查进度）、
+        <span style="font-family:var(--font-mono);">POST /api/ext/m3u8/delete</span>（删除任务）、
+        <span style="font-family:var(--font-mono);">GET /api/ext/m3u8/dirs</span>（浏览归档目录）。
+        插件可在提交时用 <span style="font-family:var(--font-mono);">remote_dir</span> 逐单覆盖归档位置；留空则用上面的默认位置。
+        暂不支持直播流（无 ENDLIST）与 SAMPLE-AES 加密。
+      </div>
+    </div>
+  </div>
+
   <!-- Telegram 消息通知外发引擎（Bot/收藏夹双通道） -->
   <div class="card pad-lg mb-4" x-data="notifySettingsCard()" x-init="load()">
     <div class="card-head" style="justify-content:space-between;">

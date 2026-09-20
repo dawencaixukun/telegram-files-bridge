@@ -13,7 +13,7 @@ from routers.archive import router as archive_router
 from routers.subscriptions import router as subscriptions_router
 from routers.system import router as system_router
 from routers.api import router as api_router
-
+from routers.extension import router as extension_router
 __all__ = [
     "auth_router",
     "dashboard_router",
@@ -24,4 +24,5 @@ __all__ = [
     "subscriptions_router",
     "system_router",
     "api_router",
+    "extension_router",
 ]

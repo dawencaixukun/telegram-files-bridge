@@ -2564,6 +2564,297 @@
     };
   };
 
+  /* ---------------- 浏览器插件接入卡（m3u8 扩展 Token 管理） ---------------- */
+  window.extPluginCard = function extPluginCard() {
+    return {
+      token: '',
+      resetting: false,
+      // 插件默认归档位置：与归档设置卡片共用同一份后端配置（/archive/config
+      // 的 defaultDir），这里只是给插件使用者一个就近入口，避免两处配置打架。
+      defaultDir: '',
+      dirOpen: false,
+      browsePath: '/',
+      dirs: [],
+      crumbList: [],
+      loadingDirs: false,
+      savingDir: false,
+      load: function () {
+        var self = this;
+        fetch('/api/ext-token')
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok) { self.token = d.token || ''; }
+          })
+          .catch(function () { /* 静默：卡片只读展示，失败不打扰用户 */ });
+        fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok && d.config) { self.defaultDir = d.config.defaultDir || ''; }
+          })
+          .catch(function () {});
+      },
+      /* ---- 默认归档位置：目录浏览（复用 /openlist/dirs） ---- */
+      buildCrumbs: function (path) {
+        var segs = (path || '/').split('/').filter(Boolean);
+        var res = [{ label: '根目录', path: '/' }];
+        var acc = '';
+        segs.forEach(function (s) { acc += '/' + s; res.push({ label: s, path: acc }); });
+        return res;
+      },
+      toggleDir: function () {
+        this.dirOpen = !this.dirOpen;
+        if (this.dirOpen) { this.loadDir(this.browsePath || '/'); }
+      },
+      loadDir: function (p) {
+        var self = this;
+        this.browsePath = p || '/';
+        this.crumbList = this.buildCrumbs(this.browsePath);
+        this.loadingDirs = true;
+        fetch('/openlist/dirs?path=' + encodeURIComponent(this.browsePath))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            self.loadingDirs = false;
+            self.dirs = (d && d.ok) ? (d.dirs || []) : [];
+            if (!d || !d.ok) {
+              window.__toast('读取目录失败', 'error', (d && d.message) || '请先在归档设置里登录 OpenList');
+            }
+            return null;
+          })
+          .catch(function () { self.loadingDirs = false; self.dirs = []; });
+      },
+      goUpDir: function () {
+        var p = this.browsePath || '/';
+        if (p === '/') return;
+        var up = p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/';
+        this.loadDir(up);
+      },
+      pickDir: function (d) { this.defaultDir = d.path; this.dirOpen = false; },
+      saveDir: function () {
+        if (this.savingDir) return;
+        var self = this;
+        this.savingDir = true;
+        // 只提交 defaultDir：/archive/config 是全量保存，其余字段必须先取回现值，
+        // 否则会把 autoArchive/deleteLocal 等开关一并覆盖成默认值。
+        fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            var cfg = (d && d.ok && d.config) ? d.config : {};
+            cfg.defaultDir = self.defaultDir || '';
+            return fetch('/archive/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+              body: JSON.stringify(cfg)
+            });
+          })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            self.savingDir = false;
+            if (d && d.ok) {
+              self.defaultDir = (d.config && d.config.defaultDir) || '';
+              window.__DEFAULT_ARCH_DIR = self.defaultDir;
+              window.__toast('已保存', 'success', self.defaultDir ? ('插件默认归档到 ' + self.defaultDir) : '已恢复为「未指定」（归档到 /m3u8）');
+            } else {
+              window.__toast('保存失败', 'error', (d && d.message) || '服务端返回错误');
+            }
+            return null;
+          })
+          .catch(function () { self.savingDir = false; window.__toast('保存失败', 'error', '网络错误'); });
+      },
+      copyToken: function () {
+        if (!this.token) { window.__toast('Token 尚未加载', 'error', ''); return; }
+        var t = this.token;
+        // 优先用剪贴板 API；非安全上下文（http 非 localhost）回退到临时 textarea
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(t).then(function () {
+            window.__toast('已复制', 'success', 'Token 已复制到剪贴板');
+          }).catch(function () { window.__toast('复制失败', 'error', '请手动选中复制'); });
+          return;
+        }
+        var ta = document.createElement('textarea');
+        ta.value = t;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          window.__toast('已复制', 'success', 'Token 已复制到剪贴板');
+        } catch (e) {
+          window.__toast('复制失败', 'error', '请手动选中复制');
+        }
+        document.body.removeChild(ta);
+      },
+      resetToken: function () {
+        var self = this;
+        // 破坏性操作必须二次确认：重置会让现有插件立刻失效
+        var ask = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '重置插件 Token？',
+              body: '旧 Token 会立即失效，需要到 Chrome 扩展里重新填写新 Token。',
+              okText: '重置', danger: true
+            })
+          : Promise.resolve(false);
+        ask.then(function (ok) {
+            if (!ok) return null;
+            self.resetting = true;
+            return fetch('/api/ext-token/reset', {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' }
+            }).then(function (r) { return r.json(); }).then(function (d) {
+              self.resetting = false;
+              if (d && d.ok) {
+                self.token = d.token || '';
+                window.__toast('已重置', 'success', '请把新 Token 填入 Chrome 扩展');
+              } else {
+                window.__toast('重置失败', 'error', (d && d.message) || '服务端异常');
+              }
+              return null;
+            }).catch(function () {
+              self.resetting = false;
+              window.__toast('重置失败', 'error', '网络错误');
+              return null;
+            });
+        });
+      }
+    };
+  };
+
+  /* ---------------- 网页下载（m3u8 插件任务）卡片 ---------------- */
+  window.m3u8Card = function m3u8Card() {
+    return {
+      tasks: [],
+      activeCount: 0,
+      loading: false,
+      timer: null,
+      // 正在删除的任务 id 集合（按任务粒度）。必须是组件级状态：列表每次 load()
+      // 都用服务端新对象整体替换 self.tasks，挂在任务上的 per-task 标记会随之丢失。
+      removing: {},
+      init: function () {
+        this.load();
+        var self = this;
+        // 有进行中任务才轮询（4s），空闲自动停表，避免空转打服务端
+        var tick = function () {
+          self.load().then(function () {
+            if (self.activeCount > 0) {
+              self.timer = setTimeout(tick, 4000);
+            } else {
+              self.timer = null;
+            }
+          });
+        };
+        this.timer = setTimeout(tick, 4000);
+      },
+      load: function () {
+        var self = this;
+        this.loading = true;
+        return fetch('/api/m3u8/tasks?limit=50')
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            self.loading = false;
+            if (d && d.ok) {
+              self.tasks = d.tasks || [];
+              self.activeCount = d.active || 0;
+            }
+            return null;
+          })
+          .catch(function () { self.loading = false; return null; });
+      },
+      stateLabel: function (s) {
+        return ({
+          queued: '排队中', running: '下载中', done: '已完成',
+          failed: '失败', cancelled: '已取消'
+        })[s] || s;
+      },
+      pct: function (t) {
+        var tot = Number(t.total_segments) || 0;
+        if (!tot) return 0;
+        return Math.max(0, Math.min(100, Math.round((Number(t.done_segments) || 0) * 100 / tot)));
+      },
+      fmtSize: function (n) {
+        var b = Number(n) || 0;
+        if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+        if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+        if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+        return b + ' B';
+      },
+      fmtSpeed: function (bps) {
+        var v = Number(bps) || 0;
+        if (v <= 0) return '';
+        if (v >= 1048576) return (v / 1048576).toFixed(1) + ' MB/s';
+        if (v >= 1024) return (v / 1024).toFixed(0) + ' KB/s';
+        return v.toFixed(0) + ' B/s';
+      },
+      cancel: function (t) {
+        var self = this;
+        return fetch('/api/m3u8/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify({ task_id: t.id })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          window.__toast(d && d.ok ? '已取消' : '取消失败',
+                          d && d.ok ? 'success' : 'error',
+                          (d && d.message) || '');
+          return self.load();
+        }).catch(function () { window.__toast('取消失败', 'error', '网络错误'); return null; });
+      },
+      retry: function (t) {
+        var self = this;
+        return fetch('/api/m3u8/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify({ task_id: t.id })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          window.__toast(d && d.ok ? '已重新加入下载队列' : '重试失败',
+                          d && d.ok ? 'success' : 'error',
+                          (d && d.message) || '');
+          return self.load().then(function () {
+            // 重试后可能转为进行中，确保轮询重新开表
+            if (self.activeCount > 0 && !self.timer) self.init();
+            return null;
+          });
+        }).catch(function () { window.__toast('重试失败', 'error', '网络错误'); return null; });
+      },
+      remove: function (t) {
+        var self = this;
+        // 防重复提交：删除是破坏性且要回收磁盘的，连点两次会发出两个请求，
+        // 第二个必然 404「任务不存在」并弹一个误导性的错误提示。
+        if (this.removing[t.id]) return Promise.resolve(null);
+        this.removing[t.id] = true;
+        var release = function () { delete self.removing[t.id]; return null; };
+        var ask = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '删除该下载任务？',
+              body: '会删除任务记录、分片缓存与本地成品文件（云端已归档的文件不受影响）。',
+              okText: '删除', danger: true
+            })
+          : Promise.resolve(false);
+        ask.then(function (ok) {
+          if (!ok) return release();
+          return fetch('/api/m3u8/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+            body: JSON.stringify({ task_id: t.id })
+          }).then(function (r) { return r.json(); }).then(function (d) {
+            if (d && d.ok) {
+              var freed = Number(d.freed) || 0;
+              window.__toast('已删除', 'success',
+                freed ? ('已释放 ' + self.fmtSize(freed)) : '分片缓存已回收');
+            } else {
+              // 后端拒绝时会给出可读原因（进行中 / 协程收尾中 / 归档上传中），
+              // 这不是「失败」，用中性标题避免误导用户反复重试。
+              window.__toast('无法删除', 'error', (d && d.message) || '服务端返回错误');
+            }
+            // 成功时该任务已从后端移除，重新拉列表即可；失败时列表里它还在。
+            return self.load().then(release, release);
+          }).catch(function () {
+            window.__toast('删除失败', 'error', '网络错误');
+            return release();
+          });
+        });
+      }
+    };
+  };
+
   /* ---------------- System Doctor 系统健康自检组件 ---------------- */
   window.doctorCard = function doctorCard() {
     return {

@@ -10,7 +10,7 @@ import shutil
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from core.config import (
-    APP_ROOT_DIR, BASE_DIR, _pick_id, _resolve_host_local_path
+    APP_ROOT_DIR, BASE_DIR, _pick_id, _resolve_host_local_path, _split_submit_links
 )
 from core.state import (
     _ARCHIVE_CONFIG, _WAITING_DISK_TASKS, _WAITING_DISK_TASKS_MAX, _ARCHIVE_JOBS,
@@ -145,7 +145,14 @@ async def _disk_guard_or_enqueue(raw, payload_files, source_tag: str):
 
 
 async def _disk_guard_or_enqueue_links(links: List[str], source_tag: str):
-    """链接提交版水位门禁：高水位时链接挂起入队并失效任务缓存，返回响应 dict 或 None。"""
+    """链接提交版水位门禁：高水位时链接挂起入队并失效任务缓存，返回响应 dict 或 None。
+
+    m3u8 直链不能走 waiting_disk 挂起队列：该队列的载荷是 TG 的
+    {telegramId, chatId, messageId, fileId}，m3u8 没有这些字段，入队会失败
+    并把链接**静默丢掉**（用户看到「已置入挂起队列」，实际什么也没排上）。
+    因此纯 m3u8 批次在此放行，交给 m3u8_submit 自己的水位门禁拒绝，并给出
+    可读原因——宁可明确报错，也不能假装收下了。
+    """
     high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
     if high_exceeded:
         await _disk_guard_check()
@@ -153,11 +160,18 @@ async def _disk_guard_or_enqueue_links(links: List[str], source_tag: str):
 
     if not high_exceeded:
         return None
+    split = _split_submit_links(links)
+    if not split["tg"]:
+        # 纯 m3u8 批次：不拦，让 m3u8 引擎按自己的口径拒绝并说明原因
+        return None
     low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
     enqueued_count = await _enqueue_waiting_disk_links(links, cur_pct, high_threshold, low_threshold)
     _tasks_cache_invalidate()
     msg = (f"磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），"
            f"已将 {enqueued_count} 条下载安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复")
+    if split["m3u8"]:
+        # 混合批次里的 m3u8 部分无法挂起，必须说清楚，否则用户以为全部排上了
+        msg += f"；另有 {len(split['m3u8'])} 条网页下载链接未能入队，请在磁盘回落后再提交"
     log.warning("磁盘水位熔断拦截 [%s]：%s", source_tag, msg)
     return {
         "ok": False,

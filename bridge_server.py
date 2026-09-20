@@ -34,6 +34,7 @@ from routers import (
     subscriptions_router,
     system_router,
     api_router,
+    extension_router,
 )
 
 
@@ -87,6 +88,7 @@ app.include_router(archive_router)
 app.include_router(subscriptions_router)
 app.include_router(system_router)
 app.include_router(api_router)
+app.include_router(extension_router)
 
 # ---------------------------------------------------------------------
 # 5. 应用全局生命周期管理

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from core.config import (
-    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _mask_token, _same_file_name
+    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _M3U8_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _mask_token, _same_file_name
 )
 from core.logging import log
 
@@ -56,6 +56,13 @@ _ARCHIVE_JOBS: Dict[str, Dict[str, Any]] = {}
 _ARCHIVE_MAX_JOBS = 5000
 _DELETED_LOCAL_UIDS: Set[str] = set()
 _QUICK_ARCHIVE_REGISTRY: Dict[str, Dict[str, Any]] = {}
+# ---------------------------------------------------------------------
+# 3.1 M3U8(浏览器插件) 下载任务表
+# ---------------------------------------------------------------------
+# 与 _ARCHIVE_JOBS 同构的最小状态：仅保存任务元数据与进度，
+# 分片文件落在 M3U8_DOWNLOAD_DIR/<task_id>/，重启后按磁盘分片续传。
+_M3U8_TASKS: Dict[str, Dict[str, Any]] = {}
+_M3U8_MAX_TASKS = 500
 
 _ARCHIVE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
 _ARCHIVE_CONFIG: Dict[str, Any] = {
@@ -478,6 +485,58 @@ def _archive_save() -> None:
             os.close(fd)
     except Exception as e:  # noqa: BLE001
         log.warning("归档日志持久化失败: %s", e)
+
+
+def _m3u8_load() -> None:
+    """启动时恢复 M3U8 任务表；仍在 queued/running 的标记 failed 可重试。
+
+    已完成/取消的任务保持原状；分片文件留在磁盘上，重试时天然断点续传。
+    """
+    try:
+        with open(_M3U8_FILE, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        tasks = d.get("tasks") if isinstance(d, dict) else None
+        if isinstance(tasks, dict):
+            for k, v in tasks.items():
+                if isinstance(v, dict) and v.get("id"):
+                    _M3U8_TASKS.setdefault(str(k), v)
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("M3U8 任务恢复失败: %s", e)
+
+    interrupted = 0
+    for t in _M3U8_TASKS.values():
+        if t.get("state") in ("queued", "running"):
+            t["state"] = "failed"
+            t["error"] = "bridge 重启导致下载中断，可重试（已下载分片会复用）"
+            interrupted += 1
+    if _M3U8_TASKS:
+        log.info("已恢复 M3U8 任务表（%d 条，%d 条中断标记失败）",
+                 len(_M3U8_TASKS), interrupted)
+
+
+def _m3u8_save() -> None:
+    """持久化 M3U8 任务表（裁剪超出上限的终态任务，保持文件有界）。"""
+    try:
+        if len(_M3U8_TASKS) > _M3U8_MAX_TASKS:
+            finished = sorted(
+                (t for t in _M3U8_TASKS.values()
+                 if t.get("state") in ("done", "failed", "cancelled")),
+                key=lambda t: t.get("created_at") or 0.0)
+            doomed = {id(t) for t in finished[:len(_M3U8_TASKS) - _M3U8_MAX_TASKS]}
+            for k, t in list(_M3U8_TASKS.items()):
+                if id(t) in doomed:
+                    _M3U8_TASKS.pop(k, None)
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps({"tasks": _M3U8_TASKS}).encode("utf-8")
+        fd = os.open(_M3U8_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+    except Exception as e:  # noqa: BLE001
+        log.warning("M3U8 任务持久化失败: %s", e)
 
 
 def _archive_config_load() -> None:
@@ -966,6 +1025,7 @@ def _archive_registry_lookup(unique_id: str = "", filename: str = "", size_bytes
 _flood_wait_load()
 _waiting_disk_load()
 _archive_load()
+_m3u8_load()
 _archive_config_load()
 _subs_load()
 _watch_seen_load()
