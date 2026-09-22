@@ -10,20 +10,20 @@ bridge_server.py — Telegram Files Bridge 极简主入口与向后兼容装配�
 4. 静态资源托管与 Cache-Control 优化
 5. 应用全局生命周期管理 (WS Relay、自动归档巡检、FloodWait 保护)
 """
+from core import *
+from services import *
 import os
 import sys
 import types
-import time
 import asyncio
-from typing import Any, Dict, List, Optional
-from fastapi import FastAPI
+from typing import Any, Optional
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
+from core.templates import CachedStaticFiles
 
 # ---------------------------------------------------------------------
 # 1. 核心层与业务服务层 100% 兼容导出
 # ---------------------------------------------------------------------
-from core import *
-from services import *
 from routers import (
     auth_router,
     dashboard_router,
@@ -34,21 +34,13 @@ from routers import (
     subscriptions_router,
     system_router,
     api_router,
+    ext_m3u8_router,
 )
 
 
 # ---------------------------------------------------------------------
 # 2. 静态资源托管类
 # ---------------------------------------------------------------------
-class CachedStaticFiles(StaticFiles):
-    """带 Cache-Control 响应头的静态资源服务。"""
-    async def get_response(self, path: str, scope: Any):
-        response = await super().get_response(path, scope)
-        if 200 <= response.status_code < 300:
-            response.headers.setdefault("Cache-Control", "public, max-age=86400")
-        return response
-
-
 # ---------------------------------------------------------------------
 # 3. FastAPI 应用实例初始化与全局中间件
 # ---------------------------------------------------------------------
@@ -81,11 +73,16 @@ if os.path.isdir(STATIC_DIR):
 # Starlette 中间件是「后注册者在外层」：最后注册的最先执行、最后处理响应。
 # 因此要让 security_headers 包裹住 portal_auth_gate（这样门禁直接返回的
 # 302/403/401 响应也会带上 CSP 等安全头），必须先注册 portal_auth_gate。
-app.middleware("http")(portal_auth_gate)
+async def _app_auth_gate(request: Request, call_next):
+    if request.url.path.startswith("/api/ext/m3u8"):
+        return await call_next(request)
+    return await portal_auth_gate(request, call_next)
+
+app.middleware("http")(_app_auth_gate)
 app.middleware("http")(security_headers)
 
 # ---------------------------------------------------------------------
-# 4. 挂载 9 大领域子路由
+# 4. 挂载领域子路由
 # ---------------------------------------------------------------------
 app.include_router(dashboard_router)
 app.include_router(auth_router)
@@ -96,6 +93,7 @@ app.include_router(archive_router)
 app.include_router(subscriptions_router)
 app.include_router(system_router)
 app.include_router(api_router)
+app.include_router(ext_m3u8_router)
 
 # ---------------------------------------------------------------------
 # 5. 应用全局生命周期管理

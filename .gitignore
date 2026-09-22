@@ -20,6 +20,8 @@ patch_backup.py
 .bridge_initialized
 .env
 .env.*
+.ext_token
+.m3u8_tasks.json
 .pytest_cache/
 .coverage
 htmlcov/
