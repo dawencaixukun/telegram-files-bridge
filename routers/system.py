@@ -465,6 +465,11 @@ async def api_notify_save_config(request: Request):
 
     _notify_config_save()
     log.info("Telegram 通知配置已更新并落盘")
+    if _NOTIFY_CONFIG.get("botToken"):
+        asyncio.create_task(ensure_bot_commands_registered(
+            str(_NOTIFY_CONFIG.get("botToken") or ""),
+            str(_NOTIFY_CONFIG.get("chatId") or ""),
+        ))
     return {"ok": True, "message": "通知配置已保存", "config": _get_notify_config_public()}
 
 

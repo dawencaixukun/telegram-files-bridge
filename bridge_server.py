@@ -191,6 +191,7 @@ import services.subscription_service as _s_subscription
 import services.media_service as _s_media
 import services.task_service as _s_task
 import services.browse_service as _s_browse
+import services.bot_command_service as _s_bot_command
 import core.config as _c_config
 import core.state as _c_state
 import core.logging as _c_logging
@@ -203,7 +204,7 @@ _ALL_DEPENDENT_MODULES = [
     _r_archive, _r_subscriptions, _r_system, _r_api,
     _s_openlist, _s_watermark, _s_notification, _s_backup,
     _s_doctor, _s_retrieve, _s_archive, _s_subscription,
-    _s_media, _s_task, _s_browse,
+    _s_media, _s_task, _s_browse, _s_bot_command,
     _c_config, _c_state, _c_logging, _c_auth, _c_backend, _c_templates
 ]
 

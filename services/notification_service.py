@@ -3,12 +3,13 @@
 services/notification_service.py — Telegram 多通道通知外发服务 (Bot / Saved Messages)
 ==================================================================================
 支持基于 Bot API 与 TDLib Saved Messages 的大文件下载完成、网盘归档成功/失败、磁盘熔断告警派发。
+Bot 通道通知卡片自带可交互内联按钮（立即上传、选目录上传、一键重试、换目录重试、清理记录等）。
 """
 import re
 import time
 import asyncio
 from urllib.parse import urlsplit
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 import httpx
 from core.config import _fmt_size
 from core.state import _NOTIFY_CONFIG
@@ -26,14 +27,22 @@ _NOTIFY_LAST_DISK_ALERT = 0.0
 _NOTIFY_PENDING_TASKS: set = set()
 
 
-def _spawn_notification(kind: str, card: str) -> None:
+def _spawn_notification(kind: str, card: str, reply_markup: Optional[Dict[str, Any]] = None) -> None:
     """派发通知并持有任务引用，完成后自动从集合移除。"""
-    task = asyncio.create_task(_dispatch_notification(kind, card))
+    if reply_markup is not None:
+        try:
+            coro = _dispatch_notification(kind, card, reply_markup=reply_markup)
+        except TypeError:
+            coro = _dispatch_notification(kind, card)
+    else:
+        coro = _dispatch_notification(kind, card)
+    task = asyncio.create_task(coro)
     _NOTIFY_PENDING_TASKS.add(task)
     task.add_done_callback(_NOTIFY_PENDING_TASKS.discard)
 
 
-async def _send_via_bot(bot_token: str, chat_id: str, html_text: str) -> Tuple[bool, str]:
+async def _send_via_bot(bot_token: str, chat_id: str, html_text: str,
+                        reply_markup: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     bot_token = str(bot_token or "").strip()
     chat_id = str(chat_id or "").strip()
     if not bot_token or not chat_id:
@@ -49,12 +58,14 @@ async def _send_via_bot(bot_token: str, chat_id: str, html_text: str) -> Tuple[b
     if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.telegram.org" or parsed.port not in (None, 443):
         return False, "非法 Telegram Bot API 目标地址"
 
-    payload = {
+    payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": html_text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), follow_redirects=False) as client:
             resp = await client.post(url, json=payload)
@@ -101,8 +112,9 @@ async def _send_via_saved_messages(text: str) -> Tuple[bool, str]:
 
 
 async def _dispatch_notification(event_type: str, html_content: str, force: bool = False,
-                                override_bot_token: str = "", override_chat_id: str = "",
-                                override_channel: str = "") -> Dict[str, Any]:
+                                 override_bot_token: str = "", override_chat_id: str = "",
+                                 override_channel: str = "",
+                                 reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """统一通知外发分发器。非阻塞、异常静默降级、支持双通道。"""
     try:
         if not force and not _NOTIFY_CONFIG.get("enabled", False):
@@ -121,7 +133,13 @@ async def _dispatch_notification(event_type: str, html_content: str, force: bool
 
         if channel in ("bot", "both"):
             if bot_token and chat_id:
-                ok, err = await _send_via_bot(bot_token, chat_id, html_content)
+                if reply_markup:
+                    try:
+                        ok, err = await _send_via_bot(bot_token, chat_id, html_content, reply_markup=reply_markup)
+                    except TypeError:
+                        ok, err = await _send_via_bot(bot_token, chat_id, html_content)
+                else:
+                    ok, err = await _send_via_bot(bot_token, chat_id, html_content)
                 results["bot"] = ok
                 if not ok:
                     errors.append(f"Bot 发送失败: {err}")
@@ -148,7 +166,7 @@ async def _dispatch_notification(event_type: str, html_content: str, force: bool
 
 
 def notify_download_completed(task: Dict[str, Any]) -> None:
-    """大文件下载完成通知。"""
+    """大文件下载完成通知（附带一键上传网盘 / 选目录上传内联按钮）。"""
     try:
         sz_bytes = task.get("_size_bytes")
         if not sz_bytes and isinstance(task.get("size"), (int, float)):
@@ -169,9 +187,15 @@ def notify_download_completed(task: Dict[str, Any]) -> None:
             f"💬 <b>来源会话：</b><code>{chat_title}</code>\n"
             f"💾 <b>本地路径：</b><code>{lp}</code>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "<i>💡 该文件已安全落地，等待归档转存。</i>"
+            "<i>💡 该文件已安全落地，可直接点击下方按钮立即上传网盘或切换目录。</i>"
         )
-        _spawn_notification("downloadCompleted", card)
+        kb = None
+        try:
+            from services.bot_command_service import build_notify_download_kb
+            kb = build_notify_download_kb(task)
+        except Exception:
+            kb = None
+        _spawn_notification("downloadCompleted", card, reply_markup=kb)
     except Exception as e:
         log.debug("notify_download_completed 异常: %s", e)
 
@@ -200,13 +224,19 @@ def notify_archive_success(job: Dict[str, Any]) -> None:
             "━━━━━━━━━━━━━━━━━━\n"
             f'🔗 <a href="{url}">点击直接在 OpenList 中查看文件</a>'
         )
-        _spawn_notification("archiveSuccess", card)
+        kb = None
+        try:
+            from services.bot_command_service import build_notify_archive_success_kb
+            kb = build_notify_archive_success_kb(job)
+        except Exception:
+            kb = None
+        _spawn_notification("archiveSuccess", card, reply_markup=kb)
     except Exception as e:
         log.debug("notify_archive_success 异常: %s", e)
 
 
 def notify_archive_failed(job: Dict[str, Any]) -> None:
-    """网盘归档失败通知。"""
+    """网盘归档失败通知（附带一键重试 / 换目录重试 / 删除记录内联按钮）。"""
     try:
         fn = str(job.get("filename") or "未知文件")
         rp = str(job.get("remote_path") or "—")
@@ -234,9 +264,15 @@ def notify_archive_failed(job: Dict[str, Any]) -> None:
             f"⚠️ <b>故障类别：</b><b>{cat}</b>\n"
             f"❌ <b>详细原因：</b><code>{raw_err[:120]}</code>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"<i>🔧 处理建议：{action}</i>"
+            f"<i>🔧 处理建议：{action}（可直接点击下方按钮重试或换目录）</i>"
         )
-        _spawn_notification("archiveFailed", card)
+        kb = None
+        try:
+            from services.bot_command_service import build_notify_archive_failed_kb
+            kb = build_notify_archive_failed_kb(job)
+        except Exception:
+            kb = None
+        _spawn_notification("archiveFailed", card, reply_markup=kb)
     except Exception as e:
         log.debug("notify_archive_failed 异常: %s", e)
 
@@ -258,7 +294,12 @@ def notify_disk_watermark_alert(cur_pct: float, high_thresh: float, free_gb: flo
             "━━━━━━━━━━━━━━━━━━\n"
             "<i>🚨 系统已启动自动应急清理与保护，请关注存储安全。</i>"
         )
-        _spawn_notification("diskWatermarkAlert", card)
+        kb = None
+        try:
+            from services.bot_command_service import build_notify_disk_alert_kb
+            kb = build_notify_disk_alert_kb()
+        except Exception:
+            kb = None
+        _spawn_notification("diskWatermarkAlert", card, reply_markup=kb)
     except Exception as e:
         log.debug("notify_disk_watermark_alert 异常: %s", e)
-
