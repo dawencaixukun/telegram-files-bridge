@@ -43,10 +43,10 @@
   }
 
   function settle(ok) {
+    if (el) el.classList.remove('show');
     if (!currentResolve) return;
     var r = currentResolve;
     currentResolve = null;
-    el.classList.remove('show');
     r(ok);
   }
 
@@ -162,18 +162,21 @@
       cancelBtn.textContent = opts.cancelText || '取消';
       el.querySelector('.ui-confirm-icon').className = 'ui-confirm-icon';
 
+      var closePrompt = function (val) {
+        cleanup();
+        el.classList.remove('show');
+        var r = promptResolve;
+        promptResolve = null;
+        if (r) r(val);
+      };
       var keyHandler = function (ev) {
         if (!el.classList.contains('show')) return;
         if (ev.key === 'Escape') {
           ev.preventDefault();
-          cleanup();
-          el.classList.remove('show');
-          promptResolve(null);
+          closePrompt(null);
         } else if (ev.key === 'Enter' && ev.target === inp) {
           ev.preventDefault();
-          cleanup();
-          el.classList.remove('show');
-          promptResolve(inp.value);
+          closePrompt(inp.value);
         }
       };
       var cleanup = function () {
@@ -181,17 +184,21 @@
       };
       document.addEventListener('keydown', keyHandler, true);
 
-      // 接管 backdrop 的按钮点击（prompt 模式下返回输入值而非 true/false）
+      // 接管 backdrop 的按钮点击（prompt 模式下返回输入值而非 true/false，并立即移除 .show 关闭弹窗）
       var clickHandler = function (ev) {
+        if (ev.target === el) {
+          ev.stopPropagation();
+          closePrompt(null);
+          return;
+        }
         var btn = ev.target.closest('[data-act]');
         if (!btn) return;
+        ev.stopPropagation();
         var act = btn.getAttribute('data-act');
         if (act === 'ok') {
-          cleanup();
-          promptResolve(inp.value);
-        } else if (act === 'cancel' || ev.target === el) {
-          cleanup();
-          promptResolve(null);
+          closePrompt(inp.value);
+        } else if (act === 'cancel') {
+          closePrompt(null);
         }
       };
       el.addEventListener('click', clickHandler);

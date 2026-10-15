@@ -197,7 +197,7 @@
     if (!stack) return;
     var el = document.createElement('div');
     el.className = 'toast ' + (type || 'success');
-    var icon = type === 'error' ? 'ic-alert' : (type === 'info' ? 'ic-info' : 'ic-check');
+    var icon = type === 'error' ? 'ic-alert' : (type === 'info' ? 'ic-info' : (type === 'warn' ? 'ic-alert' : 'ic-check'));
     // msg/sub 来自后端错误文本（不可信），必须用 textContent 注入，不能 innerHTML
     var box = document.createElement('div');
     var line = document.createElement('div');
@@ -773,14 +773,34 @@
     if (archDelLocalExplicit) archBody.deleteLocal = deleteLocal;
 
     postJSON('/archive/start', archBody).then(function (r) { return r.json(); }).then(function (d) {
+      // 后端只要有一个任务成功就返回 ok:true，同时在 errors 里列出被跳过的文件。
+      // 旧前端完全不读 errors —— 用户批量选 20 个、实际只进了 1 个，界面照样弹
+      // 「已加入归档队列」，这正是「批量上传失败」的观感来源之一。必须报出来。
+      var errs = (d && d.errors) || [];
       if (d && d.ok) {
         window.__closeArchive();
+        var started = (typeof d.started === 'number') ? d.started : (uids.length - errs.length);
         var label = uids.length === 1 ? (archItems[0].filename || '文件') : ('批量 ' + uids.length + ' 个文件');
-        window.__toast('已加入归档队列', 'success', label + ' → ' + dir + (deleteLocal ? '（归档后将自动删除本地）' : ''));
+        if (errs.length) {
+          // 部分成功：用 warn 级提示，并把首批被跳过文件的原因写给用户
+          var head = errs.slice(0, 3).map(function (e) {
+            var nm = archItems.filter(function (it) { return it.uniqueId === e.uniqueId; })[0];
+            return (nm && nm.filename ? nm.filename : e.uniqueId) + '：' + (e.message || '未归档');
+          }).join('\n');
+          window.__toast(
+            '部分文件未加入队列（' + started + '/' + uids.length + ' 已加入）',
+            'warn',
+            head + (errs.length > 3 ? ('\n…另有 ' + (errs.length - 3) + ' 个') : '')
+          );
+        } else {
+          window.__toast('已加入归档队列', 'success', label + ' → ' + dir + (deleteLocal ? '（归档后将自动删除本地）' : ''));
+        }
         if (window.__localClearSelection) window.__localClearSelection();
         __archPollStart();
       } else {
-        window.__toast('归档提交失败', 'error', (d && d.message) || '后端返回错误');
+        var msg = (d && d.message) || '后端返回错误';
+        if (errs.length) msg += '\n' + errs.slice(0, 3).map(function (e) { return e.message || ''; }).filter(Boolean).join('\n');
+        window.__toast('归档提交失败', 'error', msg);
       }
       if (submitBtn) submitBtn.disabled = false;
       return null;
@@ -1490,6 +1510,20 @@
     }
     return { el: null, id: a };
   }
+  function refreshTasksTableInPlace() {
+    var box = document.getElementById('tasksTable');
+    if (box && window.htmx) {
+      var params = new URLSearchParams();
+      var form = document.querySelector('form[hx-get="/partials/tasks"]');
+      if (form) {
+        new FormData(form).forEach(function (v, k) {
+          if (v !== '' && v != null) params.append(k, String(v));
+        });
+      }
+      params.set('refresh', '1');
+      window.htmx.ajax('GET', '/partials/tasks?' + params.toString(), { target: '#tasksTable', swap: 'outerHTML' });
+    }
+  }
   window.__retryTask = function (a, b) {
     var args = resolveTaskArgs(a, b);
     var meta = metaFromEl(args.el) || (args.id != null ? { uniqueId: String(args.id), telegramId: null } : null);
@@ -1504,6 +1538,7 @@
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
             window.__toast('已重新加入下载队列', 'success', '任务 #' + display + ' 重试已提交');
+            refreshTasksTableInPlace();
           } else {
             window.__toast('重试失败', 'error', (d && d.message) || '后端返回错误');
           }
@@ -1526,7 +1561,8 @@
       return postJSON('/task/cancel', { uniqueId: String(meta.uniqueId) })
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
-            window.__toast('已取消任务 #' + display, 'success', '取消指令已发送');
+            window.__toast('已取消任务 #' + display, 'success', d.message || '取消指令已生效');
+            refreshTasksTableInPlace();
           } else {
             window.__toast('取消失败', 'error', (d && d.message) || '后端返回错误');
           }
@@ -1571,6 +1607,7 @@
               failed ? 'error' : 'success',
               '成功 ' + done + ' 条' + (failed ? '，失败 ' + failed + ' 条' : '')
             );
+            if (done > 0) refreshTasksTableInPlace();
           }
           return null;
         });
@@ -2564,297 +2601,6 @@
     };
   };
 
-  /* ---------------- 浏览器插件接入卡（m3u8 扩展 Token 管理） ---------------- */
-  window.extPluginCard = function extPluginCard() {
-    return {
-      token: '',
-      resetting: false,
-      // 插件默认归档位置：与归档设置卡片共用同一份后端配置（/archive/config
-      // 的 defaultDir），这里只是给插件使用者一个就近入口，避免两处配置打架。
-      defaultDir: '',
-      dirOpen: false,
-      browsePath: '/',
-      dirs: [],
-      crumbList: [],
-      loadingDirs: false,
-      savingDir: false,
-      load: function () {
-        var self = this;
-        fetch('/api/ext-token')
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (d && d.ok) { self.token = d.token || ''; }
-          })
-          .catch(function () { /* 静默：卡片只读展示，失败不打扰用户 */ });
-        fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (d && d.ok && d.config) { self.defaultDir = d.config.defaultDir || ''; }
-          })
-          .catch(function () {});
-      },
-      /* ---- 默认归档位置：目录浏览（复用 /openlist/dirs） ---- */
-      buildCrumbs: function (path) {
-        var segs = (path || '/').split('/').filter(Boolean);
-        var res = [{ label: '根目录', path: '/' }];
-        var acc = '';
-        segs.forEach(function (s) { acc += '/' + s; res.push({ label: s, path: acc }); });
-        return res;
-      },
-      toggleDir: function () {
-        this.dirOpen = !this.dirOpen;
-        if (this.dirOpen) { this.loadDir(this.browsePath || '/'); }
-      },
-      loadDir: function (p) {
-        var self = this;
-        this.browsePath = p || '/';
-        this.crumbList = this.buildCrumbs(this.browsePath);
-        this.loadingDirs = true;
-        fetch('/openlist/dirs?path=' + encodeURIComponent(this.browsePath))
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            self.loadingDirs = false;
-            self.dirs = (d && d.ok) ? (d.dirs || []) : [];
-            if (!d || !d.ok) {
-              window.__toast('读取目录失败', 'error', (d && d.message) || '请先在归档设置里登录 OpenList');
-            }
-            return null;
-          })
-          .catch(function () { self.loadingDirs = false; self.dirs = []; });
-      },
-      goUpDir: function () {
-        var p = this.browsePath || '/';
-        if (p === '/') return;
-        var up = p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/';
-        this.loadDir(up);
-      },
-      pickDir: function (d) { this.defaultDir = d.path; this.dirOpen = false; },
-      saveDir: function () {
-        if (this.savingDir) return;
-        var self = this;
-        this.savingDir = true;
-        // 只提交 defaultDir：/archive/config 是全量保存，其余字段必须先取回现值，
-        // 否则会把 autoArchive/deleteLocal 等开关一并覆盖成默认值。
-        fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            var cfg = (d && d.ok && d.config) ? d.config : {};
-            cfg.defaultDir = self.defaultDir || '';
-            return fetch('/archive/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
-              body: JSON.stringify(cfg)
-            });
-          })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            self.savingDir = false;
-            if (d && d.ok) {
-              self.defaultDir = (d.config && d.config.defaultDir) || '';
-              window.__DEFAULT_ARCH_DIR = self.defaultDir;
-              window.__toast('已保存', 'success', self.defaultDir ? ('插件默认归档到 ' + self.defaultDir) : '已恢复为「未指定」（归档到 /m3u8）');
-            } else {
-              window.__toast('保存失败', 'error', (d && d.message) || '服务端返回错误');
-            }
-            return null;
-          })
-          .catch(function () { self.savingDir = false; window.__toast('保存失败', 'error', '网络错误'); });
-      },
-      copyToken: function () {
-        if (!this.token) { window.__toast('Token 尚未加载', 'error', ''); return; }
-        var t = this.token;
-        // 优先用剪贴板 API；非安全上下文（http 非 localhost）回退到临时 textarea
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(t).then(function () {
-            window.__toast('已复制', 'success', 'Token 已复制到剪贴板');
-          }).catch(function () { window.__toast('复制失败', 'error', '请手动选中复制'); });
-          return;
-        }
-        var ta = document.createElement('textarea');
-        ta.value = t;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        try {
-          document.execCommand('copy');
-          window.__toast('已复制', 'success', 'Token 已复制到剪贴板');
-        } catch (e) {
-          window.__toast('复制失败', 'error', '请手动选中复制');
-        }
-        document.body.removeChild(ta);
-      },
-      resetToken: function () {
-        var self = this;
-        // 破坏性操作必须二次确认：重置会让现有插件立刻失效
-        var ask = window.__uiConfirm
-          ? window.__uiConfirm({
-              title: '重置插件 Token？',
-              body: '旧 Token 会立即失效，需要到 Chrome 扩展里重新填写新 Token。',
-              okText: '重置', danger: true
-            })
-          : Promise.resolve(false);
-        ask.then(function (ok) {
-            if (!ok) return null;
-            self.resetting = true;
-            return fetch('/api/ext-token/reset', {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' }
-            }).then(function (r) { return r.json(); }).then(function (d) {
-              self.resetting = false;
-              if (d && d.ok) {
-                self.token = d.token || '';
-                window.__toast('已重置', 'success', '请把新 Token 填入 Chrome 扩展');
-              } else {
-                window.__toast('重置失败', 'error', (d && d.message) || '服务端异常');
-              }
-              return null;
-            }).catch(function () {
-              self.resetting = false;
-              window.__toast('重置失败', 'error', '网络错误');
-              return null;
-            });
-        });
-      }
-    };
-  };
-
-  /* ---------------- 网页下载（m3u8 插件任务）卡片 ---------------- */
-  window.m3u8Card = function m3u8Card() {
-    return {
-      tasks: [],
-      activeCount: 0,
-      loading: false,
-      timer: null,
-      // 正在删除的任务 id 集合（按任务粒度）。必须是组件级状态：列表每次 load()
-      // 都用服务端新对象整体替换 self.tasks，挂在任务上的 per-task 标记会随之丢失。
-      removing: {},
-      init: function () {
-        this.load();
-        var self = this;
-        // 有进行中任务才轮询（4s），空闲自动停表，避免空转打服务端
-        var tick = function () {
-          self.load().then(function () {
-            if (self.activeCount > 0) {
-              self.timer = setTimeout(tick, 4000);
-            } else {
-              self.timer = null;
-            }
-          });
-        };
-        this.timer = setTimeout(tick, 4000);
-      },
-      load: function () {
-        var self = this;
-        this.loading = true;
-        return fetch('/api/m3u8/tasks?limit=50')
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            self.loading = false;
-            if (d && d.ok) {
-              self.tasks = d.tasks || [];
-              self.activeCount = d.active || 0;
-            }
-            return null;
-          })
-          .catch(function () { self.loading = false; return null; });
-      },
-      stateLabel: function (s) {
-        return ({
-          queued: '排队中', running: '下载中', done: '已完成',
-          failed: '失败', cancelled: '已取消'
-        })[s] || s;
-      },
-      pct: function (t) {
-        var tot = Number(t.total_segments) || 0;
-        if (!tot) return 0;
-        return Math.max(0, Math.min(100, Math.round((Number(t.done_segments) || 0) * 100 / tot)));
-      },
-      fmtSize: function (n) {
-        var b = Number(n) || 0;
-        if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
-        if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
-        if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
-        return b + ' B';
-      },
-      fmtSpeed: function (bps) {
-        var v = Number(bps) || 0;
-        if (v <= 0) return '';
-        if (v >= 1048576) return (v / 1048576).toFixed(1) + ' MB/s';
-        if (v >= 1024) return (v / 1024).toFixed(0) + ' KB/s';
-        return v.toFixed(0) + ' B/s';
-      },
-      cancel: function (t) {
-        var self = this;
-        return fetch('/api/m3u8/cancel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
-          body: JSON.stringify({ task_id: t.id })
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          window.__toast(d && d.ok ? '已取消' : '取消失败',
-                          d && d.ok ? 'success' : 'error',
-                          (d && d.message) || '');
-          return self.load();
-        }).catch(function () { window.__toast('取消失败', 'error', '网络错误'); return null; });
-      },
-      retry: function (t) {
-        var self = this;
-        return fetch('/api/m3u8/retry', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
-          body: JSON.stringify({ task_id: t.id })
-        }).then(function (r) { return r.json(); }).then(function (d) {
-          window.__toast(d && d.ok ? '已重新加入下载队列' : '重试失败',
-                          d && d.ok ? 'success' : 'error',
-                          (d && d.message) || '');
-          return self.load().then(function () {
-            // 重试后可能转为进行中，确保轮询重新开表
-            if (self.activeCount > 0 && !self.timer) self.init();
-            return null;
-          });
-        }).catch(function () { window.__toast('重试失败', 'error', '网络错误'); return null; });
-      },
-      remove: function (t) {
-        var self = this;
-        // 防重复提交：删除是破坏性且要回收磁盘的，连点两次会发出两个请求，
-        // 第二个必然 404「任务不存在」并弹一个误导性的错误提示。
-        if (this.removing[t.id]) return Promise.resolve(null);
-        this.removing[t.id] = true;
-        var release = function () { delete self.removing[t.id]; return null; };
-        var ask = window.__uiConfirm
-          ? window.__uiConfirm({
-              title: '删除该下载任务？',
-              body: '会删除任务记录、分片缓存与本地成品文件（云端已归档的文件不受影响）。',
-              okText: '删除', danger: true
-            })
-          : Promise.resolve(false);
-        ask.then(function (ok) {
-          if (!ok) return release();
-          return fetch('/api/m3u8/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
-            body: JSON.stringify({ task_id: t.id })
-          }).then(function (r) { return r.json(); }).then(function (d) {
-            if (d && d.ok) {
-              var freed = Number(d.freed) || 0;
-              window.__toast('已删除', 'success',
-                freed ? ('已释放 ' + self.fmtSize(freed)) : '分片缓存已回收');
-            } else {
-              // 后端拒绝时会给出可读原因（进行中 / 协程收尾中 / 归档上传中），
-              // 这不是「失败」，用中性标题避免误导用户反复重试。
-              window.__toast('无法删除', 'error', (d && d.message) || '服务端返回错误');
-            }
-            // 成功时该任务已从后端移除，重新拉列表即可；失败时列表里它还在。
-            return self.load().then(release, release);
-          }).catch(function () {
-            window.__toast('删除失败', 'error', '网络错误');
-            return release();
-          });
-        });
-      }
-    };
-  };
-
   /* ---------------- System Doctor 系统健康自检组件 ---------------- */
   window.doctorCard = function doctorCard() {
     return {
@@ -3533,7 +3279,7 @@
 
   /* ---------------- 页面加载兜底与 htmx 事件联动 ---------------- */
   if (typeof document !== 'undefined') {
-    if (!window.__DEFAULT_ARCH_DIR) {
+    if (!window.__DEFAULT_ARCH_DIR && document.querySelector('[data-arch-btn], #archiveModal')) {
       fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -3557,6 +3303,74 @@
         if (evt.detail && evt.detail.target && evt.detail.target.id === 'localFiles') {
           if (window.__localClearSelection) window.__localClearSelection();
         }
+      });
+
+      /* ---------------- 顶部切页/请求即时进度条 & 导航预热 ---------------- */
+      var navBarTimer = null;
+      function startNavProgress() {
+        var bar = document.getElementById('topNavProgress');
+        if (!bar) return;
+        if (navBarTimer) { clearTimeout(navBarTimer); navBarTimer = null; }
+        bar.classList.remove('done');
+        bar.classList.add('active');
+      }
+      function finishNavProgress() {
+        var bar = document.getElementById('topNavProgress');
+        if (!bar) return;
+        bar.classList.remove('active');
+        bar.classList.add('done');
+        navBarTimer = setTimeout(function () {
+          bar.classList.remove('done');
+        }, 320);
+      }
+      window.__startNavProgress = startNavProgress;
+      window.__finishNavProgress = finishNavProgress;
+
+      document.addEventListener('htmx:beforeRequest', function () {
+        startNavProgress();
+      });
+      document.addEventListener('htmx:afterRequest', function () {
+        finishNavProgress();
+      });
+      document.addEventListener('htmx:responseError', function () {
+        finishNavProgress();
+      });
+
+      /* 侧栏导航：手指按下/悬停即刻预热缓存，点击瞬间高亮 + 关抽屉 + 顶部进度条 */
+      var prefetchedUrls = {};
+      function prefetchNav(a) {
+        if (!a) return;
+        var href = a.getAttribute('href');
+        if (!href || href.charAt(0) !== '/' || href === window.location.pathname) return;
+        var now = Date.now();
+        if (prefetchedUrls[href] && now - prefetchedUrls[href] < 10000) return;
+        prefetchedUrls[href] = now;
+        try {
+          fetch(href, { method: 'GET', credentials: 'same-origin', priority: 'low' }).catch(function () {});
+        } catch (e) {}
+      }
+      document.addEventListener('mouseover', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (a) prefetchNav(a);
+      }, { passive: true });
+      document.addEventListener('touchstart', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (a) prefetchNav(a);
+      }, { passive: true });
+      document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        var href = a.getAttribute('href');
+        if (!href || href.charAt(0) !== '/') return;
+        document.querySelectorAll('.sidebar .nav-item.active').forEach(function (el) {
+          el.classList.remove('active');
+        });
+        a.classList.add('active');
+        document.body.classList.remove('drawer-open');
+        startNavProgress();
+      });
+      window.addEventListener('pageshow', function () {
+        finishNavProgress();
       });
     }
   }

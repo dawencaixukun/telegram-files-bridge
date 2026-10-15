@@ -20,17 +20,21 @@ services/watch_service.py — 频道消息监听，实时入库（Watch Service�
 """
 import asyncio
 import os
+import posixpath
 import re
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.state import (
     _SUB_RULES, _ARCHIVE_JOBS, _WATCH_SEEN, _WATCH_SEEN_MAX, _watch_save,
-    _is_flood_wait_active, _tasks_cache_invalidate
+    _is_flood_wait_active, _tasks_cache_invalidate, _custom_notes_save, _archive_save
 )
 from core.backend import BACKEND
-from core.logging import log
-from core.config import TG_WAIT_PHONE, TG_WAIT_CODE, TG_WAIT_PASSWORD, TG_WAIT_OTHER_DEVICE
+from core.logging import log, LOG_STORE
+from core.config import (
+    TG_WAIT_PHONE, TG_WAIT_CODE, TG_WAIT_PASSWORD, TG_WAIT_OTHER_DEVICE,
+    _CUSTOM_FILE_NOTES, _is_meaningless_filename, _sanitize_note_filename
+)
 
 # 轮询间隔：够"实时"，又不至于压后端
 _WATCH_INTERVAL = float(os.environ.get("BRIDGE_WATCH_INTERVAL", "15"))
@@ -180,6 +184,8 @@ async def _enqueue_new(rule: Dict[str, Any], files: List[Dict[str, Any]]) -> int
 
     try:
         await BACKEND.start_download_multiple({"files": payload})
+        if hasattr(BACKEND, "_cache") and isinstance(getattr(BACKEND, "_cache", None), dict):
+            BACKEND._cache.clear()
         _tasks_cache_invalidate()
         log.info("监听自动入队 %d 个新文件（rule=%s, chat=%s）",
                  len(payload), rule.get("id"), rule.get("chatId"))
@@ -201,6 +207,7 @@ async def _watch_tick() -> int:
     for rule in rules:
         tg = rule.get("telegramId")
         ch = rule.get("chatId")
+        await sync_chat_custom_notes(tg, ch)
         key = _seen_key(rule.get("id"), ch)
         seen = _seen_of(key)
         try:
@@ -257,6 +264,10 @@ _LINK_IN_TEXT = re.compile(
     r"https?://t(?:elegram)?\.(?:me|dog)/[A-Za-z0-9_/+\-]+",
     re.IGNORECASE)
 
+# 记录「发送链接的文本消息 ID」到「解析出的视频 uniqueId」的映射
+# 支持用户在收藏里对链接消息直接左滑「回复」发备注
+_LINK_MSG_TO_UID: Dict[str, str] = {}
+
 
 def _extract_links(text: str) -> List[str]:
     out: List[str] = []
@@ -311,6 +322,8 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
             continue
 
         fresh_links: List[str] = []
+        notes_by_link: Dict[str, str] = {}
+        link_to_msg: Dict[str, Tuple[Any, Any]] = {}
         newly: Set[str] = set()
         # 链接消息基线独立判定：只看该会话是否已有 link- 前缀键（媒体键与本键同存一个
         # 集合，媒体基线先写会让 seen 非空——不能拿它当"链接已建基线"的依据，
@@ -333,7 +346,16 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
                 caption = content.get("caption") or {}
                 text = str(caption.get("text") or "")
             if link_seen:  # 链接基线轮不入队
-                fresh_links.extend(_extract_links(text))
+                extracted = _extract_links(text)
+                if extracted:
+                    fresh_links.extend(extracted)
+                    # 提取链接同条消息附带的备注文字（剔除 http 链接部分）
+                    rem = re.sub(r"https?://\S+", "", text).strip()
+                    rem_note = _sanitize_note_filename(rem) if rem else ""
+                    for lk in extracted:
+                        if rem_note:
+                            notes_by_link[lk] = rem_note
+                        link_to_msg[lk] = (ch, mid)
 
         if newly:
             _seen_put(key, newly)
@@ -345,7 +367,11 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
         # 链接解析 + 入队（复用任务服务的两跳解析，含去重与熔断语义）
         try:
             from services.task_service import _resolve_links_to_files
-            n, err = await _resolve_links_to_files(fresh_links)
+            n, err = await _resolve_links_to_files(
+                fresh_links,
+                notes_by_link=notes_by_link,
+                link_to_msg=link_to_msg,
+            )
             if err:
                 log.warning("监听链接解析失败（chat=%s）: %s", ch, err)
             total += n
@@ -354,6 +380,454 @@ async def _watch_text_links(rules: List[Dict[str, Any]]) -> int:
         except Exception as e:  # noqa: BLE001
             log.warning("监听链接入队异常（chat=%s）: %s", ch, e)
     return total
+
+
+# ---------------------------------------------------------------------------
+# 收藏/监听会话备注自动命名：
+# 支持 3 种习惯：
+#   1) 转发视频到收藏时直接带说明文字（Telegram 会先发一条同秒纯文本、紧跟转发视频）
+#   2) 先把视频转到收藏，随后（120 秒内）紧接着发一条纯文字备注
+#   3) 对收藏里的任意视频「回复（Reply）」一条纯文字备注（随时改名，已归档云端同步改名）
+# ---------------------------------------------------------------------------
+def parse_chat_history_notes(messages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """从 TDLib GetChatHistory 消息列表中解析视频的自定义备注名。
+
+    返回 {uid_or_msgkey: {"uid": str, "mid": int, "note": str, "explicit": bool, "file_name": str}}。
+    """
+    if not isinstance(messages, list) or not messages:
+        return {}
+
+    asc = sorted(
+        (m for m in messages if isinstance(m, dict) and m.get("id") is not None),
+        key=lambda m: (int(m.get("date") or 0), int(m.get("id") or 0)),
+    )
+
+    items: List[Dict[str, Any]] = []
+    videos_by_mid: Dict[int, Dict[str, Any]] = {}
+    albums: Dict[int, List[Dict[str, Any]]] = {}
+
+    for m in asc:
+        mid = int(m.get("id") or 0)
+        date = int(m.get("date") or 0)
+        album_id = int(m.get("mediaAlbumId") or 0)
+        is_fwd = bool(m.get("forwardInfo"))
+        content = m.get("content") or {}
+        if not isinstance(content, dict):
+            continue
+
+        video_obj = content.get("video")
+        if isinstance(video_obj, dict):
+            raw_v = video_obj.get("video")
+            v_inner: Dict[str, Any] = raw_v if isinstance(raw_v, dict) else {}
+            raw_rem = v_inner.get("remote")
+            remote: Dict[str, Any] = raw_rem if isinstance(raw_rem, dict) else {}
+            uid = str(remote.get("uniqueId") or "")
+            fn = str(video_obj.get("fileName") or "")
+            fsize = int(v_inner.get("size") or v_inner.get("expectedSize") or video_obj.get("size") or 0)
+            v_item = {
+                "kind": "video",
+                "mid": mid,
+                "date": date,
+                "album_id": album_id,
+                "is_fwd": is_fwd,
+                "uid": uid,
+                "file_name": fn,
+                "size": fsize,
+                "note": "",
+                "explicit": False,
+                "has_pre_note": False,
+            }
+            items.append(v_item)
+            videos_by_mid[mid] = v_item
+            if album_id:
+                albums.setdefault(album_id, []).append(v_item)
+            continue
+
+        text_obj = content.get("text")
+        if isinstance(text_obj, dict) and not is_fwd:
+            raw_text = str(text_obj.get("text") or "").strip()
+            if not raw_text or raw_text.startswith("/"):
+                continue
+            if _extract_links(raw_text) or re.search(r"https?://", raw_text, re.I):
+                continue
+            note_lines = [
+                _sanitize_note_filename(ln)
+                for ln in raw_text.splitlines()
+                if _sanitize_note_filename(ln) and len(_sanitize_note_filename(ln)) <= 80
+            ]
+            clean_note = note_lines[0] if note_lines else _sanitize_note_filename(raw_text)
+            if not clean_note or len(clean_note) > 80:
+                continue
+            reply_to = m.get("replyTo")
+            reply_mid = int(
+                (reply_to.get("messageId") if isinstance(reply_to, dict) else None)
+                or m.get("replyToMessageId")
+                or 0
+            )
+            items.append({
+                "kind": "note",
+                "mid": mid,
+                "date": date,
+                "note": clean_note,
+                "note_lines": note_lines,
+                "reply_mid": reply_mid,
+                "consumed": False,
+            })
+
+    def _size_sort_key(v: Dict[str, Any]) -> Tuple[float, int, int]:
+        sz = int(v.get("size") or 0)
+        return (float(sz) if sz > 0 else float("inf"), int(v.get("date") or 0), int(v.get("mid") or 0))
+
+    def _assign_batch(
+        batch: List[Dict[str, Any]],
+        base_note: str,
+        explicit: bool = False,
+        is_pre: bool = False,
+        note_lines: Optional[List[str]] = None,
+    ) -> None:
+        if not batch or not base_note:
+            return
+        if len(batch) == 1:
+            batch[0]["note"] = base_note
+            if explicit:
+                batch[0]["explicit"] = True
+            if is_pre:
+                batch[0]["has_pre_note"] = True
+        elif note_lines and len(note_lines) == len(batch):
+            # 多行备注且行数与视频数一致：一行对应一个视频名
+            for v, ln in zip(batch, note_lines):
+                v["note"] = ln
+                if explicit:
+                    v["explicit"] = True
+                if is_pre:
+                    v["has_pre_note"] = True
+        else:
+            # 多视频共用单条备注时：按文件大小从小到大排序（最小为 1，最大为 N）
+            ordered = sorted(batch, key=_size_sort_key)
+            for idx, v in enumerate(ordered, 1):
+                v["note"] = f"{base_note} {idx}"
+                if explicit:
+                    v["explicit"] = True
+                if is_pre:
+                    v["has_pre_note"] = True
+
+    # Pass 1: 转发时附带说明（纯文本紧邻在转发视频之前，间隔 -2s ~ +20s）
+    n_items = len(items)
+    for i, it in enumerate(items):
+        if it["kind"] != "note" or it["reply_mid"] or it["consumed"]:
+            continue
+        if i + 1 >= n_items or items[i + 1]["kind"] != "video":
+            continue
+        v_first = items[i + 1]
+        dt = v_first["date"] - it["date"]
+        if not (-2 <= dt <= 20):
+            continue
+        batch = [v_first]
+        first_album = v_first["album_id"]
+        j = i + 2
+        while j < n_items and items[j]["kind"] == "video":
+            vj = items[j]
+            if first_album and vj["album_id"] == first_album:
+                batch.append(vj)
+                j += 1
+            elif not first_album and vj["album_id"] == 0 and abs(vj["date"] - v_first["date"]) <= 15:
+                batch.append(vj)
+                j += 1
+            else:
+                break
+        it["consumed"] = True
+        _assign_batch(batch, it["note"], explicit=True, is_pre=True, note_lines=it.get("note_lines"))
+
+    # Pass 2: 先转发视频到收藏，随后（120 秒内）紧跟一条纯文本备注
+    for i, it in enumerate(items):
+        if it["kind"] != "note" or it["reply_mid"] or it["consumed"]:
+            continue
+        if i - 1 < 0 or items[i - 1]["kind"] != "video":
+            continue
+        v_prev = items[i - 1]
+        if v_prev["has_pre_note"] or v_prev["note"]:
+            continue
+        dt = it["date"] - v_prev["date"]
+        if not (0 <= dt <= 120):
+            continue
+        if v_prev["album_id"] and v_prev["album_id"] in albums:
+            batch = [v for v in albums[v_prev["album_id"]] if not v["has_pre_note"] and not v["note"]]
+        else:
+            # 支持连续转发多条独立视频（间隔 <= 15s）后紧跟一条备注
+            batch = [v_prev]
+            k = i - 2
+            while k >= 0 and items[k]["kind"] == "video":
+                vk = items[k]
+                if vk["has_pre_note"] or vk["note"]:
+                    break
+                if abs(batch[0]["date"] - vk["date"]) <= 15:
+                    batch.insert(0, vk)
+                    k -= 1
+                else:
+                    break
+        if batch:
+            it["consumed"] = True
+            _assign_batch(batch, it["note"], explicit=True, is_pre=False, note_lines=it.get("note_lines"))
+
+    # Pass 3: 显式「回复（Reply）」某条视频或合集改名（最高优先级，可随时改名）
+    for it in items:
+        if it["kind"] != "note" or not it["reply_mid"]:
+            continue
+        target_v = videos_by_mid.get(it["reply_mid"])
+        if not target_v:
+            # 检查被回复的消息是否是一条链接消息（通过 _LINK_MSG_TO_UID 找到解析出的视频 uniqueId）
+            link_uid = _LINK_MSG_TO_UID.get(f"msg:{it['reply_mid']}") or next(
+                (uid for k, uid in _LINK_MSG_TO_UID.items() if k.endswith(f":{it['reply_mid']}")),
+                None
+            )
+            if link_uid:
+                target_v = next((v for v in items if v.get("kind") == "video" and v.get("uid") == link_uid), None)
+                if not target_v:
+                    _CUSTOM_FILE_NOTES[link_uid] = it["note"]
+                    it["consumed"] = True
+                    continue
+        if not target_v:
+            continue
+        it["consumed"] = True
+        alb_id = target_v.get("album_id") or 0
+        alb_list = albums.get(alb_id) if alb_id else None
+        if alb_list and len(alb_list) > 1:
+            # 支持对合集左滑回复：
+            # 1) 若写 "2 专属名"（序号+空格+名字），仅改合集中按大小排第 2 的视频
+            m_idx = re.match(r"^(\d{1,2})\s+(.+)$", it["note"])
+            ordered_alb = sorted(alb_list, key=_size_sort_key)
+            if m_idx and (not it.get("note_lines") or len(it["note_lines"]) == 1):
+                pick_i = int(m_idx.group(1))
+                sub_name = _sanitize_note_filename(m_idx.group(2))
+                if 1 <= pick_i <= len(ordered_alb) and sub_name:
+                    _assign_batch([ordered_alb[pick_i - 1]], sub_name, explicit=True, is_pre=False)
+                    continue
+            # 2) 若写多行名字或写 1 个总名字，自动作用于整个合集全部视频（按文件大小 1, 2, ...）
+            _assign_batch(ordered_alb, it["note"], explicit=True, is_pre=False, note_lines=it.get("note_lines"))
+        else:
+            _assign_batch([target_v], it["note"], explicit=True, is_pre=False)
+
+    # 若同一视频（相同 uid）被重新转发并附带了新备注，以最新一条有备注的消息为准
+    latest_note_by_uid: Dict[str, Tuple[str, bool]] = {}
+    for it in items:
+        if it["kind"] == "video" and it["uid"] and it["note"]:
+            latest_note_by_uid[it["uid"]] = (it["note"], bool(it["explicit"]))
+    for it in items:
+        if it["kind"] == "video" and it["uid"] in latest_note_by_uid:
+            it["note"], it["explicit"] = latest_note_by_uid[it["uid"]]
+
+    # Pass 4: 全局去重——若不同视频（不同 uid）赋了相同的备注名，自动递增 "备注 2", "备注 3"
+    used_notes: Dict[str, str] = {}
+    for it in items:
+        if it["kind"] != "video" or not it["note"]:
+            continue
+        key = it["uid"] or f"mid:{it['mid']}"
+        base = it["note"]
+        candidate = base
+        idx = 2
+        while candidate.lower() in used_notes and used_notes[candidate.lower()] != key:
+            candidate = f"{base} {idx}"
+            idx += 1
+        it["note"] = candidate
+        used_notes[candidate.lower()] = key
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        if it["kind"] == "video" and it["note"]:
+            key = it["uid"] or f"mid:{it['mid']}"
+            out[key] = {
+                "uid": it["uid"],
+                "mid": it["mid"],
+                "note": it["note"],
+                "explicit": it["explicit"],
+                "file_name": it["file_name"],
+            }
+    return out
+
+
+async def _auto_rename_archived_job(job: Dict[str, Any], new_stem: str) -> bool:
+    """当已归档上云的视频收到新备注时，自动调用 OpenList /api/fs/rename 同步重命名云端文件。"""
+    from services.openlist_service import _openlist_token, _openlist_relogin, _openlist_env
+    from core.state import _openlist_client
+
+    old_path = str(job.get("remote_path") or "").strip().replace("\\", "/")
+    if not old_path or old_path == "/":
+        return False
+    old_path_norm = posixpath.normpath("/" + old_path.lstrip("/"))
+    old_name = posixpath.basename(old_path_norm)
+    parent_dir = posixpath.dirname(old_path_norm)
+    if not old_name or not parent_dir or parent_dir == "/":
+        return False
+    _, ext = posixpath.splitext(old_name)
+    if not ext:
+        ext = ".mp4"
+    clean_stem = _sanitize_note_filename(new_stem)
+    if not clean_stem:
+        return False
+    if clean_stem.lower().endswith(ext.lower()):
+        target_name = clean_stem
+        clean_stem = posixpath.splitext(clean_stem)[0]
+    else:
+        target_name = f"{clean_stem}{ext}"
+
+    if target_name == old_name:
+        job["applied_note"] = new_stem
+        return False
+
+    try:
+        token = await _openlist_token()
+    except Exception:  # noqa: BLE001
+        return False
+
+    # 检查同目录下是否已有同名文件，若冲突则自动追加 (2), (3)...
+    try:
+        resp = await _openlist_client.post(
+            "/api/fs/list",
+            json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
+            headers={"Authorization": token},
+        )
+        code, data, _ = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _openlist_client.post(
+                "/api/fs/list",
+                json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
+                headers={"Authorization": token},
+            )
+            code, data, _ = _openlist_env(resp)
+        if code == 200:
+            existing = {str(c.get("name") or "") for c in (data.get("content") or [])}
+            idx = 2
+            while target_name in existing and target_name != old_name:
+                target_name = f"{clean_stem} ({idx}){ext}"
+                idx += 1
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        resp = await _openlist_client.post(
+            "/api/fs/rename",
+            json={"path": old_path_norm, "name": target_name},
+            headers={"Authorization": token},
+        )
+        code, _, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _openlist_client.post(
+                "/api/fs/rename",
+                json={"path": old_path_norm, "name": target_name},
+                headers={"Authorization": token},
+            )
+            code, _, msg = _openlist_env(resp)
+        if resp.status_code != 200 or code != 200:
+            log.warning("收藏备注自动改名失败 (%s -> %s): %s", old_name, target_name, msg or code)
+            return False
+    except Exception as e:  # noqa: BLE001
+        log.warning("收藏备注自动改名异常 (%s -> %s): %s", old_name, target_name, e)
+        return False
+
+    new_path = posixpath.join(parent_dir, target_name)
+    old_lc = old_path_norm.lower()
+    for j in _ARCHIVE_JOBS.values():
+        if str(j.get("remote_path") or "").strip().replace("\\", "/").lower() == old_lc:
+            j["remote_path"] = new_path
+            j["filename"] = target_name
+            j["applied_note"] = new_stem
+    _archive_save()
+    try:
+        import services.archive_service as _arch_mod
+        getattr(_arch_mod, "_OPENLIST_DIR_LIST_CACHE", {}).clear()
+    except Exception:  # noqa: BLE001
+        pass
+    LOG_STORE.append("INFO", f"收藏备注自动重命名云端文件：{old_name} → {target_name}", task_id=str(job.get("id") or ""))
+    log.info("收藏备注自动重命名云端文件：%s -> %s", old_path_norm, new_path)
+    return True
+
+
+async def sync_chat_custom_notes(tg_id: Any, chat_id: Any, limit: int = 40) -> int:
+    """拉取指定会话最近消息，识别用户备注并写入 _CUSTOM_FILE_NOTES；对已归档无名文件自动重命名。"""
+    if not hasattr(BACKEND, "telegram_api"):
+        return 0
+    from core.backend import telegram_api_call
+    try:
+        res = await telegram_api_call("GetChatHistory", {
+            "chatId": int(chat_id),
+            "fromMessageId": 0,
+            "offset": 0,
+            "limit": limit,
+            "onlyLocal": False,
+        }, timeout=12.0)
+    except Exception:  # noqa: BLE001
+        return 0
+    if not isinstance(res, dict):
+        return 0
+    msgs = res.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return 0
+
+    # 若存在左滑「回复」较早历史视频的情况（被回复的 messageId 不在最近 limit 条内），按需通过 GetMessage 补齐
+    seen_mids = {int(m.get("id") or 0) for m in msgs if isinstance(m, dict)}
+    missing_reply_mids: Set[int] = set()
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        reply_to = m.get("replyTo")
+        rmid = int(
+            (reply_to.get("messageId") if isinstance(reply_to, dict) else None)
+            or m.get("replyToMessageId")
+            or 0
+        )
+        if rmid and rmid not in seen_mids:
+            missing_reply_mids.add(rmid)
+    for rmid in list(missing_reply_mids)[:5]:
+        try:
+            rmsg = await telegram_api_call("GetMessage", {
+                "chatId": int(chat_id),
+                "messageId": rmid,
+            }, timeout=6.0)
+            if isinstance(rmsg, dict) and rmsg.get("id"):
+                msgs.append(rmsg)
+                seen_mids.add(int(rmsg.get("id") or 0))
+        except Exception:  # noqa: BLE001
+            pass
+
+    parsed = parse_chat_history_notes(msgs)
+    if not parsed:
+        return 0
+
+    changed = 0
+    for item in parsed.values():
+        uid = item["uid"]
+        mid = item["mid"]
+        note = item["note"]
+        explicit = item["explicit"]
+        if uid:
+            if _CUSTOM_FILE_NOTES.get(uid) != note:
+                _CUSTOM_FILE_NOTES[uid] = note
+                changed += 1
+        if mid:
+            mkey = f"msg:{chat_id}:{mid}"
+            if _CUSTOM_FILE_NOTES.get(mkey) != note:
+                _CUSTOM_FILE_NOTES[mkey] = note
+                changed += 1
+
+        # 检查是否已有归档任务需要同步改名
+        if uid:
+            for j in list(_ARCHIVE_JOBS.values()):
+                if str(j.get("unique_id") or "") != uid:
+                    continue
+                st = str(j.get("state") or "")
+                cur_fn = str(j.get("filename") or "")
+                if st == "done" and j.get("applied_note") != note:
+                    if explicit or _is_meaningless_filename(cur_fn):
+                        await _auto_rename_archived_job(j, note)
+
+    if changed:
+        _custom_notes_save()
+        if hasattr(BACKEND, "_cache") and isinstance(getattr(BACKEND, "_cache", None), dict):
+            BACKEND._cache.clear()
+        _tasks_cache_invalidate()
+    return changed
 
 
 async def watch_loop() -> None:

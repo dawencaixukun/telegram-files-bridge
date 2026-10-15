@@ -278,10 +278,20 @@ def _stats():
     KPI 为累计下载/上传总量；摘要卡为实时上传/下载速率双色卡）。"""
     trend = [random.randint(0, 8) for _ in range(14)]
     kpis = [
-        {"label": "累计下载", "icon": "ic-download", "value": "3.7", "unit": "GB", "id": "kpi-dl-total",
-         "delta": "", "d": "flat", "spark": "#22d3ee", "points": _spark_points(trend)},
-        {"label": "累计上传", "icon": "ic-upload", "value": "1.2", "unit": "GB", "id": "kpi-ul-total",
-         "delta": "", "d": "flat", "spark": "#60a5fa", "points": _spark_points(trend[::-1])},
+        {
+            "label": "累计下载 / 上传",
+            "icon": "ic-download",
+            "id": "kpi-transfer-total",
+            "items": [
+                {"label": "累计下载", "icon": "ic-download", "value": "3.7",
+                 "unit": "GB", "id": "kpi-dl-total", "color": "#22d3ee",
+                 "points": _spark_points(trend)},
+                {"label": "累计上传", "icon": "ic-upload", "value": "1.2",
+                 "unit": "GB", "id": "kpi-ul-total", "color": "#60a5fa",
+                 "points": _spark_points(trend[::-1])},
+            ],
+            "delta": "", "d": "flat", "spark": "#22d3ee", "points": _spark_points(trend),
+        },
         {"label": "本地磁盘占用", "icon": "ic-hdd", "value": "312", "unit": "GB",
          "delta": "", "d": "flat", "spark": "#8b5cf6", "points": _spark_points([10.0] * 14)},
         {"label": "云端归档累计", "icon": "ic-cloud", "value": "1,286", "unit": "个",

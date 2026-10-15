@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from core.config import (
-    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _M3U8_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _mask_token, _same_file_name
+    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _CUSTOM_NOTES_FILE, _CUSTOM_FILE_NOTES, _mask_token, _same_file_name
 )
 from core.logging import log
 
@@ -56,13 +56,6 @@ _ARCHIVE_JOBS: Dict[str, Dict[str, Any]] = {}
 _ARCHIVE_MAX_JOBS = 5000
 _DELETED_LOCAL_UIDS: Set[str] = set()
 _QUICK_ARCHIVE_REGISTRY: Dict[str, Dict[str, Any]] = {}
-# ---------------------------------------------------------------------
-# 3.1 M3U8(浏览器插件) 下载任务表
-# ---------------------------------------------------------------------
-# 与 _ARCHIVE_JOBS 同构的最小状态：仅保存任务元数据与进度，
-# 分片文件落在 M3U8_DOWNLOAD_DIR/<task_id>/，重启后按磁盘分片续传。
-_M3U8_TASKS: Dict[str, Dict[str, Any]] = {}
-_M3U8_MAX_TASKS = 500
 
 _ARCHIVE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
 _ARCHIVE_CONFIG: Dict[str, Any] = {
@@ -164,6 +157,8 @@ _alert_state: Dict[str, Any] = {
 # ---------------------------------------------------------------------
 _archive_lock = asyncio.Lock()
 _archive_sem = asyncio.Semaphore(2)
+# 同一 remote_path 的上传串行锁（见 _archive_upload_lock）。
+_ARCHIVE_UPLOAD_LOCKS: Dict[str, asyncio.Lock] = {}
 _subs_lock = asyncio.Lock()
 _disk_lock = asyncio.Lock()
 _openlist_lock = asyncio.Lock()
@@ -485,58 +480,6 @@ def _archive_save() -> None:
             os.close(fd)
     except Exception as e:  # noqa: BLE001
         log.warning("归档日志持久化失败: %s", e)
-
-
-def _m3u8_load() -> None:
-    """启动时恢复 M3U8 任务表；仍在 queued/running 的标记 failed 可重试。
-
-    已完成/取消的任务保持原状；分片文件留在磁盘上，重试时天然断点续传。
-    """
-    try:
-        with open(_M3U8_FILE, "rb") as f:
-            d = json.loads(f.read().decode("utf-8"))
-        tasks = d.get("tasks") if isinstance(d, dict) else None
-        if isinstance(tasks, dict):
-            for k, v in tasks.items():
-                if isinstance(v, dict) and v.get("id"):
-                    _M3U8_TASKS.setdefault(str(k), v)
-    except FileNotFoundError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        log.warning("M3U8 任务恢复失败: %s", e)
-
-    interrupted = 0
-    for t in _M3U8_TASKS.values():
-        if t.get("state") in ("queued", "running"):
-            t["state"] = "failed"
-            t["error"] = "bridge 重启导致下载中断，可重试（已下载分片会复用）"
-            interrupted += 1
-    if _M3U8_TASKS:
-        log.info("已恢复 M3U8 任务表（%d 条，%d 条中断标记失败）",
-                 len(_M3U8_TASKS), interrupted)
-
-
-def _m3u8_save() -> None:
-    """持久化 M3U8 任务表（裁剪超出上限的终态任务，保持文件有界）。"""
-    try:
-        if len(_M3U8_TASKS) > _M3U8_MAX_TASKS:
-            finished = sorted(
-                (t for t in _M3U8_TASKS.values()
-                 if t.get("state") in ("done", "failed", "cancelled")),
-                key=lambda t: t.get("created_at") or 0.0)
-            doomed = {id(t) for t in finished[:len(_M3U8_TASKS) - _M3U8_MAX_TASKS]}
-            for k, t in list(_M3U8_TASKS.items()):
-                if id(t) in doomed:
-                    _M3U8_TASKS.pop(k, None)
-        os.makedirs(APP_ROOT_DIR, exist_ok=True)
-        payload = json.dumps({"tasks": _M3U8_TASKS}).encode("utf-8")
-        fd = os.open(_M3U8_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, payload)
-        finally:
-            os.close(fd)
-    except Exception as e:  # noqa: BLE001
-        log.warning("M3U8 任务持久化失败: %s", e)
 
 
 def _archive_config_load() -> None:
@@ -886,6 +829,41 @@ def _archive_state_of(unique_id: Any) -> Optional[Dict[str, Any]]:
     return _archive_public(latest) if latest else None
 
 
+def _archive_path_owners() -> Dict[str, set]:
+    """云端路径 → 曾使用它的 unique_id 集合（路径小写）。供归档入队时判「这个路径是否已被**别的文件**占用」。
+    为什么按 unique_id 记账而不是简单「路径是否存在过」：
+      - 同一文件重复归档（用户再点一次「重新归档」）应当允许复用原路径 ——
+        它是同一份内容，覆盖自己是幂等的，不该被改名成 ` (1)` 越积越多。
+      - 路径一旦被**另一个** unique_id 用过，就说明它承载了两个不同文件：
+        再写进去就是静默覆盖（实测：同路径两次 PUT 都返回 200，远端只剩后写的那个）。
+    只排除 cancelled：失败任务的云端残片无法确证，宁可让路。
+    """
+    owners: Dict[str, set] = {}
+    for j in _ARCHIVE_JOBS.values():
+        rp = str(j.get("remote_path") or "")
+        uid = str(j.get("unique_id") or "")
+        if not rp or not uid or j.get("state") == "cancelled":
+            continue
+        owners.setdefault(rp.lower(), set()).add(uid)
+    return owners
+
+
+def _archive_upload_lock(remote_path: str) -> "asyncio.Lock":
+    """同一 remote_path 的串行上传锁（消灭同路径并发写的 eTag 冲突）。
+
+    为什么不能只靠文件名唯一化：唯一化让**新任务**不再撞车，但历史遗留的、
+    或经 `/archive/retry` 重放的任务仍可能指向同一路径。两个上传同时写同一路径
+    时 OneDrive 报 `resourceModified`，多轮重试全灭（实测日志 30 次）。
+    锁按路径懒创建、用完即弃，避免长期持有大量锁对象。
+    """
+    key = str(remote_path or "").lower()
+    lk = _ARCHIVE_UPLOAD_LOCKS.get(key)
+    if lk is None:
+        lk = asyncio.Lock()
+        _ARCHIVE_UPLOAD_LOCKS[key] = lk
+    return lk
+
+
 def _archive_active_of(unique_id: str) -> Optional[Dict[str, Any]]:
     """进行中（queued/uploading）的归档任务，幂等去重用。"""
     for j in _ARCHIVE_JOBS.values():
@@ -1021,13 +999,46 @@ def _archive_registry_lookup(unique_id: str = "", filename: str = "", size_bytes
     return None
 
 
+def _custom_notes_load() -> None:
+    try:
+        with open(_CUSTOM_NOTES_FILE, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        notes = d.get("notes") if isinstance(d, dict) else None
+        if isinstance(notes, dict):
+            _CUSTOM_FILE_NOTES.clear()
+            for k, v in notes.items():
+                if k and v and isinstance(v, str):
+                    _CUSTOM_FILE_NOTES[str(k)] = v.strip()
+        if _CUSTOM_FILE_NOTES:
+            log.info("已恢复视频自定义备注命名映射（%d 条）", len(_CUSTOM_FILE_NOTES))
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复视频自定义备注失败: %s", e)
+
+
+def _custom_notes_save() -> None:
+    try:
+        if len(_CUSTOM_FILE_NOTES) > 4000:
+            drop = len(_CUSTOM_FILE_NOTES) - 4000
+            for k in list(_CUSTOM_FILE_NOTES.keys())[:drop]:
+                _CUSTOM_FILE_NOTES.pop(k, None)
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps({"notes": _CUSTOM_FILE_NOTES}, ensure_ascii=False, indent=2).encode("utf-8")
+        fd = os.open(_CUSTOM_NOTES_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存视频自定义备注失败: %s", e)
+
+
 # 模块装载时从磁盘加载已有状态
 _flood_wait_load()
 _waiting_disk_load()
 _archive_load()
-_m3u8_load()
 _archive_config_load()
 _subs_load()
 _watch_seen_load()
 _notify_config_load()
 _openlist_load()
+_custom_notes_load()

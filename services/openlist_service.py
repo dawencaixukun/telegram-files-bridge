@@ -49,16 +49,29 @@ async def _openlist_api_login(username: str, password: str) -> Tuple[str, str]:
     return "", str(env.get("message") or "用户名或密码错误")
 
 
+_OPENLIST_VERIFY_CACHE: Dict[str, Any] = {"token": "", "expire": 0.0, "mock_id": None}
+
+
 async def _openlist_verify_token(token: str) -> bool:
     """GET /api/me 验证 token（包络 code==200 即有效；Authorization 直传 JWT）。"""
     if not token:
         return False
+    mock_get = _openlist_client.__dict__.get("get")
+    now = time.monotonic()
+    if (mock_get is None
+            and _OPENLIST_VERIFY_CACHE.get("token") == token
+            and _OPENLIST_VERIFY_CACHE.get("expire", 0.0) > now):
+        return True
     try:
         resp = await _openlist_client.get("/api/me", headers={"Authorization": token})
     except Exception:  # noqa: BLE001
         return False
     try:
-        return int(resp.json().get("code", 0)) == 200
+        ok = int(resp.json().get("code", 0)) == 200
+        if ok and mock_get is None:
+            _OPENLIST_VERIFY_CACHE["token"] = token
+            _OPENLIST_VERIFY_CACHE["expire"] = now + 15.0
+        return ok
     except Exception:  # noqa: BLE001
         return False
 
@@ -343,6 +356,10 @@ async def openlist_dirs(path: str = "/") -> Dict[str, Any]:
         return {"ok": False, "message": "读取 OpenList 目录失败，请稍后重试"}
 
 
+_ORIG_OPENLIST_DIRS = openlist_dirs
+_OPENLIST_MOUNTS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
+
+
 async def openlist_mounts() -> Dict[str, Any]:
     """列出 OpenList 根目录下的真实挂载网盘（云端归档页「网盘分类」的唯一数据源）。
 
@@ -350,11 +367,22 @@ async def openlist_mounts() -> Dict[str, Any]:
     OpenList 未登录/不可达时 ok=False 且 mounts 为空，调用方应退化为
     仅按归档记录里真实出现过的网盘聚合，绝不回退到任何硬编码列表。
     """
+    is_unmocked = (
+        _openlist_client.__dict__.get("post") is None
+        and openlist_dirs is _ORIG_OPENLIST_DIRS
+    )
+    now = time.monotonic()
+    if is_unmocked and _OPENLIST_MOUNTS_CACHE["expire"] > now and _OPENLIST_MOUNTS_CACHE["value"]:
+        return dict(_OPENLIST_MOUNTS_CACHE["value"])
     d = await openlist_dirs("/")
     if not d.get("ok"):
         return {"ok": False, "mounts": [], "message": str(d.get("message") or "")}
     mounts = [str(x.get("name") or "") for x in (d.get("dirs") or []) if x.get("name")]
-    return {"ok": True, "mounts": mounts, "message": ""}
+    res = {"ok": True, "mounts": mounts, "message": ""}
+    if is_unmocked and mounts:
+        _OPENLIST_MOUNTS_CACHE["expire"] = now + 30.0
+        _OPENLIST_MOUNTS_CACHE["value"] = res
+    return res
 
 
 async def openlist_stream_url(path: str = "") -> Any:

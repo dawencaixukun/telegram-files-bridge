@@ -177,17 +177,44 @@ async def task_cancel(request: Request):
             _tasks_cache_invalidate()
             return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
 
+    # 若该任务正在归档上传/排队，同步取消归档上传任务
+    arch_cancelled = False
+    for jid, j in list(_ARCHIVE_JOBS.items()):
+        if str(j.get("unique_id") or "") == unique_id and j.get("state") in ("queued", "uploading", "waiting_disk"):
+            act_t = _ARCHIVE_TASKS.get(jid)
+            if act_t and not act_t.done():
+                act_t.cancel()
+            j["state"] = "cancelled"
+            j["error"] = "用户已取消"
+            j["updated_at"] = time.time()
+            arch_cancelled = True
+    if arch_cancelled:
+        _archive_save()
+
     rec = _find_task_by_uid(await tasks_all(force=True), unique_id)
     if rec is None:
+        if arch_cancelled:
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         return {"ok": False, "message": "任务不存在或已被移除"}
     telegram_id = rec.get("_telegram_id")
     file_id = rec.get("_file_id")
     if telegram_id is None or file_id is None:
+        if arch_cancelled:
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         return {"ok": False, "message": "任务记录缺少 fileId，无法取消"}
     try:
-        await BACKEND.cancel_download(telegram_id, {"fileId": int(file_id)})
+        if str(rec.get("_download_status") or "") != "completed" or not arch_cancelled:
+            await BACKEND.cancel_download(telegram_id, {"fileId": int(file_id)})
+        BACKEND._cache.clear()
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已取消任务"}
     except Exception as e:  # noqa: BLE001
+        if arch_cancelled:
+            BACKEND._cache.clear()
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         log.error("任务取消失败: %s", e)
         return {"ok": False, "message": "取消失败：" + _tg_err_public(e)}
 

@@ -9,14 +9,18 @@ import re
 import time
 import secrets
 import asyncio
+import posixpath
 from typing import Any, Dict, List, Optional, Tuple
 from core.config import (
     _fmt_size, _fmt_time, _clean_archive_filename,
     _resolve_host_local_path, _archive_norm_dir, _archive_join,
     _ensure_archive_ext, _same_file_name,
+    _archive_unique_name, _archive_name_suffix,
+    _CUSTOM_FILE_NOTES, _is_meaningless_filename,
 )
 from core.state import (
-    _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS, _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save, _archive_config_save, _archive_sem, _archive_registry_lookup, _archive_public, _archive_state_of, _archive_latest_raw_of
+    _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS, _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save, _archive_config_save, _archive_sem, _archive_registry_lookup, _archive_public, _archive_state_of, _archive_latest_raw_of,
+    _archive_path_owners, _archive_upload_lock,
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
@@ -162,21 +166,26 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
 
             await _openlist_mkdir_tree(token, str(job["remote_dir"]))
 
-            try:
-                await _openlist_put_once(token, job)
-            except _OpenListAuthErr:
-                token = await _openlist_relogin()
-                await _openlist_put_once(token, job)
+            # 同路径串行（数据丢失级防线二）：文件名唯一化只保证**新**入队的任务
+            # 不撞车，但历史遗留 / 重试任务仍可能指向同一路径。两个上传并发写同一
+            # 路径时 OneDrive 返回 resourceModified（eTag mismatch），多轮重试全灭
+            # （实测日志 30 次）；顺利时则静默覆盖。这里按路径加锁串行化。
+            async with _archive_upload_lock(str(job.get("remote_path") or "")):
+                try:
+                    await _openlist_put_once(token, job)
+                except _OpenListAuthErr:
+                    token = await _openlist_relogin()
+                    await _openlist_put_once(token, job)
 
-            # 上传返回 200 不等于落盘完整：必须回查云端真实大小再判成功。
-            # 只有确认 size 与本地一致，才允许写 done 并按 deleteLocal 删本地文件。
-            verify = await _openlist_stat(token, job["remote_path"])
-            if verify is None:
-                raise RuntimeError("上传后云端存在性核验失败，未确认归档完成")
-            verify_size = int(verify.get("size") or 0)
-            if verify_size != size:
-                raise RuntimeError(
-                    f"上传后云端大小核验不一致（云端 {verify_size} 字节 / 本地 {size} 字节），判定归档未完成")
+                # 上传返回 200 不等于落盘完整：必须回查云端真实大小再判成功。
+                # 只有确认 size 与本地一致，才允许写 done 并按 deleteLocal 删本地文件。
+                verify = await _openlist_stat(token, job["remote_path"])
+                if verify is None:
+                    raise RuntimeError("上传后云端存在性核验失败，未确认归档完成")
+                verify_size = int(verify.get("size") or 0)
+                if verify_size != size:
+                    raise RuntimeError(
+                        f"上传后云端大小核验不一致（云端 {verify_size} 字节 / 本地 {size} 字节），判定归档未完成")
 
             job["state"] = "done"
             job["progress"] = 100
@@ -216,6 +225,9 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
             _sub_on_job_finished(job)
 
 
+_REMOTE_DIR_LIST_CACHE: Dict[str, Tuple[float, int, set, List[Dict[str, Any]]]] = {}
+
+
 async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]:
     done = [j for j in _ARCHIVE_JOBS.values() if j.get("state") == "done"]
     done.sort(key=lambda j: j.get("archived_at") or j.get("created_at") or 0.0, reverse=True)
@@ -229,11 +241,21 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
         return []
 
     remote_names: Dict[str, set] = {}
+    remote_files_by_dir: Dict[str, List[Dict[str, Any]]] = {}
     if check_remote:
         try:
             token = await _openlist_token()
             dirs = sorted({str(j.get("remote_dir") or "") for j in rows if j.get("remote_dir")})
+            is_unmocked = _openlist_client.__dict__.get("post") is None
+            now_m = time.monotonic()
+            jobs_sig = len(rows)
             for d in dirs:
+                if is_unmocked and d in _REMOTE_DIR_LIST_CACHE:
+                    exp, sig, c_names, c_files = _REMOTE_DIR_LIST_CACHE[d]
+                    if exp > now_m and sig == jobs_sig:
+                        remote_names[d] = c_names
+                        remote_files_by_dir[d] = c_files
+                        continue
                 resp = await _openlist_client.post(
                     "/api/fs/list",
                     json={"path": d, "password": "", "page": 1, "per_page": 500, "refresh": False},
@@ -241,7 +263,15 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
                 code, data, _ = _openlist_env(resp)
                 if code != 200:
                     continue
-                remote_names[d] = {str(c.get("name") or "") for c in (data.get("content") or [])}
+                content = data.get("content") or []
+                c_names = {str(c.get("name") or "") for c in content}
+                c_files = [
+                    c for c in content if isinstance(c, dict) and not c.get("is_dir")
+                ]
+                remote_names[d] = c_names
+                remote_files_by_dir[d] = c_files
+                if is_unmocked:
+                    _REMOTE_DIR_LIST_CACHE[d] = (now_m + 15.0, jobs_sig, c_names, c_files)
         except Exception as e:  # noqa: BLE001
             log.warning("云端归档存在性校验失败（按日志原样展示）: %s", e)
 
@@ -302,26 +332,38 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
     # —— 宁可如实失败也不静默指错文件。
     if status_missing := [r for r in out if r.get("status") == "missing" and r.get("remote_path")]:
         try:
-            from services.openlist_service import _openlist_relocate_after_rename, _openlist_token
+            from services.openlist_service import _openlist_relocate_after_rename
             _tok = ""
             try:
                 _tok = await _openlist_token()
             except Exception:  # noqa: BLE001
                 _tok = ""
             if _tok:
+                saved_dirty = False
                 for row in status_missing:
-                    new_path = await _openlist_relocate_after_rename(
-                        _tok, str(row["remote_path"]), int(row.get("sizeBytes") or 0))
+                    r_dir = str(row.get("remote_dir") or "")
+                    r_size = int(row.get("sizeBytes") or 0)
+                    new_path = None
+                    if r_dir in remote_files_by_dir:
+                        if r_size > 0:
+                            old_name = posixpath.basename(str(row["remote_path"]))
+                            cands = [
+                                str(c.get("name") or "")
+                                for c in remote_files_by_dir[r_dir]
+                                if int(c.get("size") or 0) == r_size and str(c.get("name") or "") != old_name
+                            ]
+                            if len(cands) == 1:
+                                new_path = posixpath.join(r_dir, cands[0])
+                    else:
+                        new_path = await _openlist_relocate_after_rename(
+                            _tok, str(row["remote_path"]), r_size)
                     if new_path:
                         rid = str(row.get("id") or "")
                         job = _ARCHIVE_JOBS.get(rid)
                         if job is not None:
                             job["remote_path"] = new_path
                             job["filename"] = posixpath.basename(new_path)
-                            try:
-                                _archive_save()
-                            except Exception:  # noqa: BLE001
-                                pass
+                            saved_dirty = True
                         row["remote_path"] = new_path
                         row["remotePath"] = new_path
                         row["cloud_path"] = new_path
@@ -333,6 +375,11 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
                         row["openlist_url"] = _url2
                         row["directUrl"] = _url2
                         row["openlistUrl"] = _url2
+                if saved_dirty:
+                    try:
+                        _archive_save()
+                    except Exception:  # noqa: BLE001
+                        pass
         except Exception as e:  # noqa: BLE001
             log.debug("改名自愈批处理跳过: %s", e)
 
@@ -654,6 +701,11 @@ async def _auto_archive_sweep_impl() -> int:
     # 单轮 2000 任务白耗 150ms+。
     _sweep_rules = [r for r in _sub_rules_sorted() if r.get("enabled")]
 
+    # 路径占用表（{remote_path.lower(): {uid}}），本轮 sweep 内累积。
+    # 必须在循环外建一次：循环内每轮重建会把「本批刚入队的路径」漏掉，
+    # 同一轮里的两个同名任务就又撞在一起了。
+    path_owners: Dict[str, set] = _archive_path_owners()
+
     for t in tasks:
         if str(t.get("_download_status") or "") != "completed":
             continue
@@ -676,17 +728,25 @@ async def _auto_archive_sweep_impl() -> int:
             rule_id = "quick"
             rule_label = "直投快捷归档"
         elif rule is not None:
-            remote_dir = _render_dir_template(
-                str(rule.get("dirTemplate") or ""),
-                source=str(t.get("source") or rule.get("chatTitle") or ""),
-                ftype=str(t.get("_type") or ""),
-                ts=t.get("_date_ts") if isinstance(t.get("_date_ts"), (int, float)) else None,
-                filename=str(t.get("filename") or ""),
-                chat_title=str(rule.get("chatTitle") or t.get("source") or ""),
-                width=t.get("width"),
-                height=t.get("height"))
-            policy = "skip" if str(rule.get("policy") or "") == "skip" else "overwrite"
-            delete_local = bool(rule.get("deleteLocal", True))
+            raw_tpl = str(rule.get("dirTemplate") or "")
+            if has_default_rule and "/tg-archive/" in raw_tpl:
+                # 兼容旧版「转发即下载」自动生成的 /tg-archive/{chat_title}/{YYYY-MM} 模板：
+                # 若用户在设置页配置了默认归档目录（如 /onedrive/yello），直接以设置页目录与策略为准
+                remote_dir = default_dir
+                policy = "skip" if str(_ARCHIVE_CONFIG.get("policy") or "").lower() == "skip" else "overwrite"
+                delete_local = bool(_ARCHIVE_CONFIG.get("deleteLocal", True))
+            else:
+                remote_dir = _render_dir_template(
+                    raw_tpl,
+                    source=str(t.get("source") or rule.get("chatTitle") or ""),
+                    ftype=str(t.get("_type") or ""),
+                    ts=t.get("_date_ts") if isinstance(t.get("_date_ts"), (int, float)) else None,
+                    filename=str(t.get("filename") or ""),
+                    chat_title=str(rule.get("chatTitle") or t.get("source") or ""),
+                    width=t.get("width"),
+                    height=t.get("height"))
+                policy = "skip" if str(rule.get("policy") or "") == "skip" else "overwrite"
+                delete_local = bool(rule.get("deleteLocal", True))
             rule_id = rule.get("id")
             rule_label = f"规则「{rule.get('chatTitle') or ''}」"
         elif has_default_rule:
@@ -720,6 +780,9 @@ async def _auto_archive_sweep_impl() -> int:
         if not lp or not os.path.exists(lp):
             continue
         raw_name = str(t.get("filename") or "未命名")
+        custom_note = _CUSTOM_FILE_NOTES.get(uid) or _CUSTOM_FILE_NOTES.get(f"msg:{t.get('_chat_id')}:{t.get('msg_id')}")
+        if custom_note:
+            raw_name = custom_note
         # 后端偶发不返回 fileName，显示名会退化成「文件 <uniqueId>」（无后缀）。
         # 直接归档会在云端留下没有后缀的文件，播放器/刮削器全认不出来。
         # 这里先用本地路径/MIME 把真实后缀补回来，再做广告清洗。
@@ -730,7 +793,16 @@ async def _auto_archive_sweep_impl() -> int:
             ftype=str(t.get("_type") or ""),
         )
         clean_name = _clean_archive_filename(raw_name, enabled=bool(_ARCHIVE_CONFIG.get("cleanFilename", True)))
+        # 唯一化（数据丢失级防线，与手动归档同一套逻辑）。
+        # 实测背景：订阅规则 c625fdb66130 一路把 22 个不同文件入队到同一个
+        # remote_path，云端只剩最后一个、本地已被 deleteLocal 删掉 —— 这条
+        # 自动路径原先**完全没有**同名守卫，是事故的主入口。
+        clean_name = _archive_unique_name(
+            remote_dir, clean_name,
+            owner_of=path_owners, uid=uid,
+            suffix=_archive_name_suffix(raw_name, clean_name))
         remote_path = _archive_join(remote_dir, clean_name)
+        path_owners.setdefault(remote_path.lower(), set()).add(uid)
         job = {
             "id": secrets.token_hex(6),
             "unique_id": uid,

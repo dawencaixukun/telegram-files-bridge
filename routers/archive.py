@@ -63,7 +63,10 @@ async def archive_start(request: Request):
 
     started: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
-    seen_paths: set = set()
+    # 路径占用表：{remote_path.lower(): {uid, ...}}
+    # 同批新任务进来时把 uid 直接塞进去 —— 因为下面唯一化只看「别的 uid」，
+    # 若不带 uid 会导致同一批里第一个任务自己就与刚写入的占用冲突。
+    path_owners: Dict[str, set] = _archive_path_owners()
     for uid in uids:
         t = by_uid.get(uid)
         if t is None:
@@ -91,11 +94,16 @@ async def archive_start(request: Request):
             ftype=str(t.get("_type") or ""),
         )
         clean_name = _clean_archive_filename(raw_name, enabled=bool(_ARCHIVE_CONFIG.get("cleanFilename", True)))
+        # 唯一化（数据丢失级防线）：清洗后的名字若与**别的文件**已占用的路径相同，
+        # 自动补 ` (N)`，绝不落到同一云端路径上互相覆盖。
+        # 同时把「序号已被清洗吃掉」的情况补回：raw 名带 `_10/_11/_31` 这类
+        # 而清洗后丢失时，用它恢复文件间的区分度。
+        clean_name = _archive_unique_name(
+            remote_dir, clean_name,
+            owner_of=path_owners, uid=uid,
+            suffix=_archive_name_suffix(raw_name, clean_name))
         remote_path = _archive_join(remote_dir, clean_name)
-        if remote_path.lower() in seen_paths:
-            errors.append({"uniqueId": uid, "message": "目标目录已有同名文件排入本批，请分开归档"})
-            continue
-        seen_paths.add(remote_path.lower())
+        path_owners.setdefault(remote_path.lower(), set()).add(uid)
 
         job = {
             "id": secrets.token_hex(6),
@@ -451,6 +459,23 @@ async def archive_config_post(request: Request):
         except (TypeError, ValueError):
             pass
     _archive_config_save()
+    # 同步更新已启用的监听规则（转发即下载创建的 watch 规则），确保设置页修改默认归档位置和策略后立即生效，
+    # 不会再被旧的 /tg-archive/{chat_title}/{YYYY-MM} 规则截胡（用户反馈）
+    if norm_dir:
+        from core.state import _SUB_RULES, _subs_save
+        sub_changed = False
+        for r in _SUB_RULES.values():
+            if not isinstance(r, dict):
+                continue
+            old_tpl = str(r.get("dirTemplate") or "")
+            if r.get("watch") or "/tg-archive/" in old_tpl:
+                if old_tpl != norm_dir or r.get("policy") != _ARCHIVE_CONFIG["policy"] or r.get("deleteLocal") != _ARCHIVE_CONFIG["deleteLocal"]:
+                    r["dirTemplate"] = norm_dir
+                    r["policy"] = _ARCHIVE_CONFIG["policy"]
+                    r["deleteLocal"] = _ARCHIVE_CONFIG["deleteLocal"]
+                    sub_changed = True
+        if sub_changed:
+            _subs_save()
     log.info("默认归档配置已更新: 自动归档=%s, 目录=%s, 策略=%s, 删本地=%s, 洗文件名=%s, 高水位=%s%%, 低水位=%s%%, 低水位GB=%sGB",
              _ARCHIVE_CONFIG["autoArchive"], _ARCHIVE_CONFIG["defaultDir"],
              _ARCHIVE_CONFIG["policy"], _ARCHIVE_CONFIG["deleteLocal"],

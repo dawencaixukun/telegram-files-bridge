@@ -8,14 +8,21 @@
 *::after {
   box-sizing: border-box;
 }
+html {
+  background-color: var(--bg-canvas);
+}
 html,
 body {
   height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 body {
   margin: 0;
   font-family: var(--font-sans);
   color: var(--text-1);
+  background: transparent;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -54,10 +61,12 @@ textarea {
 /* ---------- Ambient background (pure CSS, no images) ---------- */
 .app-bg {
   position: fixed;
-  inset: 0;
+  inset: -80px 0;
   z-index: -1;
   background: var(--bg-canvas);
   overflow: hidden;
+  pointer-events: none;
+  transform: translateZ(0);
 }
 .app-bg::before,
 .app-bg::after {
@@ -533,15 +542,18 @@ body.drawer-open .scrim {
   border-radius: var(--radius-card);
   box-shadow: var(--glass-shadow);
   min-width: 260px;
+  max-width: calc(100vw - 24px);
   padding: var(--space-2);
   opacity: 0;
+  visibility: hidden;
   transform: translateY(-6px);
   pointer-events: none;
-  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), visibility var(--dur-fast);
   z-index: 50;
 }
 .dropdown.show {
   opacity: 1;
+  visibility: visible;
   transform: translateY(0);
   pointer-events: auto;
 }
@@ -702,6 +714,36 @@ body.drawer-open .scrim {
 .delta.down { color: var(--err); background: rgba(248, 113, 113, 0.14); }
 .delta.flat { color: var(--text-2); background: var(--glass-bg-strong); }
 .kpi .spark { flex-shrink: 0; }
+.kpi-dual .k-dual-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: center;
+}
+.kpi-dual .k-dual-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kpi-dual .k-dual-col + .k-dual-col {
+  border-left: 1px solid var(--glass-border);
+  padding-left: var(--space-3);
+}
+.kpi-dual .k-dual-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.kpi-dual .k-value {
+  font-size: 26px;
+  white-space: nowrap;
+}
 
 /* ---------- Status pills ---------- */
 .pill {
@@ -714,6 +756,8 @@ body.drawer-open .scrim {
   font-weight: 700;
   white-space: nowrap;
   line-height: 1.4;
+  background: var(--surface-2);
+  color: var(--text-1);
 }
 .pill .p-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .pill.pending { color: var(--queued); background: rgba(156, 163, 175, 0.16); }
@@ -993,6 +1037,9 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
 .toast.success .t-icon { color: var(--ok); }
 .toast.error .t-icon { color: var(--err); }
 .toast.info .t-icon { color: var(--info); }
+/* 部分成功（如批量归档只有部分文件进了队列）——比 success 更该被注意，
+   但不能用 error 的红，否则用户以为整体失败了。 */
+.toast.warn .t-icon { color: var(--warn); }
 .toast .t-msg { font-size: 14px; font-weight: 500; }
 .toast .t-sub { font-size: 12px; color: var(--text-2); }
 
@@ -1041,6 +1088,47 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
 }
 .otp-box:focus { outline: none; border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-ring); }
 .otp-note { text-align: center; font-size: 12px; color: var(--text-3); margin-top: var(--space-3); }
+
+/* ---------- TG 登录向导：国家选择控件 ----------
+   注意：这些状态样式必须走 CSS 类，不能用 Alpine 的 :style 写在这些元素上 ——
+   :style 会**整体覆盖**元素的静态 style 属性，把内联布局（width/height 等）
+   全部清掉。实测：国家选择按钮里的箭头 svg 因 :style 覆盖失去 width:14px/height:14px
+   约束，被全局 `svg { max-width:100% }` 拉到 170×170px 的巨大箭头，撑破卡片。
+   同类错误不要再用 :style，改用 :class。 */
+.dd-caret {
+  width: 14px;
+  height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+  color: var(--text-2);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+.dd-caret.open { transform: rotate(180deg); }
+/* 区号框宽度：桌面 200px 够放「🇨🇳 +86 中国」，窄屏必须收窄并让号码框占大头。
+   旧写法把 200px 写成内联固定宽 + flex-shrink:0，窄屏下区号框 200px / 号码框
+   只剩 98px（实测 390px 视口），比例颠倒。 */
+.country-picker {
+  position: relative;
+  width: 200px;
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .country-picker {
+    width: auto;
+    min-width: 108px;
+    max-width: 132px;
+  }
+}
+button.input.focused {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.dd-item.is-active {
+  background: rgba(124, 58, 237, 0.22);
+  color: var(--text-1);
+  font-weight: 600;
+}
 
 /* ---------- Alerts / banners ---------- */
 .alert {
@@ -1417,6 +1505,7 @@ a:focus-visible, button:focus-visible {
 @media (max-width: 1199px) {
   .g-4 { grid-template-columns: repeat(2, 1fr); }
   .g-3 { grid-template-columns: repeat(2, 1fr); }
+  .g-3 > .kpi-dual { grid-column: span 2; }
 }
 
 @media (max-width: 900px) {
@@ -1443,27 +1532,146 @@ a:focus-visible, button:focus-visible {
 
 @media (max-width: 767px) {
   :root { --sidebar-w: 260px; }
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); max-width: 100%; }
+  .main, .content { min-width: 0; max-width: 100%; overflow-x: clip; }
   .sidebar {
     position: fixed;
-    left: 0; top: 0;
+    left: 0;
+    top: var(--topbar-h);
+    height: calc(100vh - var(--topbar-h));
     transform: translateX(-100%);
     transition: transform var(--dur-med) var(--ease);
     width: var(--sidebar-w);
+    max-width: 82vw;
   }
+  .sidebar .brand { display: none; }
   body.drawer-open .sidebar { transform: translateX(0); box-shadow: var(--glass-shadow); }
-  .topbar .burger { display: grid; }
+  .topbar .burger { display: grid; width: 36px; height: 36px; flex-shrink: 0; }
   .topbar .ctx-chip { display: none; }
-  .topbar { padding: 0 var(--space-4); }
-  .content { padding: var(--space-4); }
+  .topbar {
+    padding: 0 10px;
+    gap: 6px;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .topbar .spacer { flex: 1 1 0; min-width: 0; }
+  .topbar .page-title {
+    font-size: 15px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  #browseSwitchChatBtn {
+    padding: 5px 8px;
+    font-size: 12px;
+    gap: 4px;
+    flex-shrink: 0;
+    height: 34px;
+  }
+  .topbar .actions {
+    gap: 6px;
+    flex-shrink: 0;
+    min-width: 0;
+  }
+  .topbar .actions > .btn.primary {
+    padding: 6px 10px;
+    font-size: 12px;
+    gap: 4px;
+    height: 34px;
+  }
+  .topbar .icon-btn {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+  .content { padding: var(--space-3); }
+  .card { min-width: 0; max-width: 100%; }
+  .card.pad-lg { padding: var(--space-4); }
+  .page-header { gap: var(--space-2); margin-bottom: var(--space-4); }
   .page-header h1 { font-size: 20px; }
-  .g-4, .g-3 { grid-template-columns: 1fr; }
+  .g-4, .g-3, .g-2 { grid-template-columns: minmax(0, 1fr); }
+  .g-3 > .kpi-dual { grid-column: auto; }
+  .kpi-dual .k-value { font-size: 22px; }
   .topbar .user-btn .uname { display: none; }
-  .user-btn { padding: 5px; }
+  .user-btn { padding: 3px; }
   .otp-box { width: 46px; height: 56px; font-size: 22px; }
   .otp-row { gap: var(--space-2); }
-  .toast-stack { left: var(--space-4); right: var(--space-4); bottom: var(--space-4); }
-  .toast { min-width: 0; }
+  .toast-stack { left: var(--space-3); right: var(--space-3); bottom: var(--space-3); max-width: calc(100vw - 24px); overflow: hidden; }
+  .toast { min-width: 0; max-width: 100%; }
+}
+
+@media (max-width: 640px) {
+  .topbar .dropdown {
+    position: fixed;
+    top: calc(var(--topbar-h) - 4px);
+    right: 10px !important;
+    left: 10px !important;
+    min-width: 0 !important;
+    width: auto !important;
+    max-width: calc(100vw - 20px);
+  }
+  .browse-tools {
+    gap: 8px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+  .browse-tools .spacer {
+    display: none;
+  }
+  .type-chips {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+  .type-chips::-webkit-scrollbar {
+    display: none;
+  }
+  .thumb-grid,
+  .browse-main .thumb-grid,
+  .cloud-card-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px;
+  }
+  .browse-side {
+    top: 10px;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-width: calc(100vw - 20px);
+  }
+  .batch-bar {
+    max-width: calc(100vw - 20px);
+    width: max-content;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 12px;
+    bottom: 12px;
+    white-space: normal;
+  }
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .field > .row {
+    flex-wrap: wrap;
+  }
+  .field > .row > .input,
+  .field > .row > .select {
+    min-width: 0 !important;
+  }
+}
+
+@media (max-width: 400px) {
+  .topbar .actions > .btn.primary {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+  #browseSwitchChatBtn {
+    padding: 4px 7px;
+    font-size: 11px;
+  }
 }
 
 /* ---- x-cloak：Alpine 初始化前隐藏受控元素，防止闪现 ---- */
@@ -1568,14 +1776,16 @@ html.theme-anim *::after {
   max-height: none;
   overflow: hidden;                 /* 滚动只在 .side-scroll 内 */
   z-index: 85;   /* 盖过顶栏(80)：面板滑出时压在其上，低于模态(90+) */
-  transform: translateX(24px);
+  transform: translateX(12px);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: transform var(--dur-med) var(--ease), opacity var(--dur-med) var(--ease);
+  transition: transform var(--dur-med) var(--ease), opacity var(--dur-med) var(--ease), visibility var(--dur-med);
 }
 .browse-side.open {
   transform: translateX(0);
   opacity: 1;
+  visibility: visible;
   pointer-events: auto !important;
 }
 .browse-side .acc-group { display: flex; flex-direction: column; gap: 2px; }
@@ -2828,3 +3038,35 @@ html.theme-anim *::after {
 .ui-confirm-foot { margin-top: var(--space-5); }
 .ui-confirm-field { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-2); }
 .ui-confirm-field label { font-size: 13px; opacity: 0.7; }
+
+/* ---------- 卡片离屏渲染加速 & 顶部导航进度条 ---------- */
+.thumb {
+  min-width: 0;
+  max-width: 100%;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
+.top-nav-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  width: 0%;
+  background: linear-gradient(90deg, #8b5cf6, #38bdf8, #34d399);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.65);
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: width 0.25s ease-out, opacity 0.2s ease;
+}
+.top-nav-progress.active {
+  opacity: 1;
+  width: 72%;
+  transition: width 1.6s cubic-bezier(0.1, 0.8, 0.2, 1), opacity 0.1s ease;
+}
+.top-nav-progress.done {
+  opacity: 0;
+  width: 100%;
+  transition: width 0.15s ease-out, opacity 0.25s 0.1s ease;
+}

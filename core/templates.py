@@ -42,12 +42,21 @@ templates.env.filters["fmt_dur"] = _fmt_dur
 import hashlib as _hashlib  # noqa: E402
 
 
+_ASSET_HASH_CACHE: Dict[str, Tuple[int, int, str]] = {}
+
+
 def _asset_version(rel_path: str) -> str:
-    """返回静态资源的内容哈希前 10 位；读不到时退回 '0'（不阻塞渲染）。"""
+    """返回静态资源的内容哈希前 10 位（按 mtime_ns + size 缓存，避免每请求重复读盘算哈希）。"""
     try:
         full = os.path.join(STATIC_DIR, rel_path)
+        st = os.stat(full)
+        cached = _ASSET_HASH_CACHE.get(rel_path)
+        if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+            return cached[2]
         with open(full, "rb") as fh:
-            return _hashlib.sha256(fh.read()).hexdigest()[:10]
+            digest = _hashlib.sha256(fh.read()).hexdigest()[:10]
+        _ASSET_HASH_CACHE[rel_path] = (st.st_mtime_ns, st.st_size, digest)
+        return digest
     except OSError:
         return "0"
 

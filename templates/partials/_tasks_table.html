@@ -34,7 +34,7 @@
         </thead>
         <tbody>
           {% for t in tasks %}
-          <tr class="clickable-row" data-task-id="{{ t.id }}" onclick="window.__toggleTask(this)">
+          <tr class="clickable-row" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__toggleTask(this)">
             <td onclick="event.stopPropagation()"><input type="checkbox" class="check task-check" aria-label="选择任务 {{ t.id }}"></td>
             <td>{{ t.time }}</td>
             <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
@@ -69,10 +69,10 @@
             <td>
               <div class="row-actions" onclick="event.stopPropagation()">
                 {% if t.status in ('failed','isolated','pending','waiting_disk') %}
-                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
+                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
                 {% endif %}
                 {% if t.status in ('pending','download','upload','verify','waiting_disk') %}
-                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
+                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
                 {% endif %}
                 <a class="icon-btn xs" aria-label="详情" title="详情" href="/tasks/{{ t.id }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg></a>
               </div>
@@ -116,6 +116,7 @@
   window.__TASK_META = window.__TASK_META || {};
   {% for t in tasks %}
   window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}] = { displayId: {{ t.id | tojson }}, uniqueId: {{ t._unique_id | tojson }}, telegramId: {{ t._telegram_id | tojson }} };
+  window.__TASK_META[{{ ('id:' ~ t.id) | tojson }}] = window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}];
   {% endfor %}
 </script>
 <script>

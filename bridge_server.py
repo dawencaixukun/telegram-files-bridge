@@ -17,7 +17,7 @@ import sys
 import types
 import asyncio
 from typing import Any, Optional
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from core.templates import CachedStaticFiles
 
@@ -34,7 +34,7 @@ from routers import (
     subscriptions_router,
     system_router,
     api_router,
-    extension_router,
+    ext_m3u8_router,
 )
 
 
@@ -73,11 +73,16 @@ if os.path.isdir(STATIC_DIR):
 # Starlette 中间件是「后注册者在外层」：最后注册的最先执行、最后处理响应。
 # 因此要让 security_headers 包裹住 portal_auth_gate（这样门禁直接返回的
 # 302/403/401 响应也会带上 CSP 等安全头），必须先注册 portal_auth_gate。
-app.middleware("http")(portal_auth_gate)
+async def _app_auth_gate(request: Request, call_next):
+    if request.url.path.startswith("/api/ext/m3u8"):
+        return await call_next(request)
+    return await portal_auth_gate(request, call_next)
+
+app.middleware("http")(_app_auth_gate)
 app.middleware("http")(security_headers)
 
 # ---------------------------------------------------------------------
-# 4. 挂载 9 大领域子路由
+# 4. 挂载领域子路由
 # ---------------------------------------------------------------------
 app.include_router(dashboard_router)
 app.include_router(auth_router)
@@ -88,7 +93,7 @@ app.include_router(archive_router)
 app.include_router(subscriptions_router)
 app.include_router(system_router)
 app.include_router(api_router)
-app.include_router(extension_router)
+app.include_router(ext_m3u8_router)
 
 # ---------------------------------------------------------------------
 # 5. 应用全局生命周期管理
@@ -98,11 +103,12 @@ _auto_archive_task: Optional[asyncio.Task] = None
 _flood_wait_timer_task: Optional[asyncio.Task] = None
 _bot_command_task: Optional[asyncio.Task] = None
 _watch_task: Optional[asyncio.Task] = None
+_prewarm_task: Optional[asyncio.Task] = None
 
 
 @app.on_event("startup")
 async def _startup():
-    global _relay_task, _auto_archive_task, _bot_command_task, _watch_task
+    global _relay_task, _auto_archive_task, _bot_command_task, _watch_task, _prewarm_task
     # 状态持久化文件的加载已在 core.state 模块装载时完成（state.py 末尾的
     # _flood_wait_load/_archive_load/_subs_load/... 七连调用），此处不再重复执行。
     # 旧代码在这里又跑了一遍同样的 7 次加载：既产生重复的「已恢复…」日志行，
@@ -117,6 +123,7 @@ async def _startup():
     # 启动后台异步中继与循环任务
     _relay_task = asyncio.create_task(ws_relay_loop())
     asyncio.create_task(BACKEND.refresh_bootstrap_status())
+    _prewarm_task = asyncio.create_task(prewarm_browse_cache())
     _auto_archive_task = asyncio.create_task(_auto_archive_loop())
     # TG Bot 命令长轮询（/ck /yd /st /err /help）：未配置 Bot 时内部自动挂起等待
     _bot_command_task = asyncio.create_task(bot_command_loop())
@@ -126,7 +133,13 @@ async def _startup():
 
 @app.on_event("shutdown")
 async def _shutdown():
-    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task
+    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task, _prewarm_task
+    if _prewarm_task is not None and not _prewarm_task.done():
+        _prewarm_task.cancel()
+        try:
+            await _prewarm_task
+        except asyncio.CancelledError:
+            pass
     if _relay_task is not None and not _relay_task.done():
         _relay_task.cancel()
         try:

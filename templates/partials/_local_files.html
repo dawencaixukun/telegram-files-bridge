@@ -44,10 +44,10 @@
       {% if f._telegram_id and pv_uid and (f._thumb_uid or (f._chat_id and f._msg_id)) %}
       {# 全尺寸缩略图（320px 级，经 bridge /preview 代理 + 浏览器私有缓存一天） #}
       <img src="/preview/{{ f._telegram_id }}/{{ pv_uid }}?chat={{ f._chat_id }}&amp;msg={{ f._msg_id }}{% if not f._thumb_uid %}&amp;heal=1{% endif %}"
-           alt="{{ f.filename }}" loading="lazy">
+           alt="{{ f.filename }}" loading="lazy" decoding="async">
       {% elif f._thumb %}
       {# 兜底：无 thumbnailUniqueId 且无法定位消息时退回 minithumbnail（40px 级） #}
-      <img src="data:image/jpeg;base64,{{ f._thumb }}" alt="{{ f.filename }}" loading="lazy">
+      <img src="data:image/jpeg;base64,{{ f._thumb }}" alt="{{ f.filename }}" loading="lazy" decoding="async">
       {% else %}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#ic-file"/></svg>
       {% endif %}

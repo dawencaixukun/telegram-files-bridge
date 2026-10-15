@@ -143,8 +143,19 @@ window.cloudLibrary = function cloudLibrary() {
   align-items: center;
   gap: var(--space-3);
   flex: 1;
-  min-width: 280px;
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: wrap;
+}
+@media (max-width: 640px) {
+  .archived-folder > summary {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    gap: 6px 8px;
+  }
+  .cloud-card-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 }
 .cloud-actions-cell {
   display: inline-flex;
@@ -454,10 +465,10 @@ window.cloudLibrary = function cloudLibrary() {
             {# 全尺寸缩略图（320px 级，经 bridge /preview 代理 + 浏览器私有缓存一天）；
                chat/msg 供 /preview 在缩略图未就绪时经 GetMessage 定位补下载 #}
             <img src="/preview/{{ f.telegramId }}/{{ f.thumb_uid }}?chat={{ f.chatId }}&amp;msg={{ f.messageId }}{% if f.thumb_heal %}&amp;heal=1{% endif %}"
-                 alt="{{ f.filename }}" loading="lazy">
+                 alt="{{ f.filename }}" loading="lazy" decoding="async">
             {% elif f.thumb %}
             {# 兜底：无 thumbnailUniqueId 时退回 minithumbnail（40px 级，模糊但聊胜于无） #}
-            <img src="data:image/jpeg;base64,{{ f.thumb }}" alt="{{ f.filename }}" loading="lazy">
+            <img src="data:image/jpeg;base64,{{ f.thumb }}" alt="{{ f.filename }}" loading="lazy" decoding="async">
             {% else %}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#ic-file"/></svg>
             <span class="t-ext">{{ (f.filename.rsplit('.', 1)[-1] if '.' in f.filename else '文件') | upper }}</span>

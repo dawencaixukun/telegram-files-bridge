@@ -6,6 +6,7 @@ routers/browse.py — 表现层路由模块：Telegram 频道资源浏览与文�
 from core import *
 from services import *
 import time
+import asyncio
 from typing import Any, Dict, List
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -34,8 +35,11 @@ async def browse_page(request: Request, tg: str = "", chat: str = "", type: str 
                         break
                 break
     hide_arch = bool(hide_archived and hide_archived not in ("0", "false", "False"))
-    rows, count, cursor, dedup = await _browse_files(tg, chat, type, hide_archived=hide_arch)
-    ctx = await _ctx(request, "browse", "browse", extra={
+    (rows, count, cursor, dedup), ctx = await asyncio.gather(
+        _browse_files(tg, chat, type, hide_archived=hide_arch),
+        _ctx(request, "browse", "browse"),
+    )
+    ctx.update({
         "tree": tree,
         "sel_tg": str(tg or ""),
         "sel_chat": str(chat or ""),
@@ -205,9 +209,9 @@ async def browse_watch_rules_set(request: Request):
             "chatTitle": title,
             "enabled": True,
             "priority": 0,
-            "dirTemplate": f"{base_dir}/tg-archive/{{chat_title}}/{{YYYY-MM}}",
-            "deleteLocal": True,
-            "policy": "skip",
+            "dirTemplate": base_dir,
+            "deleteLocal": bool(_ARCHIVE_CONFIG.get("deleteLocal", True)),
+            "policy": "skip" if str(_ARCHIVE_CONFIG.get("policy") or "").lower() == "skip" else "overwrite",
             "watch": True,
             "created_at": time.time(),
             "stats": {"enqueued": 0, "done": 0, "failed": 0, "last_hit_at": 0.0},

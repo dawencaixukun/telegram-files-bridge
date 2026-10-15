@@ -177,13 +177,15 @@ class TestArchiveClassification(unittest.TestCase):
         self.assertEqual(resp_part.status_code, 200)
 
     def test_dashboard_kpi_total_cards(self):
-        """总览页 KPI 行为「累计下载/累计上传」总量卡（服务端渲染，无轮询）"""
+        """总览页 KPI 行为「累计下载/累计上传」合并总量卡（服务端渲染，无轮询）"""
         resp = self.client.get("/", cookies=self.cookies)
         self.assertEqual(resp.status_code, 200)
+        self.assertIn("累计下载 / 上传", resp.text)
         self.assertIn("累计下载", resp.text)
         self.assertIn("累计上传", resp.text)
         self.assertIn('id="kpi-dl-total"', resp.text)
         self.assertIn('id="kpi-ul-total"', resp.text)
+        self.assertIn("kpi-dual", resp.text)
         self.assertNotIn("kpi-dl-speed", resp.text)
 
     def test_dashboard_summary_speed_dual_line_chart(self):
@@ -296,11 +298,14 @@ class TestArchiveClassification(unittest.TestCase):
         # 1) 磁盘：必须是真实采样值 10.0 的曲线，而不是旧的「错误数逆序」0 序列
         self.assertEqual(by_label["本地磁盘占用"]["points"], _spark_points([10.0] * 14))
         self.assertNotEqual(by_label["本地磁盘占用"]["points"], flat)
-        # 2) KPI 行为累计下载/上传总量卡（值+单位），速率移到摘要卡
-        self.assertIn("累计下载", by_label)
-        self.assertIn("累计上传", by_label)
-        self.assertTrue(by_label["累计下载"]["unit"])
-        self.assertTrue(by_label["累计上传"]["unit"])
+        # 2) KPI 行为 3 张卡片，首卡为「累计下载 / 上传」合并总量卡（含双子项值+单位），速率移到摘要卡
+        self.assertEqual(len(stats["kpis"]), 3)
+        self.assertIn("累计下载 / 上传", by_label)
+        sub_by_label = {it["label"]: it for it in by_label["累计下载 / 上传"]["items"]}
+        self.assertIn("累计下载", sub_by_label)
+        self.assertIn("累计上传", sub_by_label)
+        self.assertTrue(sub_by_label["累计下载"]["unit"])
+        self.assertTrue(sub_by_label["累计上传"]["unit"])
         # 2b) 摘要为单卡双折线（lines 嵌套：上传紫 #a78bfa / 下载青 #22d3ee）
         self.assertEqual(len(stats["summary"]), 1)
         lines = {ln["speed_key"]: ln for ln in stats["summary"][0]["lines"]}

@@ -19,9 +19,12 @@ router = APIRouter()
 
 @router.get("/library/local", response_class=HTMLResponse)
 async def library_local(request: Request, category: str = ""):
-    tasks_list = await tasks_all()
-    # 「立即归档」亮起总开关：OpenList 已挂载（登录且令牌验证通过）
-    openlist_ready = await _openlist_ready()
+    tasks_list, openlist_ready, sources, ctx = await asyncio.gather(
+        tasks_all(),
+        _openlist_ready(),
+        chat_sources(),
+        _ctx(request, "library-local", "library", "local"),
+    )
     # 本地在存：所有文件记录经过严格在盘门禁过滤，已归档且本地已删除的文件自动隐藏
     _ai = _archive_index_snapshot()
     all_files = [_enrich_archive(f, openlist_ready, _ai) for f in _dedup_files([_to_local_file_from_task(t) for t in tasks_list])]
@@ -30,7 +33,7 @@ async def library_local(request: Request, category: str = ""):
     archived_count = sum(1 for f in in_stock_files if f.get("archive") and f.get("archive", {}).get("state") == "done")
     files = _filter_local_files(in_stock_files, archive_status=category) if category else in_stock_files
     total_size = _sum_human(files)
-    ctx = await _ctx(request, "library-local", "library", "local", extra={
+    ctx.update({
         "files": files,
         "total_size": total_size,
         "filtered": bool(category),
@@ -38,7 +41,7 @@ async def library_local(request: Request, category: str = ""):
         "unarchived_count": unarchived_count,
         "archived_count": archived_count,
         # 来源聊天筛选选项 = 真实账号聊天列表（与 /tasks、/submit 同源）
-        "chat_sources": await chat_sources(),
+        "chat_sources": sources,
     })
     return templates.TemplateResponse("library_local.html", ctx)
 
@@ -47,10 +50,11 @@ async def library_local(request: Request, category: str = ""):
 async def library_cloud(request: Request):
     # 云端归档 = bridge 实际上传到 OpenList 的文件（归档日志为源，尽力经
     # OpenList fs/list 校验云端仍在）。Java 后端 transferStatus 与本页无关。
-    cloud_files = await _cloud_archive_rows()
-    # 「网盘分类」唯一数据源 = OpenList 根目录下的真实挂载；
-    # 拉取失败时不回退硬编码，仅用归档记录里真实出现过的网盘兜底。
-    mounts_res = await openlist_mounts()
+    cloud_files, mounts_res, ctx = await asyncio.gather(
+        _cloud_archive_rows(),
+        openlist_mounts(),
+        _ctx(request, "library-cloud", "library", "cloud"),
+    )
     mounts = list(mounts_res.get("mounts") or [])
     if not mounts_res.get("ok"):
         log.warning("网盘分类：读取 OpenList 挂载失败，退化为按归档记录聚合: %s",
@@ -77,7 +81,7 @@ async def library_cloud(request: Request):
             "missing_count": missing,
         })
 
-    ctx = await _ctx(request, "library-cloud", "library", "cloud", extra={
+    ctx.update({
         "cloud_files": cloud_files,
         "drive_groups": drive_groups,
         "openlist_public_base": str(_ARCHIVE_CONFIG.get("publicBaseUrl") or ""),

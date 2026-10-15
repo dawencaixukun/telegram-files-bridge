@@ -66,8 +66,8 @@
         </div>
       </div>
       <div class="row mt-4" style="justify-content:flex-end;">
-        <button class="btn" id="retryBtn" data-task-id="{{ task.id }}" onclick="window.__retryTask(this)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>重试任务</button>
-        <button class="btn danger" id="cancelBtn" data-task-id="{{ task.id }}" onclick="window.__cancelTask(this)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>取消任务</button>
+        <button class="btn" id="retryBtn" data-task-id="{{ task.id }}" data-unique-id="{{ task._unique_id or '' }}" onclick="window.__retryTask(this)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>重试任务</button>
+        <button class="btn danger" id="cancelBtn" data-task-id="{{ task.id }}" data-unique-id="{{ task._unique_id or '' }}" onclick="window.__cancelTask(this)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>取消任务</button>
       </div>
     </div>
     {% endif %}
@@ -88,5 +88,6 @@
     uniqueId: {{ task._unique_id | tojson }},
     telegramId: {{ task._telegram_id | tojson }}
   };
+  window.__TASK_META[{{ ('id:' ~ task.id) | tojson }}] = window.__TASK_META[{{ (task._unique_id or ('id:' ~ task.id)) | tojson }}];
 </script>
 {% endblock %}

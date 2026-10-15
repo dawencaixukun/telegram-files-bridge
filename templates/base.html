@@ -41,6 +41,9 @@
 <body data-page="{% block page_id %}dashboard{% endblock %}"
       class="{% if session_state == 'err' %}session-err{% endif %}">
 
+  <!-- 顶部切页/请求极速反馈进度条 -->
+  <div id="topNavProgress" class="top-nav-progress" aria-hidden="true"></div>
+
   <!-- Ambient gradient background -->
   <div class="app-bg" aria-hidden="true"></div>
 

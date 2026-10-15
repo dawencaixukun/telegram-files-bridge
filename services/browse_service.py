@@ -401,6 +401,7 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
     seen_uids: set = set()
     cur = cursor
     next_cursor = 0
+    min_fill = max(1, int(limit * 0.6))
     for _round in range(8):
         params: Dict[str, Any] = {"type": type_, "limit": limit}
         if cur:
@@ -408,7 +409,12 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
         try:
             tg = BACKEND._safe_id(tg_id)
             ch = BACKEND._safe_id(chat_id)
-            raw = await BACKEND._request("GET", f"/telegram/{tg}/chat/{ch}/files", params=params)
+            cache_key = f"browse_files:{tg}:{ch}:{type_}:{limit}:{cur}"
+            raw = await BACKEND._cached(
+                cache_key,
+                lambda _p=dict(params): BACKEND._request("GET", f"/telegram/{tg}/chat/{ch}/files", params=_p),
+                ttl=60.0,
+            )
         except Exception as e:  # noqa: BLE001
             log.warning("browse files(%s,%s) 失败: %s", tg_id, chat_id, e)
             break
@@ -434,11 +440,31 @@ async def _browse_files(tg_id: Any, chat_id: Any, type_: str = "document",
             if hide_archived and _ai.registry_lookup(str(f.get("uniqueId") or ""), _human_name(f), f.get("size")):
                 continue
             collected.append(f)
-        # 凑够一屏，或后端没有更多（游标不前进/空页）→ 停止补页
-        if len(collected) >= limit or not next_cursor or not page:
+        # 凑够一屏（>= limit 的 60%），或后端没有更多（游标不前进/空页）→ 停止补页
+        if len(collected) >= min_fill or not next_cursor or not page:
             break
         cur = next_cursor
     files = collected
     # 「已列 N / 共 M」口径：过滤后前端实际可见数（后端 count 是未过滤总数）
     count = len(files)
     return _browse_rows(files), count, next_cursor, {"collapsed": state["collapsed"], "loaded": state["loaded"]}
+
+
+async def prewarm_browse_cache() -> None:
+    """后台静默预热默认会话（收藏）浏览缓存，使首次点击 /browse 即达毫秒级响应。"""
+    while True:
+        try:
+            tree = await _browse_tree()
+            if tree and tree[0].get("chats"):
+                tg = str(tree[0]["telegramId"])
+                ch = str(tree[0]["chats"][0]["chatId"])
+                for t in ("document", "video"):
+                    await _browse_files(tg, ch, t, 0, hide_archived=False)
+        except asyncio.CancelledError:
+            break
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await asyncio.sleep(45.0)
+        except asyncio.CancelledError:
+            break
