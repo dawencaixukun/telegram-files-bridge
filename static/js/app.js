@@ -1231,6 +1231,51 @@
     });
   };
 
+  /* ---- 云端跨盘复制与移动：OpenList 跨网盘 API ---- */
+  window.__copyCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('copy', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
+  };
+
+  window.__moveCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('move', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
+  };
+
   window.__deleteCloudFile = function (btn) {
     var path = btn.getAttribute('data-cloud-path');
     var jid = btn.getAttribute('data-job-id');

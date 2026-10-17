@@ -9,7 +9,7 @@ import re
 import time
 import asyncio
 from urllib.parse import urlsplit
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from core.config import _fmt_size
 from core.state import _NOTIFY_CONFIG
@@ -303,3 +303,65 @@ def notify_disk_watermark_alert(cur_pct: float, high_thresh: float, free_gb: flo
         _spawn_notification("diskWatermarkAlert", card, reply_markup=kb)
     except Exception as e:
         log.debug("notify_disk_watermark_alert 异常: %s", e)
+
+
+def notify_cloud_transfer_start(action: str, src_dir: str, dst_dir: str, names: List[str]) -> None:
+    """网盘跨盘复制/移动开始通知。"""
+    try:
+        act_cn = "移动" if action == "move" else "复制"
+        fn_str = "、".join(names) if names else "未知文件"
+        card = (
+            f"🔄 <b>【网盘跨盘{act_cn}已提交】</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>文件名称：</b><code>{fn_str}</code>\n"
+            f"📂 <b>源目录：</b><code>{src_dir}</code>\n"
+            f"📁 <b>目标目录：</b><code>{dst_dir}</code>\n"
+            "📊 <b>任务状态：</b>OpenList 后台传输中…\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "💡 <i>可在网页版卡片或发送 /cloudtasks 查看实时传输进度</i>"
+        )
+        _spawn_notification("cloudTransfer", card)
+    except Exception as e:
+        log.debug("notify_cloud_transfer_start 异常: %s", e)
+
+
+def notify_cloud_transfer_completed(action: str, src_dir: str, dst_dir: str, names: List[str], elapsed: int = 0) -> None:
+    """网盘跨盘复制/移动完成通知。"""
+    try:
+        act_cn = "移动" if action == "move" else "复制"
+        fn_str = "、".join(names) if names else "未知文件"
+        elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+        url = _openlist_direct_url(dst_dir)
+        card = (
+            f"✅ <b>【网盘跨盘{act_cn}完成】</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>文件名称：</b><code>{fn_str}</code>\n"
+            f"📂 <b>源目录：</b><code>{src_dir}</code>\n"
+            f"📁 <b>目标目录：</b><code>{dst_dir}</code>\n"
+            f"⏱️ <b>总耗时：</b><code>{elapsed_str}</code>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f'🔗 <a href="{url}">点击直接在 OpenList 中查看</a>'
+        )
+        _spawn_notification("cloudTransfer", card)
+    except Exception as e:
+        log.debug("notify_cloud_transfer_completed 异常: %s", e)
+
+
+def notify_cloud_transfer_failed(action: str, src_dir: str, dst_dir: str, names: List[str], error: str = "") -> None:
+    """网盘跨盘复制/移动失败通知。"""
+    try:
+        act_cn = "移动" if action == "move" else "复制"
+        fn_str = "、".join(names) if names else "未知文件"
+        card = (
+            f"❌ <b>【网盘跨盘{act_cn}失败】</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>文件名称：</b><code>{fn_str}</code>\n"
+            f"📂 <b>源目录：</b><code>{src_dir}</code>\n"
+            f"📁 <b>目标目录：</b><code>{dst_dir}</code>\n"
+            f"⚠️ <b>失败原因：</b><code>{error or 'OpenList 任务执行异常'}</code>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "💡 <i>请检查目标网盘剩余空间或权限配置</i>"
+        )
+        _spawn_notification("cloudTransfer", card)
+    except Exception as e:
+        log.debug("notify_cloud_transfer_failed 异常: %s", e)

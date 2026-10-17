@@ -59,6 +59,7 @@ BOT_COMMANDS: List[Dict[str, str]] = [
     {"command": "dl", "description": "解析 t.me 消息链接并加入下载队列"},
     {"command": "ck", "description": "查看下载任务进度与可操作列表"},
     {"command": "yd", "description": "查看云端上传队列与失败处理"},
+    {"command": "cloudtasks", "description": "查看当前网盘正在复制/移动的任务与进度"},
     {"command": "st", "description": "系统总览与快捷操作面板"},
     {"command": "err", "description": "最近归档失败详情与一键重试/清理"},
     {"command": "help", "description": "查看全部命令与操作说明"},
@@ -490,6 +491,18 @@ async def build_st_reply() -> str:
     failed_arch = sum(1 for j in _ARCHIVE_JOBS.values() if j.get("state") == "failed")
     lines.append(f"  上传中 <b>{uploading}</b> · 失败 <b>{failed_arch}</b> · 已归档 <b>{sum(1 for j in _ARCHIVE_JOBS.values() if j.get('state') == 'done')}</b>")
     lines.append(f"  默认路径：<code>{_esc(def_dir)}</code>")
+    # 跨盘传输任务统计
+    try:
+        from services.openlist_service import _CLOUD_TRANSFER_TASKS, _openlist_tasks_undone
+        c_copy = await _openlist_tasks_undone("copy")
+        c_move = await _openlist_tasks_undone("move")
+        active_transfers = len(c_copy) + len(c_move) + sum(1 for t in _CLOUD_TRANSFER_TASKS.values() if t.get("state") == "running")
+    except Exception:
+        active_transfers = 0
+    if active_transfers > 0:
+        lines.append("🔄 <b>跨盘传输</b>")
+        lines.append(f"  进行中 <b>{active_transfers}</b> 个任务（发送 /cloudtasks 查看详情）")
+
     lines.append("💽 <b>磁盘</b>")
     lines.append(f"  已用 <b>{disk_pct:.1f}%</b> · 可用 <b>{free_gb:.1f} GB</b>")
     if _WAITING_DISK_TASKS:
@@ -517,8 +530,76 @@ async def build_st_panel() -> Tuple[str, Dict[str, Any]]:
             ],
             [
                 {"text": "📊 云端上传队列", "callback_data": "act:yd"},
+                {"text": "🔄 跨盘传输任务", "callback_data": "act:cloud_tasks"},
+            ],
+            [
                 {"text": "🔃 刷新总览", "callback_data": "act:st"},
             ],
+        ]
+    }
+    return text, kb
+
+
+async def build_cloud_tasks_reply() -> str:
+    """/cloudtasks — 查看当前网盘正在复制/移动的任务与进度。"""
+    from services.openlist_service import _openlist_tasks_undone, _CLOUD_TRANSFER_TASKS
+    try:
+        copy_tasks = await _openlist_tasks_undone("copy")
+    except Exception:
+        copy_tasks = []
+    try:
+        move_tasks = await _openlist_tasks_undone("move")
+    except Exception:
+        move_tasks = []
+
+    all_tasks: List[Dict[str, Any]] = []
+    for t in copy_tasks:
+        all_tasks.append({"action": "复制", **t})
+    for t in move_tasks:
+        all_tasks.append({"action": "移动", **t})
+
+    for tid, lt in _CLOUD_TRANSFER_TASKS.items():
+        if lt.get("state") == "running" and not any(t.get("id") == tid for t in all_tasks):
+            fn_str = "、".join(lt.get("names") or [])
+            all_tasks.append({
+                "id": tid,
+                "action": "移动" if lt.get("action") == "move" else "复制",
+                "name": f"[{fn_str}] → [{lt.get('dst_dir')}]",
+                "progress": lt.get("progress", 0.0),
+                "status": "running",
+            })
+
+    lines = [
+        "☁️ <b>【网盘跨盘传输任务队列】</b>",
+        "━━━━━━━━━━━━━━━━━━",
+    ]
+    if not all_tasks:
+        lines.append("当前暂无正在执行的跨网盘复制或移动任务。")
+        lines.append("")
+        lines.append("💡 <i>在网页版「浏览」资产页卡片上可直接操作跨盘复制与移动</i>")
+    else:
+        lines.append(f"当前共有 <b>{len(all_tasks)}</b> 个传输任务正在进行：\n")
+        for i, t in enumerate(all_tasks, 1):
+            act = t.get("action", "传输")
+            name = _esc(t.get("name") or "未命名任务")
+            pct = float(t.get("progress") or 0.0)
+            bar_str = _bar(pct, width=10)
+            lines.append(f"<b>{i}. [{act}]</b> <code>{name}</code>")
+            lines.append(f"   进度：<code>{bar_str}</code> <b>{pct:.1f}%</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(f"<i>{_fmt_time(time.time())} · 发送 /st 查看系统总览</i>")
+    return "\n".join(lines)
+
+
+async def build_cloud_tasks_panel() -> Tuple[str, Dict[str, Any]]:
+    """/cloudtasks 文本 + 快捷面板。"""
+    text = await build_cloud_tasks_reply()
+    kb = {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 刷新进度", "callback_data": "act:cloud_tasks"},
+                {"text": "📈 系统总览 (/st)", "callback_data": "act:st"},
+            ]
         ]
     }
     return text, kb
@@ -601,7 +682,8 @@ HELP_TEXT = "\n".join([
     "<b>📊 状态监控命令：</b>",
     "/ck — 下载任务进度与完整性",
     "/yd — 云端归档上传队列（已归档不罗列）",
-    "/st — 系统总览与快捷操作面板",
+    "/cloudtasks — 查看当前网盘正在复制/移动的任务与进度",
+    "/st 或 /status — 系统总览与快捷操作面板",
     "/err — 最近归档失败详情与一键处理",
     "/help — 本帮助与快捷菜单",
     "━━━━━━━━━━━━━━━━━━",
@@ -1557,6 +1639,9 @@ async def _handle_callback_query(client: Any, bot_token: str, allowed_chat: str,
     if data == "act:st":
         toast = "已刷新系统总览"
         reply_text, reply_kb = await build_st_panel()
+    elif data == "act:cloud_tasks":
+        toast = "已刷新跨盘传输任务"
+        reply_text, reply_kb = await build_cloud_tasks_panel()
     elif data == "act:ck":
         toast = "已刷新下载任务进度"
         reply_text, reply_kb = await build_ck_panel()
@@ -1724,8 +1809,10 @@ async def _handle_update(client: httpx.AsyncClient, bot_token: str,
         reply, reply_kb = await build_ck_panel()
     elif cmd == "/yd":
         reply, reply_kb = await build_yd_panel()
-    elif cmd == "/st":
+    elif cmd in ("/st", "/status"):
         reply, reply_kb = await build_st_panel()
+    elif cmd in ("/cloudtasks", "/pan", "/transfer", "/cptasks"):
+        reply, reply_kb = await build_cloud_tasks_panel()
     elif cmd == "/err":
         reply, reply_kb = build_err_panel()
     elif cmd in ("/up", "/upload", "/archive"):

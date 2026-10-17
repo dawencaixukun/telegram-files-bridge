@@ -12,6 +12,7 @@ import posixpath
 from typing import Any, Dict, List
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+import services.openlist_service as _openlist_mod
 
 
 
@@ -47,13 +48,15 @@ async def library_local(request: Request, category: str = ""):
 
 
 @router.get("/library/cloud", response_class=HTMLResponse)
+@router.get("/library/browse", response_class=HTMLResponse)
 async def library_cloud(request: Request):
-    # 云端归档 = bridge 实际上传到 OpenList 的文件（归档日志为源，尽力经
+    # 云端归档 / 浏览 = bridge 实际上传到 OpenList 的文件（归档日志为源，尽力经
     # OpenList fs/list 校验云端仍在）。Java 后端 transferStatus 与本页无关。
+    page_sub = "browse" if request.url.path.endswith("/browse") else "cloud"
     cloud_files, mounts_res, ctx = await asyncio.gather(
         _cloud_archive_rows(),
         openlist_mounts(),
-        _ctx(request, "library-cloud", "library", "cloud"),
+        _ctx(request, f"library-{page_sub}", "library", page_sub),
     )
     mounts = list(mounts_res.get("mounts") or [])
     if not mounts_res.get("ok"):
@@ -577,4 +580,200 @@ async def library_cloud_files():
     """返回当前云端归档文件列表（供前端搜索、筛选、动态加载）。"""
     files = await _cloud_archive_rows()
     return {"ok": True, "files": files}
+
+
+@router.get("/api/cloud/mounts")
+async def api_cloud_mounts():
+    """获取 OpenList 当前已挂载的全部网盘根路径列表（如 ["/onedrive", "/wopan"]）。"""
+    mounts_res = await openlist_mounts()
+    mounts = list(mounts_res.get("mounts") or [])
+    norm_mounts = [posixpath.normpath("/" + str(m).strip().lstrip("/")) for m in mounts if str(m).strip()]
+    if not norm_mounts:
+        seen = set()
+        for j in _ARCHIVE_JOBS.values():
+            rp = str(j.get("remote_path") or "").strip().replace("\\", "/").lstrip("/")
+            if rp:
+                seg = rp.split("/")[0]
+                if seg:
+                    seen.add("/" + seg)
+        norm_mounts = sorted(seen)
+    return {"ok": True, "mounts": norm_mounts}
+
+
+@router.post("/api/cloud/copy")
+@router.post("/library/cloud/copy")
+async def api_cloud_copy(request: Request):
+    """复制 OpenList 云端文件到其他网盘或目录。
+
+    请求体：{"src_dir": "/onedrive", "dst_dir": "/wopan", "names": ["video.mp4"]}
+    或支持单文件格式：{"remotePath": "/onedrive/video.mp4", "dst_dir": "/wopan"}
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "message": "请求体格式错误"}, status_code=400)
+
+    src_dir = str(body.get("src_dir") or "").strip().replace("\\", "/")
+    dst_dir = str(body.get("dst_dir") or "").strip().replace("\\", "/")
+    names = body.get("names")
+    if not names:
+        single_name = str(body.get("name") or "").strip()
+        if single_name:
+            names = [single_name]
+    remote_path = str(body.get("remotePath") or body.get("cloudPath") or "").strip().replace("\\", "/")
+
+    if remote_path and not src_dir:
+        norm_rp = posixpath.normpath("/" + remote_path.lstrip("/"))
+        src_dir = posixpath.dirname(norm_rp)
+        if not names:
+            names = [posixpath.basename(norm_rp)]
+
+    if not src_dir or src_dir == "/":
+        src_dir = "/"
+    else:
+        src_dir = posixpath.normpath("/" + src_dir.lstrip("/"))
+
+    if not dst_dir:
+        return JSONResponse({"ok": False, "message": "缺少目标目录 dst_dir"}, status_code=400)
+    dst_dir = posixpath.normpath("/" + dst_dir.lstrip("/"))
+
+    if not names or not isinstance(names, list):
+        return JSONResponse({"ok": False, "message": "缺少要复制的文件名 names 列表"}, status_code=400)
+
+    clean_names = [posixpath.basename(str(n).strip()) for n in names if str(n).strip()]
+    if not clean_names:
+        return JSONResponse({"ok": False, "message": "缺少有效的文件名"}, status_code=400)
+
+    if src_dir == dst_dir:
+        return JSONResponse({"ok": False, "message": "源目录与目标目录相同，无需复制"}, status_code=400)
+
+    res = await _openlist_mod._openlist_fs_copy(src_dir, dst_dir, clean_names)
+    if not res.get("ok"):
+        status = 502 if "就绪" in str(res.get("message")) else 400
+        return JSONResponse({"ok": False, "message": res.get("message") or "复制失败"}, status_code=status)
+
+    return {
+        "ok": True,
+        "src_dir": src_dir,
+        "dst_dir": dst_dir,
+        "names": clean_names,
+        "message": f"已成功提交复制任务：{len(clean_names)} 个文件复制到「{dst_dir}」",
+        "data": res.get("data"),
+    }
+
+
+@router.post("/api/cloud/move")
+@router.post("/library/cloud/move")
+async def api_cloud_move(request: Request):
+    """移动 OpenList 云端文件到其他网盘或目录，并同步回写系统归档记录。
+
+    请求体：{"src_dir": "/onedrive", "dst_dir": "/wopan", "names": ["video.mp4"]}
+    或支持单文件格式：{"remotePath": "/onedrive/video.mp4", "dst_dir": "/wopan"}
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "message": "请求体格式错误"}, status_code=400)
+
+    src_dir = str(body.get("src_dir") or "").strip().replace("\\", "/")
+    dst_dir = str(body.get("dst_dir") or "").strip().replace("\\", "/")
+    names = body.get("names")
+    if not names:
+        single_name = str(body.get("name") or "").strip()
+        if single_name:
+            names = [single_name]
+    remote_path = str(body.get("remotePath") or body.get("cloudPath") or "").strip().replace("\\", "/")
+
+    if remote_path and not src_dir:
+        norm_rp = posixpath.normpath("/" + remote_path.lstrip("/"))
+        src_dir = posixpath.dirname(norm_rp)
+        if not names:
+            names = [posixpath.basename(norm_rp)]
+
+    if not src_dir or src_dir == "/":
+        src_dir = "/"
+    else:
+        src_dir = posixpath.normpath("/" + src_dir.lstrip("/"))
+
+    if not dst_dir:
+        return JSONResponse({"ok": False, "message": "缺少目标目录 dst_dir"}, status_code=400)
+    dst_dir = posixpath.normpath("/" + dst_dir.lstrip("/"))
+
+    if not names or not isinstance(names, list):
+        return JSONResponse({"ok": False, "message": "缺少要移动的文件名 names 列表"}, status_code=400)
+
+    clean_names = [posixpath.basename(str(n).strip()) for n in names if str(n).strip()]
+    if not clean_names:
+        return JSONResponse({"ok": False, "message": "缺少有效的文件名"}, status_code=400)
+
+    if src_dir == dst_dir:
+        return JSONResponse({"ok": False, "message": "源目录与目标目录相同，无需移动"}, status_code=400)
+
+    res = await _openlist_mod._openlist_fs_move(src_dir, dst_dir, clean_names)
+    if not res.get("ok"):
+        status = 502 if "就绪" in str(res.get("message")) else 400
+        return JSONResponse({"ok": False, "message": res.get("message") or "移动失败"}, status_code=status)
+
+    # 移动成功：同步回写本地归档记录（匹配 old_remote 路径）
+    changed = 0
+    for fname in clean_names:
+        old_remote = posixpath.normpath(posixpath.join(src_dir, fname)).lower()
+        new_remote = posixpath.normpath(posixpath.join(dst_dir, fname))
+        for j in _ARCHIVE_JOBS.values():
+            cur_p = str(j.get("remote_path") or "").strip().replace("\\", "/").lower()
+            if cur_p == old_remote:
+                j["remote_path"] = new_remote
+                j["remote_dir"] = dst_dir
+                changed += 1
+
+    if changed:
+        _archive_save()
+        log.info("云端移动成功: %s -> %s（同步回写 %d 条归档记录）", src_dir, dst_dir, changed)
+        try:
+            import services.archive_service as _arch_mod
+            getattr(_arch_mod, "_OPENLIST_DIR_LIST_CACHE", {}).clear()
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "src_dir": src_dir,
+        "dst_dir": dst_dir,
+        "names": clean_names,
+        "updatedJobs": changed,
+        "message": f"已成功移动 {len(clean_names)} 个文件到「{dst_dir}」",
+        "data": res.get("data"),
+    }
+
+
+@router.get("/api/cloud/tasks")
+async def api_cloud_tasks():
+    """获取 OpenList 跨网盘复制与移动任务进度列表。"""
+    tasks = await _openlist_mod.openlist_get_cloud_tasks()
+    return {"ok": True, "data": tasks}
+
+
+@router.get("/api/admin/task/{kind}/undone")
+@router.get("/api/task/{kind}/undone")
+async def api_admin_task_undone(kind: str):
+    """代理 OpenList /api/admin/task/{kind}/undone 任务进度查询接口，供前端卡片轮询进度条。"""
+    tasks = await _openlist_mod._openlist_tasks_undone(kind)
+    # 若 OpenList 返回空但本地 tracker 存在该 action 的 running 任务，合成对应任务项
+    if not tasks:
+        cloud_transfers = getattr(_openlist_mod, "_CLOUD_TRANSFER_TASKS", {})
+        for t in cloud_transfers.values():
+            if t.get("action") == kind and t.get("state") == "running":
+                fn_str = ", ".join(t.get("names") or [])
+                tasks.append({
+                    "id": t.get("id"),
+                    "name": f"{kind} [{fn_str}] to [{t.get('dst_dir')}]",
+                    "progress": t.get("progress", 0.0),
+                    "state": 1,
+                    "status": "running",
+                })
+    return {"code": 200, "message": "success", "data": tasks}
 

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/_macros.html" import pill %}
-{% block title %}云端归档 · TG 归档台{% endblock %}
-{% block page_id %}library-cloud{% endblock %}
+{% block title %}浏览 · TG 归档台{% endblock %}
+{% block page_id %}library-browse{% endblock %}
 {% block active_nav %}library{% endblock %}
-{% block active_page %}cloud{% endblock %}
-{% block page_title %}云端归档{% endblock %}
-{% block ctx_chip %}<span class="ctx-chip">云端归档 · 共 {{ cloud_files|length }} 个文件</span>{% endblock %}
+{% block active_page %}{% if active_page %}{{ active_page }}{% else %}browse{% endif %}{% endblock %}
+{% block page_title %}浏览{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">浏览 · 共 {{ cloud_files|length }} 个文件</span>{% endblock %}
 
 {% block head %}
 <script>
@@ -20,10 +20,234 @@ window.cloudLibrary = function cloudLibrary() {
     domainInput: '',
     savingDomain: false,
     totalCount: {{ cloud_files|length if cloud_files else 0 }},
+    showTransferModal: false,
+    transferAction: 'copy',
+    transferFile: {
+      filename: '',
+      cloudPath: '',
+      srcDir: '',
+      drive: '',
+      jobId: ''
+    },
+    transferTargetDir: '',
+    transferLoading: false,
+    transferProgress: 0,
+    mountsList: {{ openlist_mounts | tojson if openlist_mounts else '[]' }},
 
     init: function () {
       if (!this.domainInput) {
         this.domainInput = this.openlistBase;
+      }
+    },
+
+    openTransferModal: function (action, data) {
+      this.transferAction = action;
+      this.transferFile = {
+        filename: data.filename || '',
+        cloudPath: data.cloudPath || '',
+        srcDir: data.srcDir || (data.cloudPath ? data.cloudPath.substring(0, data.cloudPath.lastIndexOf('/')) || '/' : '/'),
+        drive: data.drive || '',
+        jobId: data.jobId || ''
+      };
+      var curDrive = (this.transferFile.drive || '').replace(/^\/+/, '');
+      var def = '';
+      if (this.mountsList && this.mountsList.length > 0) {
+        var other = this.mountsList.find(function(m) {
+          var cleanM = String(m || '').replace(/^\/+/, '');
+          return cleanM && cleanM !== curDrive;
+        });
+        def = other ? '/' + String(other).replace(/^\/+/, '') : '/' + String(this.mountsList[0]).replace(/^\/+/, '');
+      } else {
+        def = '/';
+      }
+      this.transferTargetDir = def;
+      this.transferLoading = false;
+      this.transferProgress = 0;
+      this.showTransferModal = true;
+      var self = this;
+      fetch('/api/cloud/mounts')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d && d.ok && d.mounts && d.mounts.length > 0) {
+            self.mountsList = d.mounts;
+          }
+        }).catch(function() {});
+    },
+
+    selectMountChip: function (m) {
+      this.transferTargetDir = '/' + String(m || '').replace(/^\/+/, '');
+    },
+
+    executeTransfer: async function () {
+      var dst = (this.transferTargetDir || '').trim();
+      if (!dst) {
+        if (window.__toast) window.__toast('请输入目标目录', 'warning');
+        return;
+      }
+      if (!dst.startsWith('/')) {
+        dst = '/' + dst;
+      }
+      var src = this.transferFile.srcDir;
+      var fn = this.transferFile.filename;
+      var isMove = this.transferAction === 'move';
+      var endpoint = isMove ? '/api/cloud/move' : '/api/cloud/copy';
+
+      if (src === dst) {
+        if (window.__toast) window.__toast('源目录与目标目录相同，无需' + (isMove ? '移动' : '复制'), 'warning');
+        return;
+      }
+
+      this.transferLoading = true;
+      this.transferProgress = 1;
+      var oldCloudPath = this.transferFile.cloudPath;
+
+      // 在卡片上实时唤起进度条
+      var bar = null;
+      var cards = document.querySelectorAll('.cloud-card');
+      for (var ci = 0; ci < cards.length; ci++) {
+        var cEl = cards[ci];
+        var cpEl = cEl.querySelector('[data-cloud-path]');
+        if (cpEl && cpEl.getAttribute('data-cloud-path') === oldCloudPath) {
+          bar = cEl.querySelector('.cloud-transfer-progress');
+          break;
+        }
+      }
+      if (bar) {
+        bar.style.display = 'flex';
+        var bLbl = bar.querySelector('.ctp-label');
+        var bPct = bar.querySelector('.ctp-pct');
+        var bFil = bar.querySelector('.ctp-fill');
+        if (bLbl) bLbl.textContent = (isMove ? '移动中' : '复制中');
+        if (bPct) bPct.textContent = '1%';
+        if (bFil) bFil.style.width = '1%';
+      }
+
+      try {
+        var csrfMatch = document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]*)/);
+        var csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : (window.__csrfToken ? window.__csrfToken() : '');
+        var res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+          },
+          body: JSON.stringify({
+            src_dir: src,
+            dst_dir: dst,
+            names: [fn]
+          })
+        });
+        var data = await res.json();
+        if (res.ok && data.ok) {
+          if (window.__toast) {
+            window.__toast((isMove ? '已提交移动任务' : '已提交复制任务'), 'success', fn + ' → ' + dst);
+          }
+          this.showTransferModal = false;
+
+          // 开启实时进度条轮询 (轮询 OpenList /api/admin/task/{kind}/undone)
+          var pollAction = this.transferAction;
+          var pollFn = fn;
+          var pollOldPath = oldCloudPath;
+          var pollDst = dst;
+          var pollTimer = setInterval(function () {
+            fetch('/api/admin/task/' + pollAction + '/undone')
+              .then(function(r) { return r.json(); })
+              .then(function(resData) {
+                var tasks = (resData && resData.data) || [];
+                var matched = null;
+                for (var ti = 0; ti < tasks.length; ti++) {
+                  var tn = String(tasks[ti].name || '');
+                  if (tn.indexOf(pollFn) !== -1) {
+                    matched = tasks[ti];
+                    break;
+                  }
+                }
+                var currentBar = bar;
+                if (!currentBar) {
+                  var fCards = document.querySelectorAll('.cloud-card');
+                  for (var fci = 0; fci < fCards.length; fci++) {
+                    var fcEl = fCards[fci];
+                    var fcp = fcEl.querySelector('[data-cloud-path]');
+                    if (fcp && fcp.getAttribute('data-cloud-path') === pollOldPath) {
+                      currentBar = fcEl.querySelector('.cloud-transfer-progress');
+                      break;
+                    }
+                  }
+                }
+                if (matched) {
+                  var p = Math.max(1, Math.round(Number(matched.progress || 0)));
+                  if (currentBar) {
+                    currentBar.style.display = 'flex';
+                    var pctEl = currentBar.querySelector('.ctp-pct');
+                    var filEl = currentBar.querySelector('.ctp-fill');
+                    if (pctEl) pctEl.textContent = p + '%';
+                    if (filEl) filEl.style.width = p + '%';
+                  }
+                } else {
+                  // 任务已完成 (不再出现在 undone 列表中)
+                  clearInterval(pollTimer);
+                  if (currentBar) {
+                    var pctEl = currentBar.querySelector('.ctp-pct');
+                    var filEl = currentBar.querySelector('.ctp-fill');
+                    var lblEl = currentBar.querySelector('.ctp-label');
+                    if (pctEl) pctEl.textContent = '100%';
+                    if (filEl) filEl.style.width = '100%';
+                    if (lblEl) lblEl.textContent = (pollAction === 'move' ? '移动完成' : '复制完成');
+                    setTimeout(function() {
+                      currentBar.style.display = 'none';
+                    }, 2500);
+                  }
+                  if (window.__toast) {
+                    window.__toast((pollAction === 'move' ? '移动完成' : '复制完成'), 'success', pollFn);
+                  }
+
+                  // 若为移动，局部动态更新卡片上绑定的路径、网盘徽标与 OpenList 跳转地址
+                  if (pollAction === 'move') {
+                    var newCloudPath = (pollDst === '/' ? '' : pollDst) + '/' + pollFn;
+                    var newDrive = pollDst.replace(/^\/+/, '').split('/')[0] || '默认网盘';
+                    var mCards = document.querySelectorAll('.cloud-card');
+                    for (var mi = 0; mi < mCards.length; mi++) {
+                      var mc = mCards[mi];
+                      var mcp = mc.querySelector('[data-cloud-path]');
+                      if (mcp && mcp.getAttribute('data-cloud-path') === pollOldPath) {
+                        mc.querySelectorAll('[data-cloud-path]').forEach(function(el) {
+                          el.setAttribute('data-cloud-path', newCloudPath);
+                        });
+                        var pathSpan = mc.querySelector('.cloud-path span');
+                        if (pathSpan) pathSpan.textContent = newCloudPath;
+                        var badge = mc.querySelector('.cloud-drive-badge');
+                        if (badge) {
+                          badge.innerHTML = '<svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg> ' + newDrive;
+                        }
+                        var olLink = mc.querySelector('a[data-openlist-url]');
+                        if (olLink && window.__cloudOpenListUrl) {
+                          var nUrl = window.__cloudOpenListUrl(newCloudPath, '');
+                          if (nUrl) {
+                            olLink.setAttribute('href', nUrl);
+                            olLink.setAttribute('data-openlist-url', nUrl);
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              })
+              .catch(function() {});
+          }, 1500);
+
+        } else {
+          if (window.__toast) {
+            window.__toast((isMove ? '移动失败' : '复制失败'), 'error', (data && data.message) || '请求失败');
+          }
+          if (bar) bar.style.display = 'none';
+        }
+      } catch (err) {
+        if (window.__toast) {
+          window.__toast('网络错误', 'error', String(err));
+        }
+        if (bar) bar.style.display = 'none';
+      } finally {
+        this.transferLoading = false;
       }
     },
 
@@ -276,13 +500,43 @@ window.cloudLibrary = function cloudLibrary() {
     align-items: stretch;
   }
 }
+.cloud-transfer-progress {
+  margin-top: 6px;
+  padding: 4px 6px;
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ctp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.ctp-track {
+  width: 100%;
+  height: 5px;
+  background: var(--bg-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ctp-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
 </style>
 
 <div class="cloud-library" x-data="cloudLibrary()" x-init="init()">
 <div class="page-header">
   <div>
-    <h1>云端归档</h1>
-    <p>OpenList 已归档文件（从本地上传至云端挂载网盘，支持搜索、直达打开、删除与取回）</p>
+    <h1>浏览</h1>
+    <p>OpenList 已归档文件（卡片式网格浏览，支持缩略图预览、OpenList 跳转、重命名、跨盘复制与移动）</p>
   </div>
   <div class="row" style="gap:8px;align-items:center;">
     <!-- 顶栏自定义 OpenList 域名配置按钮 -->
@@ -498,6 +752,18 @@ window.cloudLibrary = function cloudLibrary() {
               <span class="tnum">{{ f.archived_time }}</span>
             </div>
             <div class="cloud-path" title="{{ f.cloud_path }}">{{ f.cloud_path }}</div>
+
+            {# 跨网盘实时传输进度条 #}
+            <div class="cloud-transfer-progress" style="display:none;" data-transfer-bar data-cloud-path="{{ f.cloud_path }}">
+              <div class="ctp-head">
+                <span class="ctp-label">复制中</span>
+                <span class="ctp-pct">0%</span>
+              </div>
+              <div class="ctp-track">
+                <div class="ctp-fill" style="width: 0%;"></div>
+              </div>
+            </div>
+
             <div class="t-foot cloud-actions-cell">
               {% if f.openlist_url or (f.cloud_path and f.cloud_path != '—') %}
               <!-- OpenList + 取回 合并为一个紧贴的胶囊按钮组（.pill-btns）：
@@ -564,6 +830,34 @@ window.cloudLibrary = function cloudLibrary() {
                       aria-label="重命名 {{ f.filename }}"
                       onclick="window.__renameCloudFile(this)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              </button>
+
+              <!-- 2.6 云端复制 -->
+              <button type="button" class="icon-btn xs"
+                      data-cloud-copy-btn
+                      data-cloud-path="{{ f.cloud_path }}"
+                      data-job-id="{{ f.id }}"
+                      data-filename="{{ f.filename }}"
+                      data-remote-dir="{{ f.remote_dir or '' }}"
+                      data-drive="{{ f.drive or '' }}"
+                      {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法复制"{% else %}title="复制到其他网盘/目录"{% endif %}
+                      aria-label="复制 {{ f.filename }}"
+                      onclick="window.__copyCloudFile(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+
+              <!-- 2.7 云端移动 -->
+              <button type="button" class="icon-btn xs"
+                      data-cloud-move-btn
+                      data-cloud-path="{{ f.cloud_path }}"
+                      data-job-id="{{ f.id }}"
+                      data-filename="{{ f.filename }}"
+                      data-remote-dir="{{ f.remote_dir or '' }}"
+                      data-drive="{{ f.drive or '' }}"
+                      {% if f.status == 'missing' %}disabled title="文件在云端已不存在，无法移动"{% else %}title="移动到其他网盘/目录"{% endif %}
+                      aria-label="移动 {{ f.filename }}"
+                      onclick="window.__moveCloudFile(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
               </button>
 
               <!-- 3. 云端删除 -->
@@ -671,6 +965,61 @@ window.cloudLibrary = function cloudLibrary() {
     </div>
   </div>
 </div>
+
+<!-- 复制 / 移动到其他网盘/目录弹窗 -->
+<div class="modal-backdrop" :class="{'show': showTransferModal}" x-show="showTransferModal" x-cloak style="display:none;" @click.self="showTransferModal = false">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px;width:92vw;">
+    <div class="modal-head">
+      <h2 style="font-size:16px;" x-text="transferAction === 'move' ? '移动文件到其他网盘 / 目录' : '复制文件到其他网盘 / 目录'"></h2>
+      <button type="button" class="icon-btn xs" aria-label="关闭" @click="showTransferModal = false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+      </button>
+    </div>
+    <div style="padding:16px 20px;">
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;background:var(--bg-2);padding:12px;border-radius:var(--radius-md);border:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;">
+          <span style="color:var(--text-3);min-width:56px;">源文件：</span>
+          <strong style="color:var(--text-1);word-break:break-all;" x-text="transferFile.filename"></strong>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;">
+          <span style="color:var(--text-3);min-width:56px;">源目录：</span>
+          <code style="color:var(--text-2);word-break:break-all;" x-text="transferFile.srcDir"></code>
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:12px;">
+        <label style="display:flex;justify-content:space-between;align-items:center;">
+          <span>选择或输入目标网盘 / 目录</span>
+          <span style="font-size:11px;color:var(--text-3);">点击快捷选择挂载网盘</span>
+        </label>
+
+        <!-- 快捷网盘标签列表 -->
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;" x-show="mountsList && mountsList.length > 0">
+          <template x-for="m in mountsList" :key="m">
+            <button type="button" class="btn xs ghost"
+                    style="border-radius:12px;padding:2px 10px;font-size:12px;"
+                    :class="{'primary': transferTargetDir === ('/' + m.replace(/^\/+/, '')) || transferTargetDir.startsWith('/' + m.replace(/^\/+/, '') + '/')}"
+                    @click="selectMountChip(m)">
+              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;margin-right:2px;"><use href="#ic-hdd"/></svg>
+              <span x-text="'/' + m.replace(/^\/+/, '')"></span>
+            </button>
+          </template>
+        </div>
+
+        <input class="input" type="text" x-model="transferTargetDir"
+               placeholder="例如：/wopan 或 /wopan/视频/电影"
+               autocomplete="off" spellcheck="false">
+        <div class="hint" x-text="transferAction === 'move' ? '通过 OpenList 后台移动到目标网盘或目录，并自动同步更新系统归档记录路径。' : '通过 OpenList 后台异步复制到目标网盘或目录，源文件保持不变。'"></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="justify-content:flex-end;gap:8px;">
+      <button type="button" class="btn sm ghost" @click="showTransferModal = false">取消</button>
+      <button type="button" class="btn sm primary" :disabled="transferLoading" @click="executeTransfer()">
+        <span x-text="transferLoading ? '提交中…' : (transferAction === 'move' ? '确认移动' : '确认复制')"></span>
+      </button>
+    </div>
+  </div>
+</div>
 </div>{# /cloudLibrary #}
 
 {% endblock %}
@@ -740,6 +1089,50 @@ window.cloudLibrary = function cloudLibrary() {
       return false;
     }
     return true;
+  };
+
+  window.__copyCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('copy', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
+  };
+
+  window.__moveCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('move', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
   };
 })();
 </script>

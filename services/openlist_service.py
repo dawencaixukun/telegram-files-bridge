@@ -9,7 +9,7 @@ import time
 import asyncio
 import posixpath
 from urllib.parse import quote
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi.responses import JSONResponse
 from core.config import OPENLIST_URL, _archive_norm_dir
@@ -22,6 +22,10 @@ _UPLOAD_CHUNK = 4 << 20  # 4MB 分块
 # 历史值 1MB：流式写盘对每个分块做一次 await asyncio.to_thread(fh.write, chunk)，
 # 10GB 文件 = 10240 次线程池往返。放大到 4MB 后降到约 1/4，内存峰值仍只有
 # chunk × 并发数（_RETRIEVE_SEM 限 2）。上传侧读取同一常量，行为一致。
+
+# 内存跨网盘复制/移动传输任务追踪器（供前端进度条轮询与 Telegram Bot 查询）
+_CLOUD_TRANSFER_TASKS: Dict[str, Dict[str, Any]] = {}
+_TRANSFER_TRACKER_TASKS: set = set()
 
 
 async def _openlist_api_login(username: str, password: str) -> Tuple[str, str]:
@@ -475,6 +479,260 @@ async def openlist_list_files(path: str = "/") -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         log.error("读取 OpenList 文件列表失败（%s）: %s", d, e)
         return {"ok": False, "files": [], "message": "读取 OpenList 目录失败，请稍后重试"}
+
+
+async def _openlist_tasks_undone(kind: str = "copy") -> List[Dict[str, Any]]:
+    """获取 OpenList 正在进行的后台任务列表（copy / move 等）。"""
+    try:
+        token = await _openlist_token()
+    except Exception:
+        return []
+    url = f"/api/admin/task/{kind}/undone"
+    try:
+        resp = await _openlist_client.get(url, headers={"Authorization": token})
+        if resp.status_code == 404:
+            resp = await _openlist_client.get(f"/api/task/{kind}/undone", headers={"Authorization": token})
+        code, data, _ = _openlist_env(resp)
+        if code == 200 and isinstance(data, list):
+            return data
+    except Exception as e:
+        log.debug("获取 OpenList %s 任务失败: %s", kind, e)
+    return []
+
+
+async def _openlist_tasks_done(kind: str = "copy") -> List[Dict[str, Any]]:
+    """获取 OpenList 已完成的任务列表（copy / move 等）。"""
+    try:
+        token = await _openlist_token()
+    except Exception:
+        return []
+    url = f"/api/admin/task/{kind}/done"
+    try:
+        resp = await _openlist_client.get(url, headers={"Authorization": token})
+        if resp.status_code == 404:
+            resp = await _openlist_client.get(f"/api/task/{kind}/done", headers={"Authorization": token})
+        code, data, _ = _openlist_env(resp)
+        if code == 200 and isinstance(data, list):
+            return data
+    except Exception as e:
+        log.debug("获取 OpenList 已完成 %s 任务失败: %s", kind, e)
+    return []
+
+
+async def openlist_get_cloud_tasks() -> Dict[str, Any]:
+    """汇总当前正在执行的跨网盘复制与移动任务（融合 OpenList 实时任务与本地追踪器）。"""
+    copy_tasks = await _openlist_tasks_undone("copy")
+    move_tasks = await _openlist_tasks_undone("move")
+    active_local = [t for t in _CLOUD_TRANSFER_TASKS.values() if t.get("state") == "running"]
+    return {
+        "ok": True,
+        "copy": copy_tasks,
+        "move": move_tasks,
+        "active_local": active_local,
+        "total": len(copy_tasks) + len(move_tasks) + len(active_local),
+    }
+
+
+async def _track_cloud_task(action: str, src_dir: str, dst_dir: str, names: List[str]) -> None:
+    """后台轮询 OpenList 任务队列，并在开始、完成或失败时向 Telegram Bot 派发通知。"""
+    task_id = f"transfer_{int(time.time()*1000)}_{action}"
+    task_record = {
+        "id": task_id,
+        "action": action,
+        "src_dir": src_dir,
+        "dst_dir": dst_dir,
+        "names": names,
+        "progress": 0.0,
+        "state": "running",
+        "started_at": time.time(),
+        "updated_at": time.time(),
+        "error": "",
+    }
+    _CLOUD_TRANSFER_TASKS[task_id] = task_record
+
+    # 派发开始通知
+    try:
+        from services.notification_service import notify_cloud_transfer_start
+        notify_cloud_transfer_start(action, src_dir, dst_dir, names)
+    except Exception as e:
+        log.debug("派发跨盘传输开始通知异常: %s", e)
+
+    start_time = time.time()
+    max_wait = 3600  # 1小时最长保护
+    poll_interval = 1.5
+    matched_openlist_task_id = None
+    seen_running = False
+
+    while (time.time() - start_time) < max_wait:
+        await asyncio.sleep(poll_interval)
+        try:
+            undone = await _openlist_tasks_undone(action)
+            found = None
+            for t in undone:
+                t_name = str(t.get("name") or "")
+                for fname in names:
+                    if fname in t_name or (matched_openlist_task_id and t.get("id") == matched_openlist_task_id):
+                        found = t
+                        matched_openlist_task_id = t.get("id")
+                        break
+                if found:
+                    break
+
+            if found:
+                seen_running = True
+                pct = float(found.get("progress") or 0.0)
+                task_record["progress"] = pct
+                task_record["updated_at"] = time.time()
+                if pct >= 100.0:
+                    break
+            else:
+                done_list = await _openlist_tasks_done(action)
+                done_task = None
+                for t in done_list:
+                    t_name = str(t.get("name") or "")
+                    for fname in names:
+                        if fname in t_name or (matched_openlist_task_id and t.get("id") == matched_openlist_task_id):
+                            done_task = t
+                            break
+                    if done_task:
+                        break
+                if done_task:
+                    state = int(done_task.get("state") or 2)
+                    err = str(done_task.get("error") or "")
+                    if state == 2 or not err:
+                        task_record["progress"] = 100.0
+                        task_record["state"] = "succeeded"
+                        break
+                    else:
+                        task_record["state"] = "failed"
+                        task_record["error"] = err
+                        break
+                elif seen_running:
+                    task_record["progress"] = 100.0
+                    task_record["state"] = "succeeded"
+                    break
+                else:
+                    if (time.time() - start_time) >= 6.0:
+                        task_record["progress"] = 100.0
+                        task_record["state"] = "succeeded"
+                        break
+        except Exception as e:
+            log.debug("轮询 OpenList 传输任务异常: %s", e)
+
+    elapsed = max(1, int(time.time() - start_time))
+    task_record["elapsed"] = elapsed
+    task_record["updated_at"] = time.time()
+
+    # 派发完成或失败通知
+    try:
+        from services.notification_service import (
+            notify_cloud_transfer_completed,
+            notify_cloud_transfer_failed,
+        )
+        if task_record.get("state") == "failed":
+            notify_cloud_transfer_failed(action, src_dir, dst_dir, names, task_record.get("error") or "任务执行失败")
+        else:
+            task_record["state"] = "succeeded"
+            task_record["progress"] = 100.0
+            notify_cloud_transfer_completed(action, src_dir, dst_dir, names, elapsed)
+    except Exception as e:
+        log.debug("派发跨盘传输结束通知异常: %s", e)
+
+    # 内存留存 120 秒供前端展示 100% 完成
+    await asyncio.sleep(120.0)
+    _CLOUD_TRANSFER_TASKS.pop(task_id, None)
+
+
+async def _openlist_fs_copy(src_dir: str, dst_dir: str, names: List[str]) -> Dict[str, Any]:
+    """调用 OpenList /api/fs/copy 进行跨目录/跨网盘文件复制。
+
+    OpenList 规范：POST /api/fs/copy {"src_dir": "...", "dst_dir": "...", "names": ["..."]}
+    返回 {"ok": bool, "code": int, "data": Any, "message": str}。
+    """
+    s_dir = posixpath.normpath("/" + str(src_dir or "").strip().replace("\\", "/").lstrip("/"))
+    d_dir = posixpath.normpath("/" + str(dst_dir or "").strip().replace("\\", "/").lstrip("/"))
+    clean_names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if not clean_names:
+        return {"ok": False, "code": 400, "message": "缺少要复制的文件名"}
+    if s_dir == d_dir:
+        return {"ok": False, "code": 400, "message": "源目录与目标目录相同，无需复制"}
+    try:
+        token = await _openlist_token()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "code": 502, "message": f"OpenList 未就绪: {e}"}
+
+    async def _copy_once(tok: str):
+        return await _openlist_client.post(
+            "/api/fs/copy",
+            json={"src_dir": s_dir, "dst_dir": d_dir, "names": clean_names},
+            headers={"Authorization": tok},
+        )
+
+    try:
+        resp = await _copy_once(token)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _copy_once(token)
+            code, data, msg = _openlist_env(resp)
+        if resp.status_code != 200 or code != 200:
+            return {"ok": False, "code": code, "message": msg or f"OpenList 返回业务码 {code}"}
+
+        # 启动后台异步任务追踪与 Bot 通知
+        trk_task = asyncio.create_task(_track_cloud_task("copy", s_dir, d_dir, clean_names))
+        _TRANSFER_TRACKER_TASKS.add(trk_task)
+        trk_task.add_done_callback(_TRANSFER_TRACKER_TASKS.discard)
+
+        return {"ok": True, "code": 200, "data": data, "message": msg or "复制任务已提交"}
+    except Exception as e:  # noqa: BLE001
+        log.error("OpenList fs/copy 异常 (%s -> %s, %s): %s", s_dir, d_dir, clean_names, e)
+        return {"ok": False, "code": 500, "message": f"复制失败: {e}"}
+
+
+async def _openlist_fs_move(src_dir: str, dst_dir: str, names: List[str]) -> Dict[str, Any]:
+    """调用 OpenList /api/fs/move 进行跨目录/跨网盘文件移动。
+
+    OpenList 规范：POST /api/fs/move {"src_dir": "...", "dst_dir": "...", "names": ["..."]}
+    返回 {"ok": bool, "code": int, "data": Any, "message": str}。
+    """
+    s_dir = posixpath.normpath("/" + str(src_dir or "").strip().replace("\\", "/").lstrip("/"))
+    d_dir = posixpath.normpath("/" + str(dst_dir or "").strip().replace("\\", "/").lstrip("/"))
+    clean_names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if not clean_names:
+        return {"ok": False, "code": 400, "message": "缺少要移动的文件名"}
+    if s_dir == d_dir:
+        return {"ok": False, "code": 400, "message": "源目录与目标目录相同，无需移动"}
+    try:
+        token = await _openlist_token()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "code": 502, "message": f"OpenList 未就绪: {e}"}
+
+    async def _move_once(tok: str):
+        return await _openlist_client.post(
+            "/api/fs/move",
+            json={"src_dir": s_dir, "dst_dir": d_dir, "names": clean_names},
+            headers={"Authorization": tok},
+        )
+
+    try:
+        resp = await _move_once(token)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _move_once(token)
+            code, data, msg = _openlist_env(resp)
+        if resp.status_code != 200 or code != 200:
+            return {"ok": False, "code": code, "message": msg or f"OpenList 返回业务码 {code}"}
+
+        # 启动后台异步任务追踪与 Bot 通知
+        trk_task = asyncio.create_task(_track_cloud_task("move", s_dir, d_dir, clean_names))
+        _TRANSFER_TRACKER_TASKS.add(trk_task)
+        trk_task.add_done_callback(_TRANSFER_TRACKER_TASKS.discard)
+
+        return {"ok": True, "code": 200, "data": data, "message": msg or "移动任务已提交"}
+    except Exception as e:  # noqa: BLE001
+        log.error("OpenList fs/move 异常 (%s -> %s, %s): %s", s_dir, d_dir, clean_names, e)
+        return {"ok": False, "code": 500, "message": f"移动失败: {e}"}
 
 
 async def openlist_download_to_file(remote_path: str, local_path: str, max_bytes: int = 0) -> Tuple[bool, str]:

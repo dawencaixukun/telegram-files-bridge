@@ -272,6 +272,9 @@ ALERTS = [
     {"title": "任务 #101 下载完成", "time": "08:31:57", "color": "var(--ok)", "unread": False},
 ]
 
+# 任务状态机六态 + 失败，保证每种至少一条
+STATUS_OPTIONS = ["pending", "download", "downloaded", "verify", "upload", "archived", "isolated", "failed"]
+
 
 def _stats():
     """模拟 dashboard 数据（与 bridge_server._dashboard_stats 同形：
@@ -494,8 +497,10 @@ async def partial_local_files(request: Request, source: str = "", type: str = ""
 
 
 @app.get("/library/cloud", response_class=HTMLResponse)
+@app.get("/library/browse", response_class=HTMLResponse)
 async def library_cloud(request: Request):
-    ctx = _ctx(request, "library-cloud", "library", "cloud", extra={"cloud_files": CLOUD_FILES, "openlist_public_base": ""})
+    page_sub = "browse" if request.url.path.endswith("/browse") else "cloud"
+    ctx = _ctx(request, f"library-{page_sub}", "library", page_sub, extra={"cloud_files": CLOUD_FILES, "openlist_public_base": ""})
     return templates.TemplateResponse("library_cloud.html", ctx)
 
 
@@ -1006,6 +1011,58 @@ async def _pv_openlist_stream_url(path: str = ""):
         "path": norm,
         "filename": filename
     })
+
+
+@app.get("/api/cloud/mounts")
+async def _pv_cloud_mounts():
+    return JSONResponse({"ok": True, "mounts": ["/阿里云盘", "/Google Drive", "/OneDrive"]})
+
+
+@app.post("/api/cloud/copy")
+@app.post("/library/cloud/copy")
+async def _pv_cloud_copy(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return JSONResponse({
+        "ok": True,
+        "message": "已成功提交复制任务（预览模拟）",
+        "data": body,
+    })
+
+
+@app.post("/api/cloud/move")
+@app.post("/library/cloud/move")
+async def _pv_cloud_move(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    src = body.get("src_dir", "")
+    dst = body.get("dst_dir", "")
+    names = body.get("names", [])
+    global CLOUD_FILES
+    for f in CLOUD_FILES:
+        if f.get("filename") in names:
+            f["remote_dir"] = dst
+            f["cloud_path"] = posixpath.join(dst, str(f.get("filename") or ""))
+    return JSONResponse({
+        "ok": True,
+        "message": "已成功移动（预览模拟）",
+        "data": body,
+    })
+
+
+@app.get("/api/cloud/tasks")
+async def _pv_cloud_tasks():
+    return JSONResponse({"ok": True, "data": {"copy": [], "move": [], "total": 0}})
+
+
+@app.get("/api/admin/task/{kind}/undone")
+@app.get("/api/task/{kind}/undone")
+async def _pv_admin_task_undone(kind: str):
+    return JSONResponse({"code": 200, "message": "success", "data": []})
 
 
 if __name__ == "__main__":
