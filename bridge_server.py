@@ -35,6 +35,7 @@ from routers import (
     system_router,
     api_router,
     ext_m3u8_router,
+    explorer_router,
 )
 
 
@@ -94,6 +95,7 @@ app.include_router(subscriptions_router)
 app.include_router(system_router)
 app.include_router(api_router)
 app.include_router(ext_m3u8_router)
+app.include_router(explorer_router)
 
 # ---------------------------------------------------------------------
 # 5. 应用全局生命周期管理
@@ -103,11 +105,12 @@ _auto_archive_task: Optional[asyncio.Task] = None
 _flood_wait_timer_task: Optional[asyncio.Task] = None
 _bot_command_task: Optional[asyncio.Task] = None
 _watch_task: Optional[asyncio.Task] = None
+_prewarm_task: Optional[asyncio.Task] = None
 
 
 @app.on_event("startup")
 async def _startup():
-    global _relay_task, _auto_archive_task, _bot_command_task, _watch_task
+    global _relay_task, _auto_archive_task, _bot_command_task, _watch_task, _prewarm_task
     # 状态持久化文件的加载已在 core.state 模块装载时完成（state.py 末尾的
     # _flood_wait_load/_archive_load/_subs_load/... 七连调用），此处不再重复执行。
     # 旧代码在这里又跑了一遍同样的 7 次加载：既产生重复的「已恢复…」日志行，
@@ -122,6 +125,7 @@ async def _startup():
     # 启动后台异步中继与循环任务
     _relay_task = asyncio.create_task(ws_relay_loop())
     asyncio.create_task(BACKEND.refresh_bootstrap_status())
+    _prewarm_task = asyncio.create_task(prewarm_browse_cache())
     _auto_archive_task = asyncio.create_task(_auto_archive_loop())
     # TG Bot 命令长轮询（/ck /yd /st /err /help）：未配置 Bot 时内部自动挂起等待
     _bot_command_task = asyncio.create_task(bot_command_loop())
@@ -131,7 +135,13 @@ async def _startup():
 
 @app.on_event("shutdown")
 async def _shutdown():
-    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task
+    global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task, _prewarm_task
+    if _prewarm_task is not None and not _prewarm_task.done():
+        _prewarm_task.cancel()
+        try:
+            await _prewarm_task
+        except asyncio.CancelledError:
+            pass
     if _relay_task is not None and not _relay_task.done():
         _relay_task.cancel()
         try:
@@ -196,6 +206,7 @@ import services.subscription_service as _s_subscription
 import services.media_service as _s_media
 import services.task_service as _s_task
 import services.browse_service as _s_browse
+import services.bot_command_service as _s_bot_command
 import core.config as _c_config
 import core.state as _c_state
 import core.logging as _c_logging
@@ -208,7 +219,7 @@ _ALL_DEPENDENT_MODULES = [
     _r_archive, _r_subscriptions, _r_system, _r_api,
     _s_openlist, _s_watermark, _s_notification, _s_backup,
     _s_doctor, _s_retrieve, _s_archive, _s_subscription,
-    _s_media, _s_task, _s_browse,
+    _s_media, _s_task, _s_browse, _s_bot_command,
     _c_config, _c_state, _c_logging, _c_auth, _c_backend, _c_templates
 ]
 

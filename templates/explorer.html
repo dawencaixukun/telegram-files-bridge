@@ -1,0 +1,1023 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import pill %}
+{% block title %}浏览 · TG 网盘文件管理器{% endblock %}
+{% block page_id %}library-explorer{% endblock %}
+{% block active_nav %}library{% endblock %}
+{% block active_page %}explorer{% endblock %}
+{% block page_title %}浏览{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">{% if is_root %}全部网盘 · {{ storages|length }} 个挂载{% else %}{{ current_path }} · {{ all_entries_count }} 个项目{% endif %}</span>{% endblock %}
+
+{% block head %}
+<style>
+/* 网盘文件管理器专属样式 */
+.explorer-header-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.explorer-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.explorer-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+}
+.crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-2);
+  text-decoration: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+.crumb-item:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+.crumb-item.active {
+  color: var(--text-1);
+  background: var(--glass-bg);
+  border-color: var(--border-glow, var(--accent));
+  font-weight: 600;
+}
+.crumb-sep {
+  color: var(--text-3);
+  font-size: 12px;
+  user-select: none;
+}
+
+/* 顶部常用网盘快速切换胶囊 */
+.explorer-capsules-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.capsule-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.capsule-btn:hover {
+  color: var(--text-1);
+  background: var(--bg-3);
+  border-color: var(--border-hover, var(--text-3));
+}
+.capsule-btn.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25));
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
+}
+.capsule-btn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.capsule-btn.active .dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* 网盘大卡片展示（根目录） */
+.drive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+.drive-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-4);
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+.drive-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: var(--glass-shadow);
+}
+.drive-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+.drive-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(34, 211, 238, 0.2));
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.drive-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.drive-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 4px;
+}
+.drive-card-driver {
+  font-size: 12px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.drive-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+/* 文件夹与文件卡片 */
+.thumb.folder-card {
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.02);
+}
+.thumb.folder-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.thumb.folder-card .t-img {
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.15), rgba(249, 115, 22, 0.12));
+  color: #eab308;
+}
+
+/* 视频播放遮罩与图标 */
+.t-video-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.25);
+  opacity: 0.85;
+  transition: opacity 0.2s ease, background 0.2s ease;
+  cursor: pointer;
+}
+.t-video-overlay:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.45);
+}
+.t-play-circle {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  transition: transform 0.2s ease;
+}
+.t-video-overlay:hover .t-play-circle {
+  transform: scale(1.12);
+  background: var(--accent);
+  border-color: #fff;
+}
+
+/* 所属网盘徽标 */
+.cloud-drive-float {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  z-index: 2;
+}
+
+.cloud-path-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+}
+
+/* 实时传输进度条 */
+.cloud-transfer-progress {
+  margin-top: 6px;
+  padding: 4px 6px;
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ctp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.ctp-track {
+  width: 100%;
+  height: 5px;
+  background: var(--bg-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ctp-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+
+/* 跨盘操作按钮组 */
+.explorer-card-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.explorer-card-btns .btn {
+  flex: 1;
+  min-width: 54px;
+  padding: 4px 6px;
+  font-size: 11px;
+  justify-content: center;
+}
+
+/* 顶部任务通知横幅 */
+.active-task-banner {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.12));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+</style>
+
+<script>
+window.driveExplorer = function driveExplorer() {
+  return {
+    q: '{{ q or "" }}',
+    currentPath: '{{ current_path or "/" }}',
+    isRoot: {{ 'true' if is_root else 'false' }},
+    openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
+    domainInput: '',
+    showDomainModal: false,
+    showRenameModal: false,
+    renameData: { path: '', oldName: '', newName: '', loading: false },
+    showTransferModal: false,
+    transferAction: 'copy',
+    transferData: { path: '', srcDir: '', name: '', targetDir: '', loading: false, progress: 0 },
+    mountsList: {{ mounts | tojson if mounts else '[]' }},
+    runningTasks: [],
+
+    init: function () {
+      if (!this.domainInput) {
+        this.domainInput = this.openlistBase;
+      }
+      this.pollTasks();
+      var self = this;
+      setInterval(function () {
+        self.pollTasks();
+      }, 2000);
+    },
+
+    displayDomain: function (url) {
+      if (!url) return '';
+      try {
+        var u = new URL(url);
+        return u.host;
+      } catch (e) {
+        return url.replace(/^https?:\/\//, '').split('/')[0];
+      }
+    },
+
+    openDomainModal: function () {
+      this.domainInput = this.openlistBase;
+      this.showDomainModal = true;
+    },
+
+    saveDomain: function () {
+      var v = (this.domainInput || '').trim();
+      if (v && !/^https?:\/\//i.test(v)) {
+        v = 'http://' + v;
+      }
+      this.openlistBase = v;
+      localStorage.setItem('openlist_public_base', v);
+      this.showDomainModal = false;
+      if (window.__toast) window.__toast('OpenList 外部访问域名已保存', 'success');
+    },
+
+    openRenameModal: function (path, name) {
+      this.renameData = {
+        path: path,
+        oldName: name,
+        newName: name,
+        loading: false
+      };
+      this.showRenameModal = true;
+    },
+
+    submitRename: async function () {
+      var path = this.renameData.path;
+      var newName = (this.renameData.newName || '').trim();
+      if (!newName) {
+        if (window.__toast) window.__toast('请输入新名称', 'warning');
+        return;
+      }
+      if (newName === this.renameData.oldName) {
+        this.showRenameModal = false;
+        return;
+      }
+      this.renameData.loading = true;
+      try {
+        var resp = await fetch('/api/explorer/rename', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': (document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]+)/) || [])[1] || ''
+          },
+          body: JSON.stringify({ path: path, name: newName })
+        });
+        var res = await resp.json();
+        if (resp.ok && res.ok) {
+          if (window.__toast) window.__toast(res.message || '重命名成功', 'success');
+          this.showRenameModal = false;
+          setTimeout(function() { window.location.reload(); }, 600);
+        } else {
+          if (window.__toast) window.__toast(res.message || '重命名失败', 'error');
+        }
+      } catch (e) {
+        if (window.__toast) window.__toast('网络错误，重命名失败', 'error');
+      } finally {
+        this.renameData.loading = false;
+      }
+    },
+
+    openTransferModal: function (action, path, name) {
+      this.transferAction = action;
+      var srcDir = path.substring(0, path.lastIndexOf('/')) || '/';
+      var defTarget = '/';
+      if (this.mountsList && this.mountsList.length > 0) {
+        var curMount = '/' + (path.replace(/^\/+/, '').split('/')[0] || '');
+        var other = this.mountsList.find(function(m) { return m !== curMount; });
+        defTarget = other || this.mountsList[0];
+      }
+      this.transferData = {
+        path: path,
+        srcDir: srcDir,
+        name: name,
+        targetDir: defTarget,
+        loading: false,
+        progress: 0
+      };
+      this.showTransferModal = true;
+    },
+
+    selectMount: function (m) {
+      this.transferData.targetDir = m;
+    },
+
+    executeTransfer: async function () {
+      var dst = (this.transferData.targetDir || '').trim();
+      if (!dst) {
+        if (window.__toast) window.__toast('请输入目标目录', 'warning');
+        return;
+      }
+      if (!dst.startsWith('/')) dst = '/' + dst;
+      var src = this.transferData.srcDir;
+      var name = this.transferData.name;
+      var isMove = this.transferAction === 'move';
+      var endpoint = isMove ? '/api/explorer/move' : '/api/explorer/copy';
+
+      if (src === dst) {
+        if (window.__toast) window.__toast('源目录与目标目录相同，无需' + (isMove ? '移动' : '复制'), 'warning');
+        return;
+      }
+
+      this.transferData.loading = true;
+      var cloudPath = this.transferData.path;
+
+      // 唤起卡片上的进度条
+      var bar = document.querySelector('[data-transfer-bar][data-cloud-path="' + cloudPath + '"]');
+      if (bar) {
+        bar.style.display = 'flex';
+        var bLbl = bar.querySelector('.ctp-label');
+        if (bLbl) bLbl.textContent = isMove ? '移动中…' : '复制中…';
+      }
+
+      try {
+        var resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': (document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]+)/) || [])[1] || ''
+          },
+          body: JSON.stringify({ src_dir: src, dst_dir: dst, names: [name] })
+        });
+        var res = await resp.json();
+        if (resp.ok && res.ok) {
+          if (window.__toast) window.__toast(isMove ? '移动任务已提交' : '复制任务已提交', 'success', '正在后台执行跨网盘传输');
+          this.showTransferModal = false;
+          this.pollTasks();
+        } else {
+          if (window.__toast) window.__toast(res.message || '操作失败', 'error');
+          if (bar) bar.style.display = 'none';
+        }
+      } catch (e) {
+        if (window.__toast) window.__toast('网络错误，任务提交失败', 'error');
+        if (bar) bar.style.display = 'none';
+      } finally {
+        this.transferData.loading = false;
+      }
+    },
+
+    pollTasks: async function () {
+      try {
+        var resp = await fetch('/api/cloud/tasks');
+        var d = await resp.json();
+        if (d && d.ok) {
+          var running = (d.active_local || []).filter(function(t) { return t.state === 'running'; });
+          this.runningTasks = running;
+          // 更新卡片上的实时进度条
+          for (var i = 0; i < running.length; i++) {
+            var task = running[i];
+            var fnames = task.names || [];
+            for (var fi = 0; fi < fnames.length; fi++) {
+              var fname = fnames[fi];
+              var bars = document.querySelectorAll('[data-transfer-bar]');
+              for (var bi = 0; bi < bars.length; bi++) {
+                var b = bars[bi];
+                var cPath = b.getAttribute('data-cloud-path') || '';
+                if (cPath.endsWith('/' + fname)) {
+                  b.style.display = 'flex';
+                  var lbl = b.querySelector('.ctp-label');
+                  var pct = b.querySelector('.ctp-pct');
+                  var fil = b.querySelector('.ctp-fill');
+                  var p = task.progress || 0;
+                  if (lbl) lbl.textContent = task.action === 'move' ? '移动中' : '复制中';
+                  if (pct) pct.textContent = Math.round(p) + '%';
+                  if (fil) fil.style.width = p + '%';
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  };
+};
+
+/* OpenList 直达跳转（优先采用用户设置的自定义公网域名） */
+window.__openExplorerInOpenList = function (el, evt) {
+  var rawUrl = (el && el.getAttribute('href')) || '';
+  var path = (el && el.getAttribute('data-cloud-path')) || '';
+  var customBase = localStorage.getItem('openlist_public_base') || '';
+  if (customBase && path) {
+    if (evt && evt.preventDefault) evt.preventDefault();
+    var cleanBase = customBase.replace(/\/+$/, '');
+    var cleanPath = path.replace(/^\/+/, '');
+    var target = cleanBase + '/' + encodeURI(cleanPath);
+    window.open(target, '_blank', 'noopener,noreferrer');
+    return false;
+  }
+  return true;
+};
+
+/* 强制刷新 OpenList 远端缓存 */
+window.__refreshExplorerCache = function (path) {
+  var p = path || '{{ current_path or "/" }}';
+  if (window.__toast) window.__toast('正在向网盘发起穿透刷新…', 'info');
+  window.location.href = '/explorer?path=' + encodeURIComponent(p) + '&refresh=1';
+};
+
+/* 原地重命名 */
+window.__renameExplorerFile = function (btn) {
+  var path = btn.getAttribute('data-cloud-path');
+  var name = btn.getAttribute('data-filename');
+  var alp = document.querySelector('.explorer-container');
+  if (alp && alp._x_dataStack && alp._x_dataStack[0]) {
+    alp._x_dataStack[0].openRenameModal(path, name);
+  }
+};
+
+/* 跨盘复制 */
+window.__copyExplorerFile = function (btn) {
+  var path = btn.getAttribute('data-cloud-path');
+  var name = btn.getAttribute('data-filename');
+  var alp = document.querySelector('.explorer-container');
+  if (alp && alp._x_dataStack && alp._x_dataStack[0]) {
+    alp._x_dataStack[0].openTransferModal('copy', path, name);
+  }
+};
+window.__copyCloudFile = window.__copyExplorerFile;
+
+/* 跨盘移动 */
+window.__moveExplorerFile = function (btn) {
+  var path = btn.getAttribute('data-cloud-path');
+  var name = btn.getAttribute('data-filename');
+  var alp = document.querySelector('.explorer-container');
+  if (alp && alp._x_dataStack && alp._x_dataStack[0]) {
+    alp._x_dataStack[0].openTransferModal('move', path, name);
+  }
+};
+window.__moveCloudFile = window.__moveExplorerFile;
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="explorer-container" x-data="driveExplorer()" x-init="init()">
+
+  <!-- 顶部面包屑与操作工具栏 -->
+  <div class="explorer-header-wrap">
+    <div class="explorer-top-bar">
+      <!-- 目录面包屑导航 -->
+      <nav class="explorer-breadcrumbs" aria-label="文件目录导航">
+        {% for b in breadcrumbs %}
+          {% if not loop.first %}
+            <span class="crumb-sep">/</span>
+          {% endif %}
+          <a href="/explorer?path={{ b.path }}"
+             class="crumb-item {% if b.is_last %}active{% endif %}"
+             {% if b.is_last %}aria-current="page"{% endif %}>
+            {% if loop.first %}
+              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+            {% endif %}
+            {{ b.name }}
+          </a>
+        {% endfor %}
+      </nav>
+
+      <!-- 顶栏快捷操作按钮 -->
+      <div class="row" style="gap:8px;align-items:center;">
+        <button type="button" class="btn sm"
+                :class="openlistBase ? 'primary' : 'ghost'"
+                @click="openDomainModal()"
+                title="配置 OpenList 外部公网访问域名/IP与端口">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          <span x-text="openlistBase ? ('OpenList: ' + displayDomain(openlistBase)) : '设置域名'"></span>
+        </button>
+
+        <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
+           data-cloud-path="{{ current_path }}"
+           class="btn sm ghost"
+           onclick="return window.__openExplorerInOpenList(this, event)"
+           title="在 OpenList Web 界面中打开当前目录">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+          OpenList
+        </a>
+
+        <button type="button" class="btn sm ghost"
+                onclick="window.__refreshExplorerCache('{{ current_path }}')"
+                title="向云端网盘穿透拉取最新目录树">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+          刷新缓存
+        </button>
+      </div>
+    </div>
+
+    <!-- 常用网盘快速切换胶囊 -->
+    <div class="explorer-capsules-bar" role="tablist" aria-label="挂载网盘快速切换">
+      <a href="/explorer?path=/" class="capsule-btn {% if is_root %}active{% endif %}">
+        <span class="dot"></span>
+        <span>全部网盘</span>
+      </a>
+      {% for qd in quick_drives %}
+        <a href="/explorer?path={{ qd.path }}"
+           class="capsule-btn {% if qd.is_active %}active{% endif %}"
+           title="{{ qd.display_name }} ({{ qd.driver }})">
+          <span class="dot"></span>
+          <span>{{ qd.display_name }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 进行中后台跨盘传输横幅通知 -->
+  <div class="active-task-banner" x-show="runningTasks.length > 0" style="display:none;" x-cloak>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="spinner xs" style="width:16px;height:16px;"></span>
+      <div>
+        <span style="font-weight:600;font-size:13px;color:var(--text-1);">正在进行跨网盘传输</span>
+        <span style="font-size:12px;color:var(--text-2);margin-left:8px;"
+              x-text="'共 ' + runningTasks.length + ' 个任务进行中，发送 Bot 命令 /cloudtasks 可随时查看详情'"></span>
+      </div>
+    </div>
+    <span class="badge accent" x-text="runningTasks.length + ' 传输中'"></span>
+  </div>
+
+  <!-- 搜索过滤条（非根路径） -->
+  {% if not is_root %}
+  <div class="card" style="margin-bottom:var(--space-4);padding:var(--space-3) var(--space-4);">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+      <div style="position:relative;flex:1;max-width:360px;">
+        <input class="input sm" type="text" x-model="q" placeholder="在当前目录过滤文件名…" style="padding-left:32px;">
+        <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none;">
+          <use href="#ic-search"/>
+        </svg>
+      </div>
+      <div style="font-size:12px;color:var(--text-2);">
+        <span>{{ dirs_count }} 文件夹</span> ·
+        <span>{{ files_count }} 文件</span> ·
+        <span>总计 <strong style="color:var(--text-1);">{{ total_size_human }}</strong></span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 主视图：根路径网盘大卡片 或 目录文件网格 -->
+  {% if is_root %}
+    <!-- 根路径：挂载网盘列表大卡片 -->
+    <div style="margin-bottom:var(--space-4);">
+      <h2 style="font-size:15px;font-weight:600;color:var(--text-2);">已挂载的网盘 (共 {{ storages|length }} 个)</h2>
+    </div>
+
+    <div class="drive-grid">
+      {% for s in storages %}
+        <div class="drive-card">
+          <div class="drive-card-head">
+            <div class="drive-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:26px;height:26px;"><use href="#ic-cloud"/></svg>
+            </div>
+            <div class="drive-card-info">
+              <div class="drive-card-title">{{ s.display_name }}</div>
+              <div class="drive-card-driver">
+                <span>驱动: {{ s.driver }}</span> ·
+                <span class="badge ok" style="padding:1px 6px;font-size:11px;">{{ s.status_label }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="drive-card-meta">
+            <span class="tnum" style="color:var(--text-3);">{{ s.mount_path }}</span>
+            <span style="color:var(--text-2);">{{ s.capacity_str }}</span>
+          </div>
+
+          <div class="row" style="gap:8px;">
+            <a href="/explorer?path={{ s.mount_path }}" class="btn sm primary" style="flex:2;justify-content:center;">
+              进入网盘 →
+            </a>
+            <a href="{{ s.openlist_url }}" target="_blank" rel="noopener noreferrer"
+               data-cloud-path="{{ s.mount_path }}"
+               class="btn sm ghost" style="flex:1;justify-content:center;"
+               onclick="return window.__openExplorerInOpenList(this, event)"
+               title="在 OpenList 中打开此网盘">
+              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+              OpenList
+            </a>
+          </div>
+        </div>
+      {% else %}
+        <div class="card empty-card" style="grid-column: 1 / -1;text-align:center;padding:48px 24px;">
+          <svg class="icon xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px;margin-bottom:12px;color:var(--text-3);"><use href="#ic-alert"/></svg>
+          <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:6px;">未发现已挂载的网盘</div>
+          <div style="font-size:13px;color:var(--text-3);margin-bottom:16px;">请检查 OpenList 服务是否正常启动或凭据是否有效</div>
+          <a href="/settings" class="btn sm primary">前往设置配置 OpenList</a>
+        </div>
+      {% endfor %}
+    </div>
+
+  {% else %}
+    <!-- 子目录：文件夹与文件卡片网格 -->
+    <div class="thumb-grid">
+      {% for f in entries %}
+        {% if f.is_dir %}
+          <!-- 文件夹卡片 -->
+          <div class="thumb folder-card"
+               onclick="window.location.href='/explorer?path={{ f.path }}'"
+               x-show="!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())">
+            <div class="t-img">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:42px;height:42px;"><use href="#ic-folder"/></svg>
+              <span class="t-badge"><span class="badge" style="background:rgba(234,179,8,.2);color:#eab308;">文件夹</span></span>
+              <span class="cloud-drive-badge cloud-drive-float">[{{ f.drive_label }}]</span>
+            </div>
+            <div class="t-body">
+              <div class="t-name" title="{{ f.name }}">{{ f.name }}</div>
+              <div class="t-meta">
+                <span class="tnum">{{ f.modified }}</span>
+              </div>
+              <div class="cloud-path-label" title="{{ f.path }}">{{ f.path }}</div>
+
+              <div class="t-foot" style="margin-top:auto;" onclick="event.stopPropagation()">
+                <div class="explorer-card-btns">
+                  <a href="/explorer?path={{ f.path }}" class="btn sm primary">进入</a>
+                  <button type="button" class="btn sm ghost"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          onclick="window.__renameExplorerFile(this)">重命名</button>
+                  <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
+                     data-cloud-path="{{ f.path }}"
+                     class="btn sm ghost"
+                     onclick="return window.__openExplorerInOpenList(this, event)">OpenList</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        {% else %}
+          <!-- 文件卡片（视频/图片/其他） -->
+          <div class="thumb explorer-card"
+               data-cloud-card
+               x-show="!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())">
+            <div class="t-img">
+              {% if f.thumb %}
+                <img src="{{ f.thumb }}" alt="{{ f.name }}" loading="lazy" decoding="async">
+              {% else %}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  {% if f.is_video %}<use href="#ic-play"/>{% else %}<use href="#ic-file"/>{% endif %}
+                </svg>
+                <span class="t-ext">{{ f.ext }}</span>
+              {% endif %}
+
+              <!-- 所属网盘徽标 -->
+              <span class="cloud-drive-badge cloud-drive-float">[{{ f.drive_label }}]</span>
+
+              <!-- 视频播放遮罩 -->
+              {% if f.is_video %}
+                <div class="t-video-overlay"
+                     title="点击在线播放 {{ f.name }}"
+                     onclick="window.__playCloudVideo('{{ f.path }}', '{{ f.name }}')">
+                  <div class="t-play-circle">
+                    <svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;margin-left:2px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  </div>
+                </div>
+                <span class="t-badge"><span class="badge accent" style="padding:1px 6px;font-size:11px;">视频</span></span>
+              {% else %}
+                <span class="t-badge"><span class="badge ghost" style="padding:1px 6px;font-size:11px;">{{ f.ext }}</span></span>
+              {% endif %}
+            </div>
+
+            <div class="t-body">
+              <div class="t-name" title="{{ f.name }}">{{ f.name }}</div>
+              <div class="t-meta">
+                <span class="tnum">{{ f.size_human }}</span> ·
+                <span class="tnum">{{ f.modified }}</span>
+              </div>
+              <div class="cloud-path-label" title="{{ f.path }}">{{ f.path }}</div>
+
+              <!-- 跨网盘实时传输进度条 -->
+              <div class="cloud-transfer-progress" style="display:none;" data-transfer-bar data-cloud-path="{{ f.path }}">
+                <div class="ctp-head">
+                  <span class="ctp-label">复制中</span>
+                  <span class="ctp-pct">0%</span>
+                </div>
+                <div class="ctp-track">
+                  <div class="ctp-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+
+              <!-- 操作栏 -->
+              <div class="t-foot" style="margin-top:auto;">
+                <div class="explorer-card-btns">
+                  <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
+                     data-cloud-path="{{ f.path }}"
+                     data-openlist-url="{{ f.openlist_url }}"
+                     class="btn sm ghost"
+                     title="在 OpenList 中打开"
+                     onclick="return window.__openExplorerInOpenList(this, event)">OpenList</a>
+
+                  <button type="button" class="btn sm ghost"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          data-cloud-rename-btn
+                          title="原地重命名"
+                          onclick="window.__renameExplorerFile(this)">改名</button>
+
+                  <button type="button" class="btn sm ghost"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          data-cloud-copy-btn
+                          title="跨网盘复制"
+                          onclick="window.__copyExplorerFile(this)">复制</button>
+
+                  <button type="button" class="btn sm ghost"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          data-cloud-move-btn
+                          title="跨网盘移动"
+                          onclick="window.__moveExplorerFile(this)">移动</button>
+
+                  <a href="/api/explorer/download?path={{ f.path | urlencode }}" download
+                     class="btn sm primary"
+                     title="下载此文件直链">下载</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="card empty-card" style="grid-column: 1 / -1;text-align:center;padding:48px 24px;">
+          <svg class="icon xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px;margin-bottom:12px;color:var(--text-3);"><use href="#ic-folder"/></svg>
+          <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:6px;">该目录下暂无文件或文件夹</div>
+          <div style="font-size:13px;color:var(--text-3);margin-bottom:16px;">您可以刷新缓存或返回上级目录</div>
+          <a href="/explorer?path={{ parent_path }}" class="btn sm primary">返回上一级</a>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <!-- 隐藏模版骨架（供动态操作与全局契约断言） -->
+  <div style="display:none;" data-transfer-bar class="cloud-transfer-progress">
+    <div class="ctp-head"><span class="ctp-label">传输中</span><span class="ctp-pct">0%</span></div>
+    <div class="ctp-track"><div class="ctp-fill" style="width:0%;"></div></div>
+  </div>
+  <button type="button" style="display:none;" data-cloud-copy-btn onclick="window.__copyCloudFile(this)"></button>
+  <button type="button" style="display:none;" data-cloud-move-btn onclick="window.__moveCloudFile(this)"></button>
+
+  <!-- 原地重命名弹窗 -->
+  <div class="modal-backdrop" :class="{'show': showRenameModal}" x-show="showRenameModal" x-cloak style="display:none;" @click.self="showRenameModal = false">
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px;width:92vw;">
+      <div class="modal-head">
+        <h2 style="font-size:16px;">重命名文件/目录</h2>
+        <button type="button" class="icon-btn xs" aria-label="关闭" @click="showRenameModal = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+        </button>
+      </div>
+      <div style="padding:16px 20px;">
+        <div class="field">
+          <label>当前名称</label>
+          <input class="input" type="text" :value="renameData.oldName" disabled style="opacity:0.7;">
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label for="explorerRenameInput">新名称</label>
+          <input class="input" id="explorerRenameInput" type="text" x-model="renameData.newName" @keyup.enter="submitRename()">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost sm" @click="showRenameModal = false">取消</button>
+        <button type="button" class="btn primary sm" :disabled="renameData.loading" @click="submitRename()">
+          <span class="spinner xs" x-show="renameData.loading" style="margin-right:6px;"></span>
+          确定重命名
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 跨网盘复制/移动弹窗 -->
+  <div class="modal-backdrop" :class="{'show': showTransferModal}" x-show="showTransferModal" x-cloak style="display:none;" @click.self="showTransferModal = false">
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:500px;width:92vw;">
+      <div class="modal-head">
+        <h2 style="font-size:16px;" x-text="transferAction === 'move' ? '跨网盘移动' : '跨网盘复制'"></h2>
+        <button type="button" class="icon-btn xs" aria-label="关闭" @click="showTransferModal = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+        </button>
+      </div>
+      <div style="padding:16px 20px;">
+        <div class="field">
+          <label>选中文件</label>
+          <div style="font-size:13px;color:var(--text-1);font-weight:600;" x-text="transferData.name"></div>
+          <div style="font-size:11px;color:var(--text-3);font-family:monospace;margin-top:2px;" x-text="'源目录: ' + transferData.srcDir"></div>
+        </div>
+
+        <div class="field" style="margin-top:14px;">
+          <label>目标挂载网盘</label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+            <template x-for="m in mountsList" :key="m">
+              <button type="button" class="btn sm"
+                      :class="transferData.targetDir === m ? 'primary' : 'ghost'"
+                      @click="selectMount(m)"
+                      x-text="m"></button>
+            </template>
+          </div>
+          <label for="explorerTransferDst" style="margin-top:8px;">目标完整路径</label>
+          <input class="input" id="explorerTransferDst" type="text" x-model="transferData.targetDir" placeholder="如 /wopan 或 /google/backups">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost sm" @click="showTransferModal = false">取消</button>
+        <button type="button" class="btn primary sm" :disabled="transferData.loading" @click="executeTransfer()">
+          <span class="spinner xs" x-show="transferData.loading" style="margin-right:6px;"></span>
+          <span x-text="transferAction === 'move' ? '开始移动' : '开始复制'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自定义 OpenList 外部访问域名设置弹窗 -->
+  <div class="modal-backdrop" :class="{'show': showDomainModal}" x-show="showDomainModal" x-cloak style="display:none;" @click.self="showDomainModal = false">
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:500px;width:92vw;">
+      <div class="modal-head">
+        <h2 style="font-size:16px;">配置 OpenList 外部访问域名</h2>
+        <button type="button" class="icon-btn xs" aria-label="关闭" @click="showDomainModal = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+        </button>
+      </div>
+      <div style="padding:16px 20px;">
+        <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;line-height:1.5;">
+          当 TG 项目与 OpenList 部署在云端 VPS 时，本地浏览器无法直接访问内网 <code>127.0.0.1</code>。请在此指定您的公网 IP 或域名，点击列表中所有「OpenList」直达按钮将自动以此地址打开。
+        </p>
+        <div class="field">
+          <label for="explorerDomainInput">OpenList 公网地址</label>
+          <input class="input" id="explorerDomainInput" type="text" x-model="domainInput" placeholder="例如：http://pan.yourdomain.com:5244 或 pan.yourdomain.com">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost sm" @click="showDomainModal = false">取消</button>
+        <button type="button" class="btn primary sm" @click="saveDomain()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 在线视频播放弹窗 -->
+  <div class="modal-backdrop" id="cloudVideoModal" style="display:none;" onclick="if(event.target===this)window.__closeCloudVideo()">
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:880px;width:94vw;">
+      <div class="modal-head">
+        <div class="row" style="gap:8px;align-items:center;">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-play"/></svg>
+          <h2 id="cloudVideoTitle" style="font-size:15px;max-width:65vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">视频播放</h2>
+        </div>
+        <button type="button" class="icon-btn xs" aria-label="关闭" onclick="window.__closeCloudVideo()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
+        </button>
+      </div>
+      <div style="padding:16px 20px;">
+        <div id="cloudVideoLoading" style="text-align:center;padding:40px 0;color:var(--text-2);">
+          <span class="spinner" style="width:24px;height:24px;margin-bottom:8px;"></span>
+          <div>正在解析 OpenList 视频串流直链…</div>
+        </div>
+        <video id="cloudVideoPlayer" controls playsinline preload="metadata"
+               style="width:100%;max-height:60vh;background:#000;border-radius:8px;display:none;"></video>
+        <div id="cloudVideoErr" class="alert error" style="display:none;margin-top:12px;"></div>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div class="row" style="gap:8px;">
+          <button type="button" class="btn sm ghost" id="btnCopyStreamUrl" onclick="window.__copyStreamUrl()" title="复制直链至剪贴板，可粘贴到 PotPlayer / VLC / IINA">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-copy"/></svg>
+            复制播放链接
+          </button>
+          <button type="button" class="btn sm ghost" id="btnOpenPotPlayer" onclick="window.__openExternalPlayer('potplayer')" title="直接调用 PotPlayer 播放">
+            PotPlayer
+          </button>
+          <button type="button" class="btn sm ghost" id="btnOpenVLC" onclick="window.__openExternalPlayer('vlc')" title="直接调用 VLC 播放">
+            VLC
+          </button>
+        </div>
+        <button type="button" class="btn primary sm" onclick="window.__closeCloudVideo()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
