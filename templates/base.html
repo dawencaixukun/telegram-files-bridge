@@ -84,9 +84,12 @@
             <svg class="nav-icon"><use href="#ic-hdd"/></svg><span>本地在存</span>
             {% if local_unarchived %}<span class="badge accent">{{ local_unarchived }}</span>{% endif %}
           </a>
-          <a class="nav-item {% if active_page in ('cloud', 'browse') %}active{% endif %}" href="/library/browse" aria-label="浏览">
-            <svg class="nav-icon"><use href="#ic-cloud"/></svg><span>浏览</span>
+          <a class="nav-item {% if active_page == 'cloud' %}active{% endif %}" href="/library/cloud" aria-label="云端归档">
+            <svg class="nav-icon"><use href="#ic-cloud"/></svg><span>云端归档</span>
             {% if isolated_count %}<span class="badge danger">{{ isolated_count }}</span>{% endif %}
+          </a>
+          <a class="nav-item {% if active_page in ('explorer', 'browse_drive') %}active{% endif %}" href="/explorer" aria-label="浏览">
+            <svg class="nav-icon"><use href="#ic-folder"/></svg><span>浏览</span>
           </a>
         </div>
 

@@ -35,6 +35,7 @@ from routers import (
     system_router,
     api_router,
     ext_m3u8_router,
+    explorer_router,
 )
 
 
@@ -94,6 +95,7 @@ app.include_router(subscriptions_router)
 app.include_router(system_router)
 app.include_router(api_router)
 app.include_router(ext_m3u8_router)
+app.include_router(explorer_router)
 
 # ---------------------------------------------------------------------
 # 5. 应用全局生命周期管理

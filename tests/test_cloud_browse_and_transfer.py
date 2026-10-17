@@ -67,7 +67,7 @@ class TestCloudBrowseAndTransfer(unittest.TestCase):
 
             # 确认页面标题与导航栏包含「浏览」
             self.assertIn("浏览", html)
-            self.assertIn('href="/library/browse"', html)
+            self.assertTrue('href="/explorer"' in html or 'href="/library/browse"' in html)
 
             # 确认包含复制、移动按钮结构
             self.assertIn("data-cloud-copy-btn", html)

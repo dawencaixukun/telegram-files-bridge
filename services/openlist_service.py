@@ -12,7 +12,7 @@ from urllib.parse import quote
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi.responses import JSONResponse
-from core.config import OPENLIST_URL, _archive_norm_dir
+from core.config import OPENLIST_URL, _archive_norm_dir, _fmt_size
 from core.state import (
     _OPENLIST, _openlist_client, _openlist_upload_client, _openlist_save, _archive_save, _ARCHIVE_CONFIG
 )
@@ -481,6 +481,309 @@ async def openlist_list_files(path: str = "/") -> Dict[str, Any]:
         return {"ok": False, "files": [], "message": "读取 OpenList 目录失败，请稍后重试"}
 
 
+DRIVER_LABELS: Dict[str, str] = {
+    "onedrive": "OneDrive",
+    "wopan": "沃家云盘",
+    "googledrive": "Google Drive",
+    "google": "Google Drive",
+    "quark": "夸克网盘",
+    "115": "115网盘",
+    "115 open": "115网盘",
+    "115 cloud": "115网盘",
+    "123pan": "123云盘",
+    "aliyundrive": "阿里云盘",
+    "aliyundriveopen": "阿里云盘",
+    "baidunetdisk": "百度网盘",
+    "lanzou": "蓝奏云",
+    "local": "本地存储",
+    "webdav": "WebDAV",
+    "sftp": "SFTP",
+    "ftp": "FTP",
+    "smb": "SMB",
+}
+
+VIDEO_EXTS = {"mp4", "mkv", "mov", "avi", "webm", "flv", "m4v", "ts", "wmv", "rmvb"}
+
+
+def get_driver_label(driver_or_name: str) -> str:
+    if not driver_or_name:
+        return ""
+    key = str(driver_or_name).strip().lower()
+    return DRIVER_LABELS.get(key) or DRIVER_LABELS.get(key.replace(" ", "")) or str(driver_or_name).strip()
+
+
+async def openlist_storages() -> List[Dict[str, Any]]:
+    """获取 OpenList 挂载的存储列表（优先查 /api/admin/storage/list，降级到 openlist_mounts）。"""
+    storages = []
+    try:
+        token = await _openlist_token()
+        resp = await _openlist_client.get(
+            "/api/admin/storage/list",
+            headers={"Authorization": token}
+        )
+        code, data, _ = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _openlist_client.get(
+                "/api/admin/storage/list",
+                headers={"Authorization": token}
+            )
+            code, data, _ = _openlist_env(resp)
+        if code == 200 and isinstance(data, dict):
+            for s in (data.get("content") or []):
+                m_path = str(s.get("mount_path") or "")
+                if not m_path.startswith("/"):
+                    m_path = "/" + m_path
+                clean_path = posixpath.normpath(m_path)
+                m_name = clean_path.strip("/").split("/")[0] if clean_path.strip("/") else clean_path
+                driver = str(s.get("driver") or "")
+                status = str(s.get("status") or "work")
+                remark = str(s.get("remark") or "")
+                display = get_driver_label(driver) or get_driver_label(m_name) or m_name
+                storages.append({
+                    "mount_path": clean_path,
+                    "name": m_name,
+                    "driver": driver or m_name,
+                    "display_name": display,
+                    "status": status,
+                    "status_label": "正常在线" if status == "work" else status,
+                    "remark": remark,
+                    "capacity_str": "就绪",
+                    "openlist_url": _openlist_direct_url(clean_path),
+                })
+    except Exception as e:
+        log.debug("读取 OpenList admin/storage/list 失败: %s", e)
+
+    if not storages:
+        m_res = await openlist_mounts()
+        for m in (m_res.get("mounts") or []):
+            clean_m = str(m or "").strip().lstrip("/")
+            if not clean_m:
+                continue
+            display = get_driver_label(clean_m) or clean_m
+            storages.append({
+                "mount_path": f"/{clean_m}",
+                "name": clean_m,
+                "driver": clean_m.capitalize(),
+                "display_name": display,
+                "status": "work",
+                "status_label": "正常在线",
+                "remark": "",
+                "capacity_str": "就绪",
+                "openlist_url": _openlist_direct_url(f"/{clean_m}"),
+            })
+    return storages
+
+
+async def openlist_fs_list_all(path: str = "/", refresh: bool = False) -> Dict[str, Any]:
+    norm_path = posixpath.normpath("/" + str(path or "").strip().replace("\\", "/").lstrip("/"))
+    if not norm_path or norm_path == ".":
+        norm_path = "/"
+
+    breadcrumbs = [{"name": "全部网盘", "path": "/", "is_last": norm_path == "/"}]
+    if norm_path != "/":
+        parts = [p for p in norm_path.strip("/").split("/") if p]
+        curr = ""
+        for i, p in enumerate(parts):
+            curr += "/" + p
+            breadcrumbs.append({
+                "name": p,
+                "path": curr,
+                "is_last": (i == len(parts) - 1)
+            })
+
+    parent_path = "/"
+    if norm_path != "/":
+        parent_path = posixpath.dirname(norm_path)
+        if not parent_path:
+            parent_path = "/"
+
+    try:
+        token = await _openlist_token()
+    except Exception as e:
+        return {
+            "ok": False,
+            "path": norm_path,
+            "parent_path": parent_path,
+            "breadcrumbs": breadcrumbs,
+            "entries": [],
+            "dirs_count": 0,
+            "files_count": 0,
+            "total_size": 0,
+            "total_size_human": "—",
+            "message": str(e),
+            "openlist_ready": False,
+        }
+
+    async def _list_call(tok: str):
+        return await _openlist_client.post(
+            "/api/fs/list",
+            json={"path": norm_path, "password": "", "page": 1, "per_page": 0, "refresh": bool(refresh)},
+            headers={"Authorization": tok}
+        )
+
+    try:
+        resp = await _list_call(token)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _list_call(token)
+            code, data, msg = _openlist_env(resp)
+        if code != 200:
+            return {
+                "ok": False,
+                "path": norm_path,
+                "parent_path": parent_path,
+                "breadcrumbs": breadcrumbs,
+                "entries": [],
+                "dirs_count": 0,
+                "files_count": 0,
+                "total_size": 0,
+                "total_size_human": "—",
+                "message": msg or f"OpenList 返回错误码 {code}",
+                "openlist_ready": True,
+            }
+
+        content = data.get("content") or []
+        dirs = []
+        files = []
+        total_size = 0
+
+        top_drive = norm_path.strip("/").split("/")[0] if norm_path != "/" else ""
+        top_drive_label = get_driver_label(top_drive) if top_drive else ""
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            is_dir = bool(item.get("is_dir"))
+            size = int(item.get("size") or 0)
+            item_path = posixpath.join(norm_path, name)
+            item_thumb = str(item.get("thumb") or "")
+            item_type = int(item.get("type") or (1 if is_dir else 0))
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            is_video = (item_type == 2) or (ext in VIDEO_EXTS)
+
+            item_drive = top_drive or (name if norm_path == "/" else "")
+            item_drive_label = top_drive_label or get_driver_label(item_drive)
+
+            entry = {
+                "name": name,
+                "path": item_path,
+                "is_dir": is_dir,
+                "size": size,
+                "size_human": "—" if is_dir else _fmt_size(size),
+                "modified": str(item.get("modified") or item.get("created") or "")[:19].replace("T", " "),
+                "thumb": item_thumb,
+                "type": item_type,
+                "is_video": is_video,
+                "ext": ext.upper() if ext else ("DIR" if is_dir else "FILE"),
+                "drive": item_drive,
+                "drive_label": item_drive_label,
+                "openlist_url": _openlist_direct_url(item_path),
+            }
+            if is_dir:
+                dirs.append(entry)
+            else:
+                files.append(entry)
+                total_size += size
+
+        dirs.sort(key=lambda x: x["name"].lower())
+        files.sort(key=lambda x: x["name"].lower())
+        entries = dirs + files
+
+        return {
+            "ok": True,
+            "path": norm_path,
+            "parent_path": parent_path,
+            "breadcrumbs": breadcrumbs,
+            "entries": entries,
+            "dirs_count": len(dirs),
+            "files_count": len(files),
+            "total_size": total_size,
+            "total_size_human": _fmt_size(total_size),
+            "write": bool(data.get("write", True)),
+            "message": "",
+            "openlist_ready": True,
+        }
+    except Exception as e:
+        log.error("列出 OpenList 文件异常: %s", e)
+        return {
+            "ok": False,
+            "path": norm_path,
+            "parent_path": parent_path,
+            "breadcrumbs": breadcrumbs,
+            "entries": [],
+            "dirs_count": 0,
+            "files_count": 0,
+            "total_size": 0,
+            "total_size_human": "—",
+            "message": f"连接 OpenList 失败: {e}",
+            "openlist_ready": False,
+        }
+
+
+async def openlist_fs_rename_entry(path: str, new_name: str) -> Dict[str, Any]:
+    norm_path = posixpath.normpath("/" + str(path or "").strip().replace("\\", "/").lstrip("/"))
+    clean_new_name = str(new_name or "").strip()
+    if not norm_path or norm_path == "/":
+        return {"ok": False, "code": 400, "message": "无法重命名根目录"}
+    if not clean_new_name:
+        return {"ok": False, "code": 400, "message": "新名称不能为空"}
+    if "/" in clean_new_name or "\\" in clean_new_name:
+        return {"ok": False, "code": 400, "message": "名称中不得包含路径分隔符 / 或 \\"}
+
+    old_name = posixpath.basename(norm_path)
+    if old_name == clean_new_name:
+        return {"ok": True, "code": 200, "message": "名称未变化"}
+
+    try:
+        token = await _openlist_token()
+    except Exception as e:
+        return {"ok": False, "code": 502, "message": f"OpenList 未就绪: {e}"}
+
+    async def _rename_call(tok: str):
+        return await _openlist_client.post(
+            "/api/fs/rename",
+            json={"path": norm_path, "name": clean_new_name},
+            headers={"Authorization": tok}
+        )
+
+    try:
+        resp = await _rename_call(token)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _rename_call(token)
+            code, data, msg = _openlist_env(resp)
+        if resp.status_code != 200 or code != 200:
+            return {"ok": False, "code": code, "message": msg or f"重命名失败 (业务码 {code})"}
+
+        new_path = posixpath.join(posixpath.dirname(norm_path), clean_new_name)
+        try:
+            from core.state import _ARCHIVE_JOBS, _archive_save
+            updated = 0
+            for jid, j in list(_ARCHIVE_JOBS.items()):
+                if j.get("remote_path") == norm_path:
+                    j["remote_path"] = new_path
+                    j["filename"] = clean_new_name
+                    updated += 1
+            if updated:
+                _archive_save()
+        except Exception as e:
+            log.debug("回写归档记录失败: %s", e)
+
+        return {"ok": True, "code": 200, "message": f"已成功重命名为 {clean_new_name}", "new_path": new_path}
+    except Exception as e:
+        log.error("调用 OpenList fs/rename 异常: %s", e)
+        return {"ok": False, "code": 500, "message": f"重命名异常: {e}"}
+
+
+openlist_fs_rename = openlist_fs_rename_entry
+
+
 async def _openlist_tasks_undone(kind: str = "copy") -> List[Dict[str, Any]]:
     """获取 OpenList 正在进行的后台任务列表（copy / move 等）。"""
     try:
@@ -733,6 +1036,10 @@ async def _openlist_fs_move(src_dir: str, dst_dir: str, names: List[str]) -> Dic
     except Exception as e:  # noqa: BLE001
         log.error("OpenList fs/move 异常 (%s -> %s, %s): %s", s_dir, d_dir, clean_names, e)
         return {"ok": False, "code": 500, "message": f"移动失败: {e}"}
+
+
+openlist_fs_copy = _openlist_fs_copy
+openlist_fs_move = _openlist_fs_move
 
 
 async def openlist_download_to_file(remote_path: str, local_path: str, max_bytes: int = 0) -> Tuple[bool, str]:

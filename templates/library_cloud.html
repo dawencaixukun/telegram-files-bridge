@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/_macros.html" import pill %}
-{% block title %}浏览 · TG 归档台{% endblock %}
-{% block page_id %}library-browse{% endblock %}
+{% block title %}云端归档 · TG 归档台{% endblock %}
+{% block page_id %}library-cloud{% endblock %}
 {% block active_nav %}library{% endblock %}
-{% block active_page %}{% if active_page %}{{ active_page }}{% else %}browse{% endif %}{% endblock %}
-{% block page_title %}浏览{% endblock %}
-{% block ctx_chip %}<span class="ctx-chip">浏览 · 共 {{ cloud_files|length }} 个文件</span>{% endblock %}
+{% block active_page %}cloud{% endblock %}
+{% block page_title %}云端归档{% endblock %}
+{% block ctx_chip %}<span class="ctx-chip">已归档 · 共 {{ cloud_files|length }} 个文件</span>{% endblock %}
 
 {% block head %}
 <script>
@@ -535,8 +535,8 @@ window.cloudLibrary = function cloudLibrary() {
 <div class="cloud-library" x-data="cloudLibrary()" x-init="init()">
 <div class="page-header">
   <div>
-    <h1>浏览</h1>
-    <p>OpenList 已归档文件（卡片式网格浏览，支持缩略图预览、OpenList 跳转、重命名、跨盘复制与移动）</p>
+    <h1>云端归档</h1>
+    <p>已归档到云端网盘的文件（查看 TG 历史归档记录与取回）</p>
   </div>
   <div class="row" style="gap:8px;align-items:center;">
     <!-- 顶栏自定义 OpenList 域名配置按钮 -->

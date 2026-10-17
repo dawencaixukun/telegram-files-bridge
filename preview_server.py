@@ -497,11 +497,110 @@ async def partial_local_files(request: Request, source: str = "", type: str = ""
 
 
 @app.get("/library/cloud", response_class=HTMLResponse)
-@app.get("/library/browse", response_class=HTMLResponse)
 async def library_cloud(request: Request):
-    page_sub = "browse" if request.url.path.endswith("/browse") else "cloud"
-    ctx = _ctx(request, f"library-{page_sub}", "library", page_sub, extra={"cloud_files": CLOUD_FILES, "openlist_public_base": ""})
+    ctx = _ctx(request, "library-cloud", "library", "cloud", extra={"cloud_files": CLOUD_FILES, "openlist_public_base": ""})
     return templates.TemplateResponse("library_cloud.html", ctx)
+
+
+PV_STORAGES = [
+    {"mount_path": "/onedrive", "name": "onedrive", "driver": "Onedrive", "display_name": "OneDrive", "status": "work", "status_label": "正常在线", "remark": "", "capacity_str": "就绪", "openlist_url": "http://127.0.0.1:5244/onedrive"},
+    {"mount_path": "/wopan", "name": "wopan", "driver": "WoPan", "display_name": "沃家云盘", "status": "work", "status_label": "正常在线", "remark": "", "capacity_str": "就绪", "openlist_url": "http://127.0.0.1:5244/wopan"},
+    {"mount_path": "/google", "name": "google", "driver": "GoogleDrive", "display_name": "Google Drive", "status": "work", "status_label": "正常在线", "remark": "", "capacity_str": "就绪", "openlist_url": "http://127.0.0.1:5244/google"},
+    {"mount_path": "/quark", "name": "quark", "driver": "Quark", "display_name": "夸克网盘", "status": "work", "status_label": "正常在线", "remark": "", "capacity_str": "就绪", "openlist_url": "http://127.0.0.1:5244/quark"},
+]
+
+PV_SAMPLE_ENTRIES = [
+    {"name": "yello", "path": "/onedrive/yello", "is_dir": True, "size": 0, "size_human": "—", "modified": "2026-08-20 12:02", "thumb": "", "type": 1, "is_video": False, "ext": "DIR", "drive": "onedrive", "drive_label": "OneDrive", "openlist_url": "http://127.0.0.1:5244/onedrive/yello"},
+    {"name": "EP01.mp4", "path": "/onedrive/tg-archive/EP01.mp4", "is_dir": False, "size": 104857600, "size_human": "100.0 MB", "modified": "2026-08-20 14:30", "thumb": "", "type": 2, "is_video": True, "ext": "MP4", "drive": "onedrive", "drive_label": "OneDrive", "openlist_url": "http://127.0.0.1:5244/onedrive/tg-archive/EP01.mp4"},
+    {"name": "Document.pdf", "path": "/onedrive/Document.pdf", "is_dir": False, "size": 5242880, "size_human": "5.0 MB", "modified": "2026-08-19 11:20", "thumb": "", "type": 0, "is_video": False, "ext": "PDF", "drive": "onedrive", "drive_label": "OneDrive", "openlist_url": "http://127.0.0.1:5244/onedrive/Document.pdf"},
+]
+
+
+@app.get("/explorer", response_class=HTMLResponse)
+@app.get("/library/browse", response_class=HTMLResponse)
+async def explorer_preview(request: Request, path: str = "/", q: str = ""):
+    norm_path = posixpath.normpath("/" + str(path or "").strip().replace("\\", "/").lstrip("/"))
+    if not norm_path or norm_path == ".":
+        norm_path = "/"
+    is_root = (norm_path == "/")
+    breadcrumbs = [{"name": "全部网盘", "path": "/", "is_last": is_root}]
+    if not is_root:
+        parts = [p for p in norm_path.strip("/").split("/") if p]
+        curr = ""
+        for i, p in enumerate(parts):
+            curr += "/" + p
+            breadcrumbs.append({"name": p, "path": curr, "is_last": (i == len(parts) - 1)})
+
+    quick_drives = []
+    for s in PV_STORAGES:
+        m_path = s["mount_path"]
+        is_active = (norm_path == m_path) or (norm_path.startswith(m_path + "/") if m_path != "/" else False)
+        quick_drives.append({
+            "name": s["name"],
+            "path": m_path,
+            "display_name": s["display_name"],
+            "driver": s["driver"],
+            "is_active": is_active,
+        })
+
+    entries = [] if is_root else PV_SAMPLE_ENTRIES
+    if q:
+        entries = [e for e in entries if q.lower() in e["name"].lower()]
+
+    ctx = _ctx(request, "library-explorer", "library", "explorer", extra={
+        "current_path": norm_path,
+        "is_root": is_root,
+        "openlist_ready": True,
+        "storages": PV_STORAGES,
+        "mounts": ["/onedrive", "/wopan", "/google", "/quark"],
+        "quick_drives": quick_drives,
+        "breadcrumbs": breadcrumbs,
+        "parent_path": posixpath.dirname(norm_path) if norm_path != "/" else "/",
+        "entries": entries,
+        "all_entries_count": len(entries),
+        "dirs_count": len(PV_STORAGES) if is_root else 1,
+        "files_count": 0 if is_root else 2,
+        "total_size_human": "105.0 MB" if not is_root else "—",
+        "q": q,
+        "openlist_public_base": "",
+        "openlist_url": "http://127.0.0.1:5244" + (norm_path if norm_path != "/" else ""),
+        "active_tasks": [],
+        "error_message": "",
+    })
+    return templates.TemplateResponse("explorer.html", ctx)
+
+
+@app.get("/api/explorer/list")
+async def _pv_explorer_list(path: str = "/", q: str = ""):
+    entries = PV_SAMPLE_ENTRIES if path != "/" else []
+    if q:
+        entries = [e for e in entries if q.lower() in e["name"].lower()]
+    return JSONResponse({"ok": True, "path": path, "entries": entries, "total": len(entries)})
+
+
+@app.post("/api/explorer/rename")
+async def _pv_explorer_rename(request: Request):
+    return JSONResponse({"ok": True, "message": "重命名成功（预览模式）"})
+
+
+@app.post("/api/explorer/copy")
+async def _pv_explorer_copy(request: Request):
+    return JSONResponse({"ok": True, "message": "复制任务已提交（预览模式）"})
+
+
+@app.post("/api/explorer/move")
+async def _pv_explorer_move(request: Request):
+    return JSONResponse({"ok": True, "message": "移动任务已提交（预览模式）"})
+
+
+@app.get("/api/explorer/stream-url")
+async def _pv_explorer_stream_url(path: str = ""):
+    return JSONResponse({"ok": True, "url": "http://127.0.0.1:5244/d/sample.mp4", "directUrl": "http://127.0.0.1:5244/d/sample.mp4", "path": path})
+
+
+@app.get("/api/explorer/tasks")
+async def _pv_explorer_tasks():
+    return JSONResponse({"ok": True, "copy": [], "move": [], "total": 0})
 
 
 @app.get("/submit", response_class=HTMLResponse)

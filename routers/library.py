@@ -48,15 +48,13 @@ async def library_local(request: Request, category: str = ""):
 
 
 @router.get("/library/cloud", response_class=HTMLResponse)
-@router.get("/library/browse", response_class=HTMLResponse)
 async def library_cloud(request: Request):
-    # 云端归档 / 浏览 = bridge 实际上传到 OpenList 的文件（归档日志为源，尽力经
+    # 云端归档 = bridge 实际上传到 OpenList 的文件（归档日志为源，尽力经
     # OpenList fs/list 校验云端仍在）。Java 后端 transferStatus 与本页无关。
-    page_sub = "browse" if request.url.path.endswith("/browse") else "cloud"
     cloud_files, mounts_res, ctx = await asyncio.gather(
         _cloud_archive_rows(),
         openlist_mounts(),
-        _ctx(request, f"library-{page_sub}", "library", page_sub),
+        _ctx(request, "library-cloud", "library", "cloud"),
     )
     mounts = list(mounts_res.get("mounts") or [])
     if not mounts_res.get("ok"):
