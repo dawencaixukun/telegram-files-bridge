@@ -145,9 +145,37 @@
         {% block ctx_chip %}{% endblock %}
         <div class="spacer"></div>
         <div class="actions">
-          <button class="btn primary" onclick="window.__openSubmit()" aria-label="提交下载">
-            <svg class="icon"><use href="#ic-plus"/></svg><span>提交下载</span>
-          </button>
+          <!-- 旧「+ 提交下载」按钮已移除；/explorer 页在此位置渲染「功能」菜单
+               （刷新缓存 / OpenList 外跳 / OpenList 域名，从 explorer 工具条上移）。
+               独立 Alpine 组件：顶栏在 driveExplorer() x-data 作用域之外。 -->
+          {% if active_page == 'explorer' %}
+          <div class="nav-feature-menu" x-data="navFeatureMenu()" @click.outside="open = false" @keydown.escape.window="open = false">
+            <button type="button" class="btn primary" @click="toggle()"
+                    :class="open ? 'primary' : 'primary'"
+                    :aria-expanded="open ? 'true' : 'false'"
+                    aria-haspopup="menu"
+                    title="功能仅在当前浏览页面生效">
+              <svg class="icon"><use href="#ic-cog"/></svg><span>功能</span>
+            </button>
+            <div class="dropdown" :class="{'show': open}" x-cloak
+                 style="right:0;left:auto;min-width:236px;">
+              <button type="button" class="dd-item" role="menuitem"
+                      onclick="window.__refreshExplorerCache('{{ current_path }}'); open = false;">
+                <svg><use href="#ic-refresh"/></svg><span>刷新缓存</span>
+              </button>
+              <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
+                 class="dd-item" role="menuitem"
+                 data-cloud-path="{{ current_path }}"
+                 onclick="open = false; return window.__openExplorerInOpenList(this, event);">
+                <svg><use href="#ic-external"/></svg><span>在 OpenList 中打开当前目录</span>
+              </a>
+              <button type="button" class="dd-item" role="menuitem" @click="open = false; openFeatureDomainModal()">
+                <svg><use href="#ic-globe"/></svg>
+                <span x-text="featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase)) : '设置 OpenList 域名'"></span>
+              </button>
+            </div>
+          </div>
+          {% endif %}
 
           <div class="user-menu" x-data="{open:false}" :class="{'open': open}"
                @click.outside="open=false" @keydown.escape.window="open=false">
@@ -234,6 +262,35 @@
   <!-- Toast stack -->
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
+  <!-- 顶栏「功能」菜单（仅 /explorer 渲染）：独立 Alpine 组件 + 域名弹窗胶水。
+       顶栏在 driveExplorer() x-data 作用域之外，这里用独立小组件实现，功能对齐原工具条 ⋯ 菜单。 -->
+  {% if active_page == 'explorer' %}
+  <script>
+    /* 组件工厂放 window 上供 x-data 引用；Alpine 在 app.js 之后加载，定义时机安全 */
+    window.navFeatureMenu = function navFeatureMenu() {
+      return {
+        open: false,
+        toggle: function () { this.open = !this.open; },
+      };
+    };
+    window.featureOpenlistBase = localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '';
+    window.featureDisplayDomain = function (url) {
+      if (!url) return '';
+      try { return new URL(url).host; }
+      catch (e) { return url.replace(/^https?:\/\//, '').split('/')[0]; }
+    };
+    /* 域名弹窗复用 explorer 内已有的 showDomainModal 弹窗 DOM：通过 Alpine $data 操控主组件 */
+    window.openFeatureDomainModal = function () {
+      var alp = document.querySelector('.explorer-container');
+      if (alp && alp._x_dataStack && alp._x_dataStack[0]) {
+        alp._x_dataStack[0].openDomainModal();
+      } else if (window.__toast) {
+        window.__toast('页面尚未就绪，请稍后再试', 'warning');
+      }
+    };
+  </script>
+  {% endif %}
+
   {% block modals %}{% include "partials/_submit_modal.html" %}{% include "partials/_archive_modal.html" %}{% include "partials/_spotlight_modal.html" %}{% include "partials/_asset_drawer.html" %}{% endblock %}
 
   {% block js %}{% endblock %}
@@ -275,6 +332,7 @@
       <symbol id="ic-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></symbol>
       <symbol id="ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
       <symbol id="ic-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
+      <symbol id="ic-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
       <symbol id="ic-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
       <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
       <symbol id="ic-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>

@@ -21,6 +21,86 @@ from core.logging import log
 router = APIRouter()
 
 
+def _current_drive_label(norm_path: str, storages: List[Dict[str, Any]]) -> str:
+    """当前路径所属网盘的展示名（工具条下拉按钮回显用）。
+
+    根目录返回空串 → 前端显示「全部网盘」。路径第二层以后（/onedrive/yello）
+    同样回显 OneDrive，让用户始终知道自己在哪个盘里。
+    """
+    if not norm_path or norm_path == "/":
+        return ""
+    top = norm_path.strip("/").split("/")[0]
+    for s in storages or []:
+        if str(s.get("name") or "") == top or str(s.get("mount_path") or "").strip("/") == top:
+            return str(s.get("display_name") or s.get("name") or top)
+    return top
+
+# 根目录网盘卡片统计缓存：{mount_path: (timestamp, stats)}，30s 内复用，避免每次进页面打 N 次 OpenList
+_DRIVE_STATS_CACHE: Dict[str, Any] = {}
+_DRIVE_STATS_TTL = 30.0
+
+
+async def _drive_stats(mount_path: str):
+    """统计单个网盘挂载点的一级项目数（失败返回 None，由上层渲染成「—」）。"""
+    try:
+        data = await _openlist_mod.openlist_fs_list_all(mount_path)
+        if not data or not data.get("ok"):
+            return None
+        entries = data.get("entries") or []
+        dirs = data.get("dirs_count")
+        files = data.get("files_count")
+        if dirs is None:
+            dirs = sum(1 for e in entries if e.get("is_dir"))
+        if files is None:
+            files = sum(1 for e in entries if not e.get("is_dir"))
+        size = data.get("total_size_human")
+        if not size:
+            total = data.get("total_size") or sum(
+                (e.get("size") or 0) for e in entries if not e.get("is_dir")
+            )
+            size = _human_size(total)
+        return {"dirs": int(dirs or 0), "files": int(files or 0), "size": size or "—"}
+    except Exception as exc:  # 单个网盘列不出来不应影响整页
+        log.warning("explorer 网盘统计失败 %s: %s", mount_path, exc)
+        return None
+
+
+def _human_size(num: float) -> str:
+    try:
+        n = float(num or 0)
+    except (TypeError, ValueError):
+        return "—"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+    return "—"
+
+
+async def _attach_drive_stats(storages: List[Dict[str, Any]]) -> None:
+    """并发补齐根目录每张网盘卡片的 stats（带 30s 内存缓存），原地写入 dict。"""
+    now = asyncio.get_event_loop().time()
+    pending = []
+    for s in storages:
+        mp = s.get("mount_path") or ""
+        hit = _DRIVE_STATS_CACHE.get(mp)
+        if hit and (now - hit[0]) < _DRIVE_STATS_TTL:
+            s["stats"] = hit[1]
+        else:
+            s["stats"] = None
+            pending.append(s)
+    if not pending:
+        return
+    results = await asyncio.gather(
+        *[_drive_stats(s.get("mount_path") or "") for s in pending],
+        return_exceptions=True,
+    )
+    for s, res in zip(pending, results):
+        stats = None if isinstance(res, BaseException) else res
+        s["stats"] = stats
+        _DRIVE_STATS_CACHE[s.get("mount_path") or ""] = (now, stats)
+
+
 @router.get("/explorer", response_class=HTMLResponse)
 @router.get("/library/browse", response_class=HTMLResponse)
 async def explorer_page(request: Request, path: str = "/", refresh: bool = False, q: str = ""):
@@ -48,6 +128,10 @@ async def explorer_page(request: Request, path: str = "/", refresh: bool = False
         })
 
     is_root = (norm_path == "/")
+
+    # 根目录：并发补齐每个网盘的一级项目统计（30s 缓存，单个失败只显示「—」）
+    if is_root and storages:
+        await _attach_drive_stats(storages)
 
     if is_root:
         list_data = {
@@ -78,6 +162,8 @@ async def explorer_page(request: Request, path: str = "/", refresh: bool = False
     ctx.update({
         "current_path": norm_path,
         "is_root": is_root,
+        # 工具条「全部网盘」下拉按钮的回显名：取当前路径的第一段去匹配挂载网盘
+        "current_drive_label": _current_drive_label(norm_path, storages),
         "openlist_ready": openlist_ready,
         "storages": storages,
         "mounts": mount_names,
@@ -106,6 +192,22 @@ async def api_explorer_list(request: Request, path: str = "/", refresh: bool = F
         q_lower = q.lower()
         data["entries"] = [e for e in data.get("entries", []) if q_lower in e["name"].lower()]
     return data
+
+
+@router.get("/api/explorer/search")
+async def api_explorer_search(request: Request, q: str = ""):
+    """「在全部网盘查询」：跨网盘按文件名搜索（根页面搜索组件专用）。
+
+    优先 OpenList 原生 /api/fs/search 全库索引；不可用（未配置索引/未登录）时
+    服务层自动降级为遍历各挂载网盘一级目录过滤文件名。
+    """
+    data = await _openlist_mod.openlist_search_all(q, limit=40)
+    return JSONResponse({
+        "ok": bool(data.get("ok")),
+        "query": str(data.get("query") or q or ""),
+        "results": data.get("results") or [],
+        "message": str(data.get("message") or ""),
+    })
 
 
 @router.post("/api/explorer/rename")

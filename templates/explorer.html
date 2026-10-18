@@ -41,8 +41,7 @@
 .explorer-toolbar > * { flex: 0 0 auto; }
 .explorer-toolbar .btn,
 .explorer-toolbar .input,
-.explorer-toolbar .view-switch,
-.explorer-toolbar .toolbar-more-btn {
+.explorer-toolbar .view-switch {
   height: var(--toolbar-h);
   box-sizing: border-box;
 }
@@ -96,17 +95,9 @@
   border-radius: 6px;
 }
 
-/* ⋯ 更多菜单 */
+/* 网盘下拉菜单（drive-picker）与工具条菜单面板共用样式。
+   （原「⋯ 更多菜单」已上移到顶部导航栏，见 base.html 的 .nav-feature-menu） */
 .toolbar-more { position: relative; }
-.toolbar-more-btn {
-  width: var(--toolbar-h, 36px);
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-}
-.toolbar-more-btn .icon { width: 18px; height: 18px; }
 .toolbar-menu {
   position: absolute;
   /* 桌面端按钮在工具栏右端，向左展开是对的；手机端按钮换行到最左，
@@ -158,13 +149,11 @@
 @media (max-width: 720px) {
   .explorer-toolbar { gap: 8px; padding: 8px; }
   .toolbar-search { flex: 1 1 100%; max-width: none; margin-bottom: 2px; }
-  /* 窄屏只保留两行：搜索一整行 + 视图切换/⋯，统计文字收起以保持清爽 */
+  /* 窄屏只保留两行：搜索一整行 + 视图切换/网盘下拉，统计文字收起以保持清爽 */
   .toolbar-stats { display: none; }
-  /* spacer 必须留着：根目录没有视图切换，删掉它会让 ⋯ 落到最左端，
-     菜单再向左展开就整块跑到屏幕外。保留后 ⋯ 永远贴右。 */
   .view-switch { margin-left: 0; }
-  /* 兜底：即便 ⋯ 不在右端（根目录/极窄屏），也由 JS 在展开时把菜单夹进视口
-     （见 driveExplorer 的 positionMoreMenu），这里只做宽度收敛。 */
+  /* 兜底：即便网盘下拉按钮不在右端（根目录/极窄屏），也由 JS 在展开时把菜单夹进视口
+     （见 driveExplorer 的 toggleDriveMenu/_clampMenu），这里只做宽度收敛。 */
   .toolbar-menu {
     min-width: 0;
     width: min(260px, calc(100vw - 24px));
@@ -271,57 +260,88 @@
 }
 .drive-list-head span { font-size: 12px; color: var(--text-3); }
 
-/* 根目录引导（大卡片已移除，只留一句提示） */
-/* 根目录网盘列表：手机上就是干净的列表行，点击整行进盘 */
-.drive-root-list {
+/* 根页面「在全部网盘查询」搜索组件（主视图） */
+.root-search {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
-/* 根页面若已无任何网盘或存在其它内容，保留上下间距 */
-.drive-root-list + * { margin-top: var(--space-4); }
-.drive-root-card {
+.root-search-bar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  min-height: 60px;
+  gap: 10px;
+}
+.root-search-ico {
+  position: absolute;
+  left: 12px;
+  color: var(--text-3);
+  pointer-events: none;
+  width: 17px; height: 17px;
+}
+.root-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding-left: 38px;
+  padding-right: 12px;
+  font-size: 14px;
+}
+.root-search-state {
+  font-size: 12.5px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+}
+.root-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.root-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  min-height: 44px;
   box-sizing: border-box;
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
   background: var(--glass-bg);
   color: var(--text-1);
   text-decoration: none;
-  transition: background .16s var(--ease), border-color .16s var(--ease), transform .12s var(--ease);
+  transition: background .16s var(--ease), border-color .16s var(--ease);
 }
-.drive-root-card:hover { background: var(--surface-2); border-color: var(--glass-border-strong); }
-.drive-root-card:active { transform: scale(.995); }
-.drive-root-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.drc-ico {
+.root-search-row:hover { background: var(--surface-2); border-color: var(--glass-border-strong); }
+.root-search-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rsr-badge {
   flex: none;
-  width: 38px; height: 38px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 10px;
-  background: rgba(124, 58, 237, .12);
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--brand);
+  background: rgba(124, 58, 237, .12);
+  border-radius: 6px;
+  padding: 2px 7px;
 }
-.drc-ico svg { width: 19px; height: 19px; }
-.drc-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.drc-name {
-  font-size: 14.5px; font-weight: 600; color: var(--text-1);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.rsr-ico { flex: none; font-size: 13px; }
+.rsr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.drc-sub {
-  font-size: 11.5px; color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.drc-path { color: var(--text-2); font-weight: 500; }
-.drc-dot { margin: 0 2px; opacity: .6; }
-.drc-chev {
-  flex: none; width: 15px; height: 15px;
+.rsr-meta {
+  flex: none;
+  font-size: 11.5px;
   color: var(--text-3);
-  transform: rotate(-90deg);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
 }
 
 /* 「全部网盘」下拉：紧凑小列表（每行 网盘名 + 一级统计） */
@@ -784,7 +804,6 @@ window.driveExplorer = function driveExplorer() {
     openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
     domainInput: '',
     showDomainModal: false,
-    showMoreMenu: false,
     showDriveMenu: false,
     /* 下拉按钮回显当前网盘名：/onedrive/xxx → OneDrive；根目录留空→显示「全部网盘」 */
     currentDriveLabel: {{ (current_drive_label or '') | tojson }},
@@ -866,21 +885,12 @@ window.driveExplorer = function driveExplorer() {
     toggleDriveMenu: function () {
       this.showDriveMenu = !this.showDriveMenu;
       if (!this.showDriveMenu) return;
-      this.showMoreMenu = false;
       var self = this;
       this.$nextTick(function () {
         self._clampMenu('driveWrap', 'driveMenu');
         /* 面板收起再展开：与归档弹窗一致，重置回上次浏览位置（会话内记忆），没有则根 */
         window.__driveBrowseLoad(window.__driveBrowseLast || '/');
       });
-    },
-
-    positionMoreMenu: function () {
-      this.showMoreMenu = !this.showMoreMenu;
-      if (!this.showMoreMenu) return;
-      this.showDriveMenu = false;
-      var self = this;
-      this.$nextTick(function () { self._clampMenu('moreWrap', 'moreMenu'); });
     },
 
     displayDomain: function (url) {
@@ -1128,6 +1138,31 @@ window.__moveCloudFile = window.__moveExplorerFile;
 window.__driveStorages = [
   {% for s in storages %}{ "display_name": {{ s.display_name | tojson }}, "mount_path": {{ s.mount_path | tojson }} }{{ "," if not loop.last }}{% endfor %}
 ];
+
+/* 根页面「在全部网盘查询」：防抖调 /api/explorer/search，Alpine x-data 里调用 */
+window.__explorerRootSearch = async function (comp, immediate) {
+  var q = (comp.sQ || '').trim();
+  var seq = ++comp.sSeq;
+  if (!q) { comp.sResults = null; comp.sMsg = ''; comp.sLoading = false; return; }
+  if (!immediate && q.length < 2) return;   /* 太短不自动查，Enter/按钮仍可强制查 */
+  comp.sLoading = true; comp.sMsg = '';
+  try {
+    var resp = await fetch('/api/explorer/search?q=' + encodeURIComponent(q));
+    var d = await resp.json();
+    if (seq !== comp.sSeq) return;          /* 只采纳最后一次请求的结果 */
+    if (d && d.ok) {
+      comp.sResults = d.results || [];
+      comp.sMsg = comp.sResults.length ? '' : '没有找到匹配「' + q + '」的文件，试试更短的关键词';
+    } else {
+      comp.sResults = [];
+      comp.sMsg = (d && d.message) || '查询失败，请稍后重试';
+    }
+  } catch (e) {
+    if (seq === comp.sSeq) { comp.sResults = []; comp.sMsg = '网络错误，查询失败'; }
+  } finally {
+    if (seq === comp.sSeq) comp.sLoading = false;
+  }
+};
 </script>
 {% endblock %}
 
@@ -1155,7 +1190,8 @@ window.__driveStorages = [
       </nav>
     </div>
 
-    <!-- 统一工具条：搜索（可伸缩） + 统计 + 视图切换 + ⋯ 更多菜单 -->
+    <!-- 统一工具条：搜索（可伸缩） + 统计 + 视图切换 + 全部网盘下拉
+         （原 ⋯ 更多菜单已上移到顶部导航栏「功能」按钮） -->
     <div class="explorer-toolbar">
       {% if not is_root %}
       <div class="toolbar-search">
@@ -1225,44 +1261,12 @@ window.__driveStorages = [
         </div>
       </div>
 
-      <!-- ⋯ 更多菜单：刷新缓存 / OpenList 外跳 / OpenList 域名 -->
-      <div class="toolbar-more" x-ref="moreWrap" @click.outside="showMoreMenu = false">
-        <button type="button" class="btn sm ghost toolbar-more-btn"
-                @click="positionMoreMenu()"
-                :class="showMoreMenu ? 'primary' : 'ghost'"
-                :aria-expanded="showMoreMenu ? 'true' : 'false'"
-                aria-haspopup="menu"
-                title="更多操作">
-          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
-          </svg>
-        </button>
-        <div class="toolbar-menu" x-ref="moreMenu" x-show="showMoreMenu" x-cloak role="menu" @click="showMoreMenu = false">
-          <button type="button" class="toolbar-menu-item" role="menuitem"
-                  onclick="window.__refreshExplorerCache('{{ current_path }}')">
-            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
-            <span>刷新缓存</span>
-          </button>
-          <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
-             class="toolbar-menu-item" role="menuitem"
-             data-cloud-path="{{ current_path }}"
-             onclick="return window.__openExplorerInOpenList(this, event)">
-            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
-            <span>在 OpenList 中打开当前目录</span>
-          </a>
-          <button type="button" class="toolbar-menu-item" role="menuitem" @click="openDomainModal()">
-            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-            <span x-text="openlistBase ? ('OpenList 域名：' + displayDomain(openlistBase)) : '设置 OpenList 域名'"></span>
-          </button>
-        </div>
-      </div>
+      <!-- ⋯ 更多菜单（刷新缓存 / OpenList 外跳 / OpenList 域名）已上移到顶部导航栏
+           原提交下载位置（base.html 仅 /explorer 渲染，独立 Alpine 组件 navFeatureMenu），
+           工具条不再保留。 -->
     </div>
 
-    <!-- 网盘快速切换胶囊已移除：根目录的网盘卡片本身就是入口，胶囊与之重复，
-         用户明确要求去掉（手机端还白白吃掉一行）。 -->
+    <!-- 网盘快速切换胶囊已移除：根目录的搜索组件 + 工具条下拉已是全部入口。 -->
   </div>
 
   <!-- 进行中后台跨盘传输横幅通知 -->
@@ -1280,30 +1284,37 @@ window.__driveStorages = [
 
   <!-- 搜索与统计已并入上方统一工具条（.explorer-toolbar） -->
 
-  <!-- 主视图：根路径网盘列表 或 目录文件网格 -->
+  <!-- 主视图：根路径「在全部网盘查询」搜索组件 或 目录文件网格 -->
   {% if is_root %}
-    <!-- 根目录：直接把网盘铺成列表（用户要求：主页面要看得见网盘，
-         不要在根页面只放一句「点左上角选择」的引导）。 -->
-    <div class="drive-root-list">
-      {% for s in storages %}
-      <a href="/explorer?path={{ s.mount_path }}" class="drive-root-card">
-        <span class="drc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#ic-cloud"/></svg></span>
-        <span class="drc-body">
-          <span class="drc-name">{{ s.display_name }}</span>
-          <span class="drc-sub">
-            <span class="drc-path tnum">{{ s.mount_path }}</span>
-            {% if s.stats %}<span class="drc-dot">·</span> {{ s.stats.dirs }} 文件夹 · {{ s.stats.files }} 文件 · {{ s.stats.size }}{% endif %}
-          </span>
-        </span>
-        <svg class="drc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
-      </a>
-      {% else %}
-      <div class="card" style="text-align:center;padding:32px 20px;">
-        <div style="font-size:14px;color:var(--text-2);">未发现已挂载的网盘</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:6px;">请检查 OpenList 是否运行、凭据是否有效</div>
-        <a href="/settings" class="btn sm primary" style="margin-top:14px;">前往设置</a>
+    <!-- 根目录：网盘入口只剩「全部网盘」下拉（工具条），主视图改为跨网盘搜索。
+         输入防抖调 GET /api/explorer/search?q=…，点结果跳 /explorer?path=父目录。 -->
+    <div class="root-search" x-data="{ sQ: '', sLoading: false, sResults: null, sMsg: '', sSeq: 0,
+                                        doRootSearch: function (immediate) { return window.__explorerRootSearch(this, immediate); } }">
+      <div class="root-search-bar">
+        <svg class="icon root-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-search"/></svg>
+        <input class="input root-search-input" type="text" x-model="sQ"
+               placeholder="在全部网盘查询文件名，如 mp4…"
+               aria-label="在全部网盘查询"
+               @input.debounce.400ms="doRootSearch()"
+               @keydown.enter.prevent="doRootSearch(true)">
+        <button type="button" class="btn sm primary" @click="doRootSearch(true)">搜索</button>
       </div>
-      {% endfor %}
+
+      <div class="root-search-state" x-show="sLoading" style="display:none;">
+        <span class="spinner xs"></span><span style="margin-left:8px;">正在查询全部网盘…</span>
+      </div>
+      <div class="root-search-state" x-show="!sLoading && sMsg" x-text="sMsg" style="display:none;"></div>
+
+      <div class="root-search-results" x-show="!sLoading && sResults && sResults.length" style="display:none;">
+        <template x-for="r in sResults" :key="r.path">
+          <a class="root-search-row" :href="'/explorer?path=' + encodeURIComponent(r.path.substring(0, r.path.lastIndexOf('/')) || '/')">
+            <span class="rsr-badge" x-text="'[' + (r.drive_label || '网盘') + ']'"></span>
+            <span class="rsr-ico" x-show="r.is_dir">📁</span>
+            <span class="rsr-name" x-text="r.name" :title="r.path"></span>
+            <span class="rsr-meta" x-text="(r.size_human || '—') + (r.modified ? ' · ' + r.modified : '')"></span>
+          </a>
+        </template>
+      </div>
     </div>
 
   {% else %}

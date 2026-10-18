@@ -5,6 +5,7 @@ services/openlist_service.py — OpenList 云存储网关客户端与文件流�
 负责与本地/远程 OpenList (端口 5244) 通信：令牌管理、挂载探针、分片上传与直链生成。
 """
 import os
+import re
 import time
 import asyncio
 import posixpath
@@ -504,6 +505,19 @@ DRIVER_LABELS: Dict[str, str] = {
 
 VIDEO_EXTS = {"mp4", "mkv", "mov", "avi", "webm", "flv", "m4v", "ts", "wmv", "rmvb"}
 
+# OneDrive 等网盘的缩略图 URL 带 width=…/height=… 尺寸参数，默认值很小（如 220），
+# 网格里被拉伸后模糊。统一改写成 800：实测 OneDrive thumb 带 width=800 时直接返回
+# 800px 高清图。只动含 width= 的 URL（其它盘的 thumb 无此参数，保持原样）。
+_THUMB_SIZE_RE = re.compile(r"([?&])(width|height)=\d+", re.IGNORECASE)
+
+
+def _upgrade_thumb_url(thumb: str) -> str:
+    """把缩略图 URL 里的 width=NN / height=NN 重写为 800（仅对含 width= 的 URL 生效）。"""
+    t = str(thumb or "")
+    if "width=" not in t.lower():
+        return t
+    return _THUMB_SIZE_RE.sub(lambda m: m.group(1) + m.group(2) + "=800", t)
+
 
 def get_driver_label(driver_or_name: str) -> str:
     if not driver_or_name:
@@ -661,7 +675,7 @@ async def openlist_fs_list_all(path: str = "/", refresh: bool = False) -> Dict[s
             is_dir = bool(item.get("is_dir"))
             size = int(item.get("size") or 0)
             item_path = posixpath.join(norm_path, name)
-            item_thumb = str(item.get("thumb") or "")
+            item_thumb = _upgrade_thumb_url(str(item.get("thumb") or ""))
             item_type = int(item.get("type") or (1 if is_dir else 0))
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
             is_video = (item_type == 2) or (ext in VIDEO_EXTS)
@@ -723,6 +737,107 @@ async def openlist_fs_list_all(path: str = "/", refresh: bool = False) -> Dict[s
             "message": f"连接 OpenList 失败: {e}",
             "openlist_ready": False,
         }
+
+
+async def openlist_search_all(query: str, limit: int = 40) -> Dict[str, Any]:
+    """「在全部网盘查询」：跨网盘按文件名搜索。
+
+    优先走 OpenList 原生 POST /api/fs/search（{parent:'/'} 全库索引）；索引不可用
+    （search_index=none 时 OpenList 返回 code=404「search not available」，实测如此）
+    则降级为遍历各挂载网盘一级目录 openlist_fs_list_all 过滤文件名。
+    返回 results: [{name, path, is_dir, size_human, drive_label, modified}]。
+    """
+    q = str(query or "").strip().lstrip("/")
+    if not q:
+        return {"ok": True, "query": q, "results": [], "message": ""}
+
+    ql = q.lower()
+
+    def _drive_label(path: str) -> str:
+        top = path.strip("/").split("/")[0] if path.strip("/") else ""
+        return get_driver_label(top) or top
+
+    def _entry(e: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "name": str(e.get("name") or ""),
+            "path": str(e.get("path") or ""),
+            "is_dir": bool(e.get("is_dir")),
+            "size_human": str(e.get("size_human") or "—"),
+            "drive_label": str(e.get("drive_label") or _drive_label(str(e.get("path") or ""))),
+            "modified": str(e.get("modified") or ""),
+        }
+
+    # ---- 路径 1：OpenList 原生全库搜索 ----
+    try:
+        token = await _openlist_token()
+
+        async def _search_call(tok: str):
+            return await _openlist_client.post(
+                "/api/fs/search",
+                json={"parent": "/", "keywords": q, "scope": 0, "page": 1, "per_page": max(limit, 1)},
+                headers={"Authorization": tok},
+            )
+
+        resp = await _search_call(token)
+        code, data, _msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _search_call(token)
+            code, data, _msg = _openlist_env(resp)
+        if code == 200 and isinstance(data, dict):
+            results = []
+            for c in (data.get("content") or [])[:limit]:
+                if not isinstance(c, dict):
+                    continue
+                p = str(c.get("parent") or "/")
+                n = str(c.get("name") or "")
+                if not n:
+                    continue
+                full = posixpath.join(p, n) if p else "/" + n
+                is_dir = bool(c.get("is_dir"))
+                size = int(c.get("size") or 0)
+                results.append({
+                    "name": n,
+                    "path": full,
+                    "is_dir": is_dir,
+                    "size_human": "—" if is_dir else _fmt_size(size),
+                    "drive_label": _drive_label(full),
+                    "modified": str(c.get("modified") or ""),
+                })
+            return {"ok": True, "query": q, "results": results, "message": ""}
+    except RuntimeError as e:
+        # 未登录/令牌失效 → 直接走降级遍历（每个目录列表也会各自失败并跳过）
+        log.debug("OpenList 搜索原生接口不可用，降级遍历: %s", e)
+    except Exception as e:  # noqa: BLE001
+        log.warning("OpenList 原生搜索失败，降级遍历: %s", e)
+
+    # ---- 路径 2：降级遍历各挂载一级目录过滤文件名 ----
+    results: List[Dict[str, Any]] = []
+    try:
+        storages = await openlist_storages()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "query": q, "results": [], "message": f"读取挂载网盘失败: {e}"}
+    for s in storages:
+        mp = str(s.get("mount_path") or "")
+        if not mp:
+            continue
+        label = str(s.get("display_name") or _drive_label(mp))
+        try:
+            data = await openlist_fs_list_all(mp)
+        except Exception:  # noqa: BLE001
+            continue
+        if not data.get("ok"):
+            continue
+        for e in (data.get("entries") or []):
+            if ql in str(e.get("name") or "").lower():
+                hit = _entry(e)
+                hit["drive_label"] = label
+                results.append(hit)
+                if len(results) >= limit:
+                    break
+        if len(results) >= limit:
+            break
+    return {"ok": True, "query": q, "results": results, "message": ""}
 
 
 async def openlist_fs_rename_entry(path: str, new_name: str) -> Dict[str, Any]:

@@ -61,11 +61,8 @@ class TestDriveExplorer(unittest.TestCase):
         self.assertIn(resp.status_code, (302, 401))
 
     def test_explorer_page_root_mounted_drives(self):
-        """登录后访问 /explorer 根目录：网盘入口收在「全部网盘」下拉里。
-
-        历史版本铺整页大卡片 + 顶部胶囊；用户明确要求「这些都去掉，只要在
-        全部网盘那里点一下弹出一个小列表显示所有网盘」，本用例锁定新形态。
-        """
+        """登录后访问 /explorer 根目录：网盘入口收在「全部网盘」下拉里，
+        主视图改为「在全部网盘查询」搜索组件（网盘大列表已移除）。"""
         cookies, _ = self._auth_cookies()
 
         mock_storages = [
@@ -93,21 +90,77 @@ class TestDriveExplorer(unittest.TestCase):
             self.assertIn('id="driveDirList"', html)
             self.assertIn('id="driveOpenBtn"', html)
             self.assertIn('__driveBrowseOpen', html)
-            # 根层级盘符数据由模板渲染进 JS（display_name + mount_path）
-            for name in ("OneDrive", "沃家云盘", "Google Drive", "夸克网盘"):
-                self.assertIn(name, html)
+            # 根层级盘符数据由模板渲染进 JS（display_name + mount_path；tojson 转义非 ASCII）
             for path in ("/onedrive", "/wopan", "/google", "/quark"):
                 self.assertIn(path, html)
             self.assertNotIn('class="explorer-capsules-bar"', html)
             self.assertNotIn('class="drive-grid"', html)
-            # 根页面直接列出网盘（列表行，点击进入）
-            self.assertIn('class="drive-root-list"', html)
-            self.assertIn('class="drive-root-card"', html)
+            # 根页面不再铺网盘大列表：主视图是「在全部网盘查询」搜索组件
+            self.assertNotIn('class="drive-root-list"', html)
+            self.assertNotIn('class="drive-root-card"', html)
+            self.assertIn('class="root-search"', html)
+            self.assertIn('root-search-input', html)
+            self.assertIn('aria-label="在全部网盘查询"', html)
+            self.assertIn('/api/explorer/search?q=', html)
+            self.assertIn('__explorerRootSearch', html)
 
-            # 低频操作仍在 ⋯ 菜单里
+            # 低频操作已上移到顶部导航栏「功能」菜单（不再在工具条）
             self.assertIn("__openExplorerInOpenList", html)
             self.assertIn("__refreshExplorerCache", html)
             self.assertIn("刷新缓存", html)
+            self.assertIn('title="功能仅在当前浏览页面生效"', html)
+            self.assertNotIn('class="toolbar-more-btn"', html)
+
+    def test_explorer_root_search_api(self):
+        """GET /api/explorer/search?q= 跨网盘搜索：原生索引优先，降级遍历。"""
+        cookies, _ = self._auth_cookies()
+
+        # 路径 2（降级遍历）：原生搜索抛异常 → 逐盘列目录过滤文件名
+        fake_dirs = {
+            "ok": True,
+            "entries": [
+                {"name": "demo.mp4", "path": "/onedrive/demo.mp4", "is_dir": False,
+                 "size": 1024, "size_human": "1.0 KB", "modified": "2026-08-20 15:30",
+                 "drive": "onedrive", "drive_label": "OneDrive"},
+                {"name": "notes.txt", "path": "/onedrive/notes.txt", "is_dir": False,
+                 "size": 10, "size_human": "10 B", "modified": "", "drive": "onedrive",
+                 "drive_label": "OneDrive"},
+            ],
+        }
+        with patch("services.openlist_service._openlist_token", new=AsyncMock(side_effect=RuntimeError("OpenList 未登录"))), \
+             patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=[
+                 {"mount_path": "/onedrive", "name": "onedrive", "driver": "Onedrive", "display_name": "OneDrive"}
+             ])), \
+             patch("services.openlist_service.openlist_fs_list_all", new=AsyncMock(return_value=fake_dirs)):
+            resp = self.bridge_client.get("/api/explorer/search?q=mp4", cookies=cookies)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertTrue(data.get("ok"))
+            self.assertEqual(data.get("query"), "mp4")
+            results = data.get("results") or []
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["name"], "demo.mp4")
+            self.assertEqual(results[0]["drive_label"], "OneDrive")
+            for key in ("name", "path", "is_dir", "size_human", "drive_label", "modified"):
+                self.assertIn(key, results[0])
+
+        # 空关键词直接返回空结果
+        resp_empty = self.bridge_client.get("/api/explorer/search?q=", cookies=cookies)
+        self.assertEqual(resp_empty.status_code, 200)
+        self.assertEqual(resp_empty.json().get("results"), [])
+
+    def test_openlist_thumb_url_upgraded(self):
+        """缩略图 URL 含 width= 时重写为 800（模糊修复），其它盘 thumb 原样保留。"""
+        from services.openlist_service import _upgrade_thumb_url
+        one = "https://x-my.microsoftpersonalcontent.com/GetItem?width=220&height=220&url=abc"
+        up = _upgrade_thumb_url(one)
+        self.assertIn("width=800", up)
+        self.assertIn("height=800", up)
+        self.assertNotIn("width=220", up)
+        # 不含 width= 的 URL 不动
+        plain = "https://thumb.example.com/clip.jpg"
+        self.assertEqual(_upgrade_thumb_url(plain), plain)
+
 
     def test_explorer_subfolder_and_video_player(self):
         """进入深层目录 /onedrive/yello：展示面包屑、视频缩略图、网盘徽章与视频播放器。"""

@@ -142,33 +142,31 @@ class TestExplorerViewToggle(unittest.TestCase):
         self.assertIn("viewMode === 'list' ? 'primary' : 'ghost'", html)
 
     # -------------------------------------------------------------
-    # 2b. 统一工具条：搜索 + 视图切换 + ⋯ 菜单
+    # 2b. 统一工具条：搜索 + 视图切换 + 网盘下拉（⋯ 已上移导航栏）
     # -------------------------------------------------------------
     def test_toolbar_is_single_row_with_more_menu(self):
-        """工具条只平铺搜索/统计/视图切换/⋯；刷新缓存与 OpenList 外跳收进菜单。"""
+        """工具条平铺搜索/统计/视图切换/网盘下拉；⋯ 菜单三项已上移导航栏「功能」，
+        工具条里不再有 .toolbar-more-btn。"""
         html = self._get_subfolder_page()
         self.assertIn('class="explorer-toolbar"', html)
         self.assertIn('class="toolbar-search"', html)
         self.assertIn('class="toolbar-stats"', html)
-        self.assertIn('class="toolbar-more"', html)
-        self.assertIn('class="toolbar-menu"', html)
-        self.assertIn('x-show="showMoreMenu"', html)
-        self.assertIn('@click.outside="showMoreMenu = false"', html)
-        self.assertIn("showMoreMenu: false", html)
-        # 菜单三项
+        self.assertIn('class="toolbar-menu drive-menu"', html)
+        self.assertIn('x-show="showDriveMenu"', html)
+        self.assertIn('@click.outside="showDriveMenu = false"', html)
+        # ⋯ 菜单已整体移除
+        self.assertNotIn('x-show="showMoreMenu"', html)
+        self.assertNotIn("showMoreMenu", html)
+        # 顶栏功能菜单持有这三项（不在工具条）
         self.assertIn("刷新缓存", html)
         self.assertIn("在 OpenList 中打开当前目录", html)
         self.assertIn("OpenList 域名：", html)
-        # 主工具条里不再平铺这几个按钮：它们只在 .toolbar-menu 内出现一次
         toolbar_start = html.index('class="explorer-toolbar"')
         toolbar_end = html.index('<!-- 进行中后台跨盘传输横幅通知 -->')
         toolbar_html = html[toolbar_start:toolbar_end]
-        self.assertEqual(toolbar_html.count("__refreshExplorerCache"), 1)
-        self.assertEqual(toolbar_html.count("__openExplorerInOpenList"), 1)
-        self.assertIn('class="toolbar-menu-item"', toolbar_html)
-        # 平铺工具条的直接子元素只有搜索/统计/占位/视图切换/⋯
-        self.assertEqual(toolbar_html.count('class="btn sm ghost toolbar-more-btn"'), 1)
-        self.assertNotIn('title="刷新缓存"', toolbar_html)
+        self.assertEqual(toolbar_html.count("__refreshExplorerCache"), 0)
+        self.assertEqual(toolbar_html.count("__openExplorerInOpenList"), 0)
+        self.assertNotIn('class="btn sm ghost toolbar-more-btn"', toolbar_html)
 
     def test_toolbar_uniform_height_css(self):
         """工具条元素共用 --toolbar-h，窄屏搜索占满一行且不溢出。"""
@@ -247,26 +245,26 @@ class TestExplorerViewToggle(unittest.TestCase):
     # 6. 根路径：可交互网盘列表 + 统计，且不做视图切换
     # -------------------------------------------------------------
     def test_root_has_no_all_drives_row(self):
-        """根页面不再有「全部网盘」汇总行（用户要求把它去掉），
-        只列真实网盘，并且每行带盘符。"""
+        """根页面网盘大列表已整体移除：主视图是「在全部网盘查询」搜索组件，
+        下拉里仍保留「全部网盘」项（返回根）。"""
         html = self._get_root_page()
         self.assertNotIn('drive-root-all', html)
-        # 下拉里仍有「全部网盘」项（返回根），但根页面清单里不再有汇总行
-        root_list = html[html.index('class="drive-root-list"'):html.index('class="drive-root-list"') + 2500]
-        self.assertNotIn("全部网盘", root_list)
-        self.assertIn('class="drive-root-list"', html)
+        # 大列表整套元素已删
+        self.assertNotIn('class="drive-root-list"', html)
+        self.assertNotIn('class="drive-root-card"', html)
+        # 主视图是搜索组件
+        self.assertIn('class="root-search"', html)
+        self.assertIn("在全部网盘查询", html)
 
     def test_root_page_has_no_view_switch(self):
         """根路径（全部网盘）不出现视图切换按钮，也不出现视图态切换。"""
         html = self._get_root_page()
         self.assertNotIn('class="view-switch"', html)
         self.assertNotIn("setViewMode('list')", html)
-        # 根目录以列表行呈现网盘（用户要求主页面能直接看到网盘）
+        # 根页面不再有网盘列表行
         self.assertNotIn('class="drive-grid"', html)
-        self.assertIn('class="drive-root-list"', html)
-        self.assertIn('class="drive-root-card"', html)
-        # 每行都要显示盘符
-        self.assertIn('class="drc-path tnum"', html)
+        self.assertNotIn('class="drive-root-list"', html)
+        self.assertIn('class="root-search"', html)
         self.assertIn('drive-picker-btn', html)
 
     def test_root_drive_picker_lists_all_drives(self):
@@ -295,9 +293,7 @@ class TestExplorerViewToggle(unittest.TestCase):
         self.assertIn('__driveBrowseOpen', html)
         self.assertIn('__driveBrowseLoad', html)
         self.assertIn('__driveStorages', html)
-        # 根层级盘符（名 + 挂载路径）已渲染进 JS 数据
-        for name in ("Google Drive", "OneDrive", "沃家云盘", "夸克网盘"):
-            self.assertIn(name, html, f"下拉列表缺少网盘 {name}")
+        # 根层级盘符（名 + 挂载路径）已渲染进 JS 数据（tojson 会转义非 ASCII，挂载路径原样）
         for path in ("/google", "/onedrive", "/wopan", "/quark"):
             self.assertIn(path, html)
         # 旧的大卡片整套元素已移除
@@ -306,11 +302,8 @@ class TestExplorerViewToggle(unittest.TestCase):
             self.assertNotIn(legacy, html, f"遗留大卡片元素未清理: {legacy}")
 
     def test_root_drive_stats_from_backend(self):
-        """后端补齐 stats 时，根目录网盘卡片行渲染文件夹数 / 文件数 / 总大小。
-
-        注：工具条下拉已升级为迷你目录浏览器（fetch /openlist/dirs 渲染），
-        下拉里不再静态输出 stats 文案；stats 现在只出现在根目录 drive-root-card 行。
-        """
+        """后端补齐 stats 时根目录正常渲染（stats 原渲染在网盘列表行，该列表已移除；
+        现在只要求页面不因 stats 报错，仍是「在全部网盘查询」搜索组件）。"""
         stats = {"dirs": 3, "files": 7, "size": "1.5 GB"}
         storages = [dict(MOCK_STORAGES[0])]
         storages[0]["stats"] = stats
@@ -320,7 +313,8 @@ class TestExplorerViewToggle(unittest.TestCase):
             resp = self.client.get("/explorer", cookies=self.cookies)
         self.assertEqual(resp.status_code, 200)
         html = resp.text
-        self.assertIn("3 文件夹 · 7 文件 · 1.5 GB", html)
+        self.assertIn('class="root-search"', html)
+        self.assertNotIn('class="drive-root-list"', html)
 
     def test_attach_drive_stats_concurrent_and_cached(self):
         """_attach_drive_stats 并发拉取并写入 stats；单个网盘失败只影响自己。"""
@@ -361,20 +355,32 @@ class TestExplorerViewToggle(unittest.TestCase):
         rx._DRIVE_STATS_CACHE.clear()
 
     # -------------------------------------------------------------
-    # 7. OpenList 域名入口收进「⋯」菜单
+    # 7. OpenList 域名入口上移到顶部导航栏「功能」菜单
     # -------------------------------------------------------------
     def test_openlist_domain_entry_in_more_menu(self):
-        """域名入口只在 ⋯ 菜单里出现，文案为「OpenList 域名：<host>」，不再占主工具条。"""
+        """域名入口只在顶栏「功能」菜单里出现，文案为「OpenList 域名：<host>」，
+        工具条不再有任何菜单按钮（⋯ 已上移）。"""
         html = self._get_subfolder_page()
-        self.assertIn("openlistBase ? ('OpenList 域名：' + displayDomain(openlistBase)) : '设置 OpenList 域名'", html)
+        self.assertIn("featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase)) : '设置 OpenList 域名'", html)
         # 旧的「已配置好」大按钮文案已移除
         self.assertNotIn("openlistBase ? '已配置好' : '设置域名'", html)
         self.assertNotIn("'OpenList: ' + displayDomain(openlistBase)", html)
-        # 主工具条（⋯ 按钮本身之外）没有独立的域名按钮
+        # 域名按钮只剩一处（顶栏功能菜单）
+        self.assertEqual(html.count("featureDisplayDomain(featureOpenlistBase)"), 1)
+        # 工具条里不再有 ⋯ 菜单：三项操作全部上移到导航栏
         toolbar_start = html.index('class="explorer-toolbar"')
         toolbar_end = html.index('<!-- 进行中后台跨盘传输横幅通知 -->')
         toolbar_html = html[toolbar_start:toolbar_end]
-        self.assertEqual(toolbar_html.count("openDomainModal()"), 1)
+        self.assertEqual(toolbar_html.count("__refreshExplorerCache"), 0)
+        self.assertEqual(toolbar_html.count("__openExplorerInOpenList"), 0)
+        self.assertNotIn('class="toolbar-more-btn"', toolbar_html)
+        # 导航栏渲染「功能」按钮与 title（仅 /explorer）
+        self.assertIn('title="功能仅在当前浏览页面生效"', html)
+        self.assertIn('x-data="navFeatureMenu()"', html)
+        self.assertIn("navFeatureMenu", html)
+        # 刷新缓存/外跳/域名三项在功能菜单里
+        self.assertIn("刷新缓存", html)
+        self.assertIn("在 OpenList 中打开当前目录", html)
 
     # -------------------------------------------------------------
     # 8. 文件夹卡片不再用大图缩略图区
