@@ -1315,6 +1315,14 @@ window.__explorerRootSearch = async function (comp, immediate) {
           </a>
         </template>
       </div>
+
+      {% if not storages %}
+      <div class="card" style="text-align:center;padding:32px 20px;">
+        <div style="font-size:14px;color:var(--text-2);">未发现已挂载的网盘</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:6px;">请检查 OpenList 是否运行、凭据是否有效</div>
+        <a href="/settings" class="btn sm primary" style="margin-top:14px;">前往设置</a>
+      </div>
+      {% endif %}
     </div>
 
   {% else %}

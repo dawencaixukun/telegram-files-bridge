@@ -159,13 +159,14 @@
             <div class="dropdown" :class="{'show': open}" x-cloak
                  style="right:0;left:auto;min-width:236px;">
               <button type="button" class="dd-item" role="menuitem"
-                      onclick="window.__refreshExplorerCache('{{ current_path }}'); open = false;">
+                      data-refresh-path="{{ current_path }}"
+                      onclick="window.__refreshExplorerCache(this.getAttribute('data-refresh-path')); closeNavFeatureMenu();">
                 <svg><use href="#ic-refresh"/></svg><span>刷新缓存</span>
               </button>
               <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
                  class="dd-item" role="menuitem"
                  data-cloud-path="{{ current_path }}"
-                 onclick="open = false; return window.__openExplorerInOpenList(this, event);">
+                 onclick="closeNavFeatureMenu(); return window.__openExplorerInOpenList(this, event);">
                 <svg><use href="#ic-external"/></svg><span>在 OpenList 中打开当前目录</span>
               </a>
               <button type="button" class="dd-item" role="menuitem" @click="open = false; openFeatureDomainModal()">
@@ -286,6 +287,11 @@
       } else if (window.__toast) {
         window.__toast('页面尚未就绪，请稍后再试', 'warning');
       }
+    };
+    /* 内联 onclick 关闭功能菜单：Alpine 组件的 open 状态通过 _x_dataStack 取（裸 open 会撞 document.open） */
+    window.closeNavFeatureMenu = function () {
+      var alp = document.querySelector('.nav-feature-menu');
+      if (alp && alp._x_dataStack && alp._x_dataStack[0]) alp._x_dataStack[0].open = false;
     };
   </script>
   {% endif %}
