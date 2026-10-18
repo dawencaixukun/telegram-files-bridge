@@ -150,12 +150,11 @@
                独立 Alpine 组件：顶栏在 driveExplorer() x-data 作用域之外。 -->
           {% if active_page == 'explorer' %}
           <div class="nav-feature-menu" x-data="navFeatureMenu()" @click.outside="open = false" @keydown.escape.window="open = false">
-            <button type="button" class="btn primary" @click="toggle()"
-                    :class="open ? 'primary' : 'primary'"
+            <button type="button" class="icon-btn" @click="toggle()"
                     :aria-expanded="open ? 'true' : 'false'"
                     aria-haspopup="menu"
                     title="功能仅在当前浏览页面生效">
-              <svg class="icon"><use href="#ic-cog"/></svg><span>功能</span>
+              <svg><use href="#ic-cog"/></svg>
             </button>
             <div class="dropdown" :class="{'show': open}" x-cloak
                  style="right:0;left:auto;min-width:236px;">
