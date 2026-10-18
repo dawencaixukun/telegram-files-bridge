@@ -61,7 +61,11 @@ class TestDriveExplorer(unittest.TestCase):
         self.assertIn(resp.status_code, (302, 401))
 
     def test_explorer_page_root_mounted_drives(self):
-        """登录后访问 /explorer 根目录：展示所有已挂载网盘大卡片、快捷胶囊与导航高亮。"""
+        """登录后访问 /explorer 根目录：网盘入口收在「全部网盘」下拉里。
+
+        历史版本铺整页大卡片 + 顶部胶囊；用户明确要求「这些都去掉，只要在
+        全部网盘那里点一下弹出一个小列表显示所有网盘」，本用例锁定新形态。
+        """
         cookies, _ = self._auth_cookies()
 
         mock_storages = [
@@ -81,19 +85,26 @@ class TestDriveExplorer(unittest.TestCase):
             self.assertIn('href="/explorer"', html)
             self.assertIn("全部网盘", html)
 
-            # 网盘大卡片包含 OneDrive、沃家云盘、Google Drive、夸克网盘
-            self.assertIn("OneDrive", html)
-            self.assertIn("沃家云盘", html)
-            self.assertIn("Google Drive", html)
-            self.assertIn("夸克网盘", html)
-            self.assertIn("进入网盘 →", html)
+            # 网盘入口：工具条下拉已升级为迷你目录浏览器（形态对齐归档弹窗目录选择器）
+            self.assertIn('drive-picker-btn', html)
+            self.assertIn('x-show="showDriveMenu"', html)
+            # 面板骨架：面包屑 + 目录列表 + 底栏「打开当前目录」
+            self.assertIn('id="driveCrumb"', html)
+            self.assertIn('id="driveDirList"', html)
+            self.assertIn('id="driveOpenBtn"', html)
+            self.assertIn('__driveBrowseOpen', html)
+            # 根层级盘符数据由模板渲染进 JS（display_name + mount_path）
+            for name in ("OneDrive", "沃家云盘", "Google Drive", "夸克网盘"):
+                self.assertIn(name, html)
+            for path in ("/onedrive", "/wopan", "/google", "/quark"):
+                self.assertIn(path, html)
+            self.assertNotIn('class="explorer-capsules-bar"', html)
+            self.assertNotIn('class="drive-grid"', html)
+            # 根页面直接列出网盘（列表行，点击进入）
+            self.assertIn('class="drive-root-list"', html)
+            self.assertIn('class="drive-root-card"', html)
 
-            # 常用网盘快速切换胶囊包含各网盘
-            self.assertIn('class="explorer-capsules-bar"', html)
-            self.assertIn("/explorer?path=/onedrive", html)
-            self.assertIn("/explorer?path=/wopan", html)
-
-            # 顶栏包含在 OpenList 打开、强制刷新缓存
+            # 低频操作仍在 ⋯ 菜单里
             self.assertIn("__openExplorerInOpenList", html)
             self.assertIn("__refreshExplorerCache", html)
             self.assertIn("刷新缓存", html)

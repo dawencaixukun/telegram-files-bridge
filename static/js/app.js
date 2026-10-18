@@ -197,7 +197,7 @@
     if (!stack) return;
     var el = document.createElement('div');
     el.className = 'toast ' + (type || 'success');
-    var icon = type === 'error' ? 'ic-alert' : (type === 'info' ? 'ic-info' : 'ic-check');
+    var icon = type === 'error' ? 'ic-alert' : (type === 'info' ? 'ic-info' : (type === 'warn' ? 'ic-alert' : 'ic-check'));
     // msg/sub 来自后端错误文本（不可信），必须用 textContent 注入，不能 innerHTML
     var box = document.createElement('div');
     var line = document.createElement('div');
@@ -740,6 +740,195 @@
     window.__archDropdownClose();
   };
 
+  /* ====================================================================
+     explorer 工具条「全部网盘」迷你目录浏览器（形态对齐上面的归档选择器）。
+     数据源同为 GET /openlist/dirs?path=…；面板内逐级浏览不跳页，
+     底栏「打开当前目录」才导航 /explorer?path=当前路径。
+     挂载盘名/路径由 explorer.html 渲染进 window.__driveStorages。
+     ==================================================================== */
+  var driveBrowsePath = '/';                  // 面板当前所在路径
+  window.__driveBrowseLast = '';              // 收起再展开时回到的位置（会话内记忆）
+  window.__driveStorages = [];                // [{display_name, mount_path}]
+
+  var driveBrowseLoadSeq = 0;                 // 请求序号：只采纳最后一次的响应
+
+  window.__driveBrowseLoad = function (path) {
+    var list = document.getElementById('driveDirList');
+    var crumb = document.getElementById('driveCrumb');
+    if (!list || !crumb) return;
+    driveBrowsePath = path || '/';
+    window.__driveBrowseLast = driveBrowsePath;
+    var openBtn = document.getElementById('driveOpenBtn');
+    var rootHint = document.getElementById('driveRootHint');
+
+    // 面包屑：根目录（全部网盘） / onedrive / yello，各段可点回跳
+    while (crumb.firstChild) crumb.removeChild(crumb.firstChild);
+    (function buildCrumb() {
+      var segs = (driveBrowsePath || '/').split('/').filter(Boolean);
+      var acc = '';
+      function add(label, fullPath, isLast) {
+        var a = document.createElement('a');
+        a.className = isLast ? 'crumb-link cur' : 'crumb-link';
+        a.textContent = label;
+        if (!isLast) {
+          a.setAttribute('href', 'javascript:void(0)');
+          a.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__driveBrowseLoad(fullPath);
+          });
+        }
+        crumb.appendChild(a);
+        if (!isLast) {
+          var sep = document.createElement('span');
+          sep.className = 'crumb-sep';
+          sep.textContent = '/';
+          crumb.appendChild(sep);
+        }
+      }
+      add('根目录（全部网盘）', '/', segs.length === 0);
+      for (var i = 0; i < segs.length; i++) {
+        acc += '/' + segs[i];
+        add(segs[i], acc, i === segs.length - 1);
+      }
+    })();
+
+    // 底栏按钮：根目录禁用并提示先进入某网盘
+    if (openBtn) {
+      var atRoot = !driveBrowsePath || driveBrowsePath === '/';
+      openBtn.disabled = atRoot;
+      openBtn.title = atRoot ? '请先点击进入某个网盘' : '打开 ' + driveBrowsePath;
+    }
+    if (rootHint) rootHint.style.display = '';
+
+    function renderErr(msg) {
+      list.textContent = '';
+      var errRow = document.createElement('div');
+      errRow.style.padding = '10px';
+      errRow.style.color = 'var(--err)';
+      errRow.style.fontSize = '12px';
+      errRow.textContent = msg;
+      list.appendChild(errRow);
+    }
+
+    // 根层级：直接列出各挂载盘（display_name + mount_path 小字），不发请求
+    if (!driveBrowsePath || driveBrowsePath === '/') {
+      list.textContent = '';
+      var mounts = window.__driveStorages || [];
+      if (!mounts.length) {
+        renderErr('未发现已挂载的网盘');
+        return;
+      }
+      mounts.forEach(function (s) {
+        var row = document.createElement('div');
+        row.className = 'arch-dir-row';
+        row.title = (s.display_name || '') + '（' + (s.mount_path || '') + '）';
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+        var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', '#ic-cloud');
+        svg.appendChild(use);
+        var ico = document.createElement('span');
+        ico.className = 'arch-dir-ico';
+        ico.appendChild(svg);
+        row.appendChild(ico);
+        var name = document.createElement('span');
+        name.className = 'd-name';
+        name.textContent = s.display_name || s.mount_path;
+        row.appendChild(name);
+        var mount = document.createElement('span');
+        mount.className = 'dm-mount tnum';
+        mount.textContent = s.mount_path || '';
+        row.appendChild(mount);
+        row.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__driveBrowseLoad(s.mount_path || ('/' + (s.name || '')));
+        });
+        list.appendChild(row);
+      });
+      return;
+    }
+
+    // 非根层级：请求该目录的子目录列表，首行「⮬ 返回上一级」
+    list.innerHTML = '<div style="padding:10px 12px;color:var(--text-3);font-size:12px;">正在读取目录…</div>';
+    var loadSeq = ++driveBrowseLoadSeq;
+    fetch('/openlist/dirs?path=' + encodeURIComponent(driveBrowsePath))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (loadSeq !== driveBrowseLoadSeq) return;
+        list.textContent = '';
+        if (!d || !d.ok) { renderErr((d && d.message) || '读取目录失败'); return; }
+        var pSegs = driveBrowsePath.split('/').filter(Boolean);
+        pSegs.pop();
+        var pPath = pSegs.length ? ('/' + pSegs.join('/')) : '/';
+        var upRow = document.createElement('div');
+        upRow.className = 'arch-dir-row arch-up-row';
+        var upSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        upSvg.setAttribute('viewBox', '0 0 24 24'); upSvg.setAttribute('fill', 'none');
+        upSvg.setAttribute('stroke', 'currentColor'); upSvg.setAttribute('stroke-width', '2');
+        var upUse = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        upUse.setAttribute('href', '#ic-chevron');
+        upSvg.appendChild(upUse);
+        upSvg.style.transform = 'rotate(90deg)';
+        upSvg.className = 'arch-up-icon';
+        upRow.appendChild(upSvg);
+        var upName = document.createElement('span');
+        upName.className = 'd-name';
+        upName.textContent = pPath === '/' ? '⮬ 返回根目录 (切换其他网盘)' : '⮬ 返回上一级';
+        upRow.appendChild(upName);
+        upRow.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__driveBrowseLoad(pPath);
+        });
+        list.appendChild(upRow);
+        var dirs = d.dirs || [];
+        if (!dirs.length) {
+          var empty = document.createElement('div');
+          empty.className = 'arch-dir-empty';
+          empty.textContent = '此目录下没有子目录';
+          list.appendChild(empty);
+          return;
+        }
+        dirs.forEach(function (dir) {
+          var row = document.createElement('div');
+          row.className = 'arch-dir-row';
+          var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+          svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+          var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+          use.setAttribute('href', '#ic-folder');
+          svg.appendChild(use);
+          var ico = document.createElement('span');
+          ico.className = 'arch-dir-ico';
+          ico.appendChild(svg);
+          row.appendChild(ico);
+          var name = document.createElement('span');
+          name.className = 'd-name';
+          name.textContent = dir.name;
+          row.appendChild(name);
+          row.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__driveBrowseLoad(dir.path);
+          });
+          list.appendChild(row);
+        });
+      })
+      .catch(function () {
+        if (loadSeq === driveBrowseLoadSeq) renderErr('网络错误，读取目录失败');
+      });
+  };
+
+  // 底栏「打开当前目录」：页面导航到 /explorer?path=…（根目录按钮已禁用）
+  window.__driveBrowseOpen = function () {
+    var p = driveBrowsePath || '/';
+    if (!p || p === '/') return;
+    window.location.href = '/explorer?path=' + encodeURIComponent(p);
+  };
+
   window.__startArchive = function (evt) {
     evt.preventDefault();
     if (!archItems || !archItems.length) {
@@ -773,14 +962,34 @@
     if (archDelLocalExplicit) archBody.deleteLocal = deleteLocal;
 
     postJSON('/archive/start', archBody).then(function (r) { return r.json(); }).then(function (d) {
+      // 后端只要有一个任务成功就返回 ok:true，同时在 errors 里列出被跳过的文件。
+      // 旧前端完全不读 errors —— 用户批量选 20 个、实际只进了 1 个，界面照样弹
+      // 「已加入归档队列」，这正是「批量上传失败」的观感来源之一。必须报出来。
+      var errs = (d && d.errors) || [];
       if (d && d.ok) {
         window.__closeArchive();
+        var started = (typeof d.started === 'number') ? d.started : (uids.length - errs.length);
         var label = uids.length === 1 ? (archItems[0].filename || '文件') : ('批量 ' + uids.length + ' 个文件');
-        window.__toast('已加入归档队列', 'success', label + ' → ' + dir + (deleteLocal ? '（归档后将自动删除本地）' : ''));
+        if (errs.length) {
+          // 部分成功：用 warn 级提示，并把首批被跳过文件的原因写给用户
+          var head = errs.slice(0, 3).map(function (e) {
+            var nm = archItems.filter(function (it) { return it.uniqueId === e.uniqueId; })[0];
+            return (nm && nm.filename ? nm.filename : e.uniqueId) + '：' + (e.message || '未归档');
+          }).join('\n');
+          window.__toast(
+            '部分文件未加入队列（' + started + '/' + uids.length + ' 已加入）',
+            'warn',
+            head + (errs.length > 3 ? ('\n…另有 ' + (errs.length - 3) + ' 个') : '')
+          );
+        } else {
+          window.__toast('已加入归档队列', 'success', label + ' → ' + dir + (deleteLocal ? '（归档后将自动删除本地）' : ''));
+        }
         if (window.__localClearSelection) window.__localClearSelection();
         __archPollStart();
       } else {
-        window.__toast('归档提交失败', 'error', (d && d.message) || '后端返回错误');
+        var msg = (d && d.message) || '后端返回错误';
+        if (errs.length) msg += '\n' + errs.slice(0, 3).map(function (e) { return e.message || ''; }).filter(Boolean).join('\n');
+        window.__toast('归档提交失败', 'error', msg);
       }
       if (submitBtn) submitBtn.disabled = false;
       return null;
@@ -1039,14 +1248,21 @@
       return;
     }
     if (unarchivable > 0) {
-      if (!confirm('选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？')) {
-        return;
-      }
-      items = items.filter(function (it) { return it.archEnabled; });
-      if (!items.length) {
-        window.__toast('没有已完成下载、可归档的文件', 'error');
-        return;
-      }
+      var proceed = window.__uiConfirm && window.__uiConfirm({
+        title: '部分文件无法归档',
+        body: '选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？',
+        okText: '跳过并继续'
+      }) || Promise.resolve(window.confirm('选中的文件中有 ' + unarchivable + ' 个尚未下载完成（无法归档），是否跳过未完成文件，继续对其余 ' + (items.length - unarchivable) + ' 个文件进行归档？'));
+      proceed.then(function (ok) {
+        if (!ok) return;
+        items = items.filter(function (it) { return it.archEnabled; });
+        if (!items.length) {
+          window.__toast('没有已完成下载、可归档的文件', 'error');
+          return;
+        }
+        window.__openArchive(items);
+      });
+      return;
     }
     window.__openArchive(items);
   };
@@ -1058,9 +1274,17 @@
       window.__toast('缺少文件 ID，无法删除', 'error');
       return;
     }
-    if (!window.confirm('确定要彻底删除本地原文件吗？\n\n文件名: ' + filename + '\n\n删除后将永久释放磁盘空间，无法恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '删除本地原文件',
+          danger: true,
+          okText: '删除',
+          meta: [['文件名', filename]],
+          warn: '删除后立即释放磁盘空间，无法恢复'
+        })
+      : Promise.resolve(window.confirm('确定要彻底删除本地原文件吗？\n\n文件名: ' + filename + '\n\n删除后将永久释放磁盘空间，无法恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     postJSON('/library/local/delete', { uniqueId: uid })
       .then(function (r) { return r.json(); })
@@ -1080,6 +1304,7 @@
         btn.disabled = false;
         window.__toast('删除本地文件失败', 'error', '网络错误');
       });
+    });
   };
 
   window.__bulkDeleteLocal = function () {
@@ -1092,9 +1317,16 @@
       window.__toast('单次最多批量删除 100 个文件', 'error');
       return;
     }
-    if (!window.confirm('确定要彻底删除选中的 ' + uids.length + ' 个本地原文件吗？\n\n此操作将永久释放磁盘空间，无法恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '批量删除本地原文件',
+          danger: true,
+          okText: '删除 ' + uids.length + ' 个',
+          warn: '此操作将永久释放磁盘空间，无法恢复'
+        })
+      : Promise.resolve(window.confirm('确定要彻底删除选中的 ' + uids.length + ' 个本地原文件吗？\n\n此操作将永久释放磁盘空间，无法恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     var btn = document.getElementById('btnBatchDelete');
     if (btn) btn.disabled = true;
     postJSON('/library/local/delete', { uniqueIds: uids })
@@ -1117,9 +1349,122 @@
         if (btn) btn.disabled = false;
         window.__toast('批量删除失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---------------- 云端归档增强：云端删除、失效清理、文件取回与轮询 ---------------- */
+  /* ---- 云端改名：OpenList 与本地记录同步 ---- */
+  window.__renameCloudFile = function (btn) {
+    var path = btn.getAttribute('data-cloud-path');
+    var filename = btn.getAttribute('data-filename') || '';
+    if (!path) {
+      window.__toast('缺少云端路径，无法改名', 'error');
+      return;
+    }
+    window.__uiPrompt({
+      title: '重命名云端文件',
+      label: '新文件名',
+      value: filename,
+      okText: '改名',
+      meta: [['云端路径', path]],
+      hint: '只改文件名，目录不变；不带后缀时自动保留原后缀。改名同步 OpenList 云端与本地记录。'
+    }).then(function (newName) {
+      if (newName == null) return;               // 取消
+      newName = String(newName || '').trim();
+      if (!newName || newName === filename) return;
+      btn.disabled = true;
+      postJSON('/library/cloud/rename', { remotePath: path, newName: newName })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          btn.disabled = false;
+          if (d && d.ok) {
+            var nn = d.newName || newName;
+            var np = d.newPath || '';
+            window.__toast('已改名', 'success', filename + ' → ' + nn);
+            // 就地更新卡片文本，免整页刷新
+            var card = btn.closest('.cloud-card, tr');
+            if (card) {
+              var nameEl = card.querySelector('.t-name');
+              if (nameEl) { nameEl.textContent = nn; nameEl.title = nn; }
+              var pathEl = card.querySelector('.cloud-path');
+              if (pathEl && np) { pathEl.textContent = np; pathEl.title = np; }
+            }
+            // 同卡片内其他按钮的 data-cloud-path / data-filename 一并更新，取回/删除照常工作
+            if (card) {
+              card.querySelectorAll('[data-cloud-path]').forEach(function (el) {
+                if (np) el.setAttribute('data-cloud-path', np);
+              });
+              card.querySelectorAll('[data-filename]').forEach(function (el) {
+                el.setAttribute('data-filename', nn);
+              });
+              var ol = card.querySelector('a[data-openlist-url]');
+              if (ol && np) {
+                ol.setAttribute('data-cloud-path', np);
+                // 重拼 OpenList 直达地址：有公网域名用域名拼，否则退回服务端 base
+                var newUrl = (window.__cloudOpenListUrl && window.__cloudOpenListUrl(np, '')) || '';
+                if (newUrl) {
+                  ol.setAttribute('href', newUrl);
+                  ol.setAttribute('data-openlist-url', newUrl);
+                }
+              }
+            }
+          } else {
+            window.__toast('改名失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          return null;
+        })
+        .catch(function () {
+          btn.disabled = false;
+          window.__toast('改名失败', 'error', '网络错误');
+        });
+    });
+  };
+
+  /* ---- 云端跨盘复制与移动：OpenList 跨网盘 API ---- */
+  window.__copyCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('copy', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
+  };
+
+  window.__moveCloudFile = function (btn) {
+    if (!btn) return;
+    var path = btn.getAttribute('data-cloud-path') || '';
+    var filename = btn.getAttribute('data-filename') || '';
+    var remoteDir = btn.getAttribute('data-remote-dir') || '';
+    var drive = btn.getAttribute('data-drive') || '';
+    var jobId = btn.getAttribute('data-job-id') || '';
+    var root = document.querySelector('.cloud-library');
+    if (root && window.Alpine && window.Alpine.$data) {
+      try {
+        window.Alpine.$data(root).openTransferModal('move', {
+          filename: filename,
+          cloudPath: path,
+          srcDir: remoteDir,
+          drive: drive,
+          jobId: jobId
+        });
+        return;
+      } catch (e) {}
+    }
+  };
+
   window.__deleteCloudFile = function (btn) {
     var path = btn.getAttribute('data-cloud-path');
     var jid = btn.getAttribute('data-job-id');
@@ -1128,9 +1473,17 @@
       window.__toast('缺少云端路径，无法删除', 'error');
       return;
     }
-    if (!window.confirm('确定要从云端删除文件吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知') + '\n\n此操作将调用 OpenList 删除云端文件并清理本地归档记录，不可恢复。')) {
-      return;
-    }
+    var confirmDel = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '从云端删除文件',
+          danger: true,
+          okText: '删除',
+          meta: [['文件名', filename], ['云端路径', path || '未知']],
+          warn: '将删除云端文件并清理本地归档记录，不可恢复'
+        })
+      : Promise.resolve(window.confirm('确定要从云端删除文件吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知') + '\n\n此操作将调用 OpenList 删除云端文件并清理本地归档记录，不可恢复。'));
+    confirmDel.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     postJSON('/library/cloud/delete', { remotePath: path, id: jid })
       .then(function (r) { return r.json(); })
@@ -1149,14 +1502,22 @@
         btn.disabled = false;
         window.__toast('云端删除失败', 'error', '网络错误');
       });
+    });
   };
 
   var clearingMissing = false;
   window.__clearMissingCloudFiles = function () {
     if (clearingMissing) return;
-    if (!window.confirm('确定要清理所有云端已失效的记录吗？\n\n将清理所有在 OpenList 云端已找不到原文件的归档记录。')) {
-      return;
-    }
+    var confirmClear = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '清理云端失效记录',
+          danger: true,
+          okText: '清理',
+          body: '将清理所有在 OpenList 云端已找不到原文件的归档记录。'
+        })
+      : Promise.resolve(window.confirm('确定要清理所有云端已失效的记录吗？\n\n将清理所有在 OpenList 云端已找不到原文件的归档记录。'));
+    confirmClear.then(function (ok) {
+      if (!ok) return;
     clearingMissing = true;
     postJSON('/library/cloud/clear-missing', {})
       .then(function (r) { return r.json(); })
@@ -1177,6 +1538,7 @@
         clearingMissing = false;
         window.__toast('清理失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---- 云端取回与状态轮询 ---- */
@@ -1309,9 +1671,16 @@
       window.__toast('缺少云端文件路径，无法取回', 'error');
       return;
     }
-    if (!window.confirm('确定要将该文件从云端取回并下载到本地磁盘吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知'))) {
-      return;
-    }
+    var confirmRet = window.__uiConfirm
+      ? window.__uiConfirm({
+          title: '从云端取回文件',
+          okText: '取回',
+          meta: [['文件名', filename], ['云端路径', path || '未知']],
+          warn: '文件将下载到本地磁盘并占用空间'
+        })
+      : Promise.resolve(window.confirm('确定要将该文件从云端取回并下载到本地磁盘吗？\n\n文件名: ' + filename + '\n云端路径: ' + (path || '未知')));
+    confirmRet.then(function (ok) {
+      if (!ok) return;
     btn.disabled = true;
     var textEl = btn.querySelector('.ret-text') || btn;
     textEl.textContent = '提交中…';
@@ -1346,6 +1715,7 @@
         textEl.textContent = '取回';
         window.__toast('取回提交失败', 'error', '网络错误');
       });
+    });
   };
 
   /* ---------------- Task actions (real backend calls) ---------------- */
@@ -1374,6 +1744,20 @@
     }
     return { el: null, id: a };
   }
+  function refreshTasksTableInPlace() {
+    var box = document.getElementById('tasksTable');
+    if (box && window.htmx) {
+      var params = new URLSearchParams();
+      var form = document.querySelector('form[hx-get="/partials/tasks"]');
+      if (form) {
+        new FormData(form).forEach(function (v, k) {
+          if (v !== '' && v != null) params.append(k, String(v));
+        });
+      }
+      params.set('refresh', '1');
+      window.htmx.ajax('GET', '/partials/tasks?' + params.toString(), { target: '#tasksTable', swap: 'outerHTML' });
+    }
+  }
   window.__retryTask = function (a, b) {
     var args = resolveTaskArgs(a, b);
     var meta = metaFromEl(args.el) || (args.id != null ? { uniqueId: String(args.id), telegramId: null } : null);
@@ -1388,6 +1772,7 @@
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
             window.__toast('已重新加入下载队列', 'success', '任务 #' + display + ' 重试已提交');
+            refreshTasksTableInPlace();
           } else {
             window.__toast('重试失败', 'error', (d && d.message) || '后端返回错误');
           }
@@ -1410,7 +1795,8 @@
       return postJSON('/task/cancel', { uniqueId: String(meta.uniqueId) })
         .then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
-            window.__toast('已取消任务 #' + display, 'success', '取消指令已发送');
+            window.__toast('已取消任务 #' + display, 'success', d.message || '取消指令已生效');
+            refreshTasksTableInPlace();
           } else {
             window.__toast('取消失败', 'error', (d && d.message) || '后端返回错误');
           }
@@ -1455,6 +1841,7 @@
               failed ? 'error' : 'success',
               '成功 ' + done + ' 条' + (failed ? '，失败 ' + failed + ' 条' : '')
             );
+            if (done > 0) refreshTasksTableInPlace();
           }
           return null;
         });
@@ -2053,10 +2440,20 @@
         var key = it.origin + ':' + it.name;
         if (this.deleting) return;
         var where = it.origin === 'remote' ? '云端（OpenList）' : '本地';
-        if (!window.confirm('确定要删除这一份快照吗？\n\n文件: ' + it.name + '\n位置: ' + where +
-              '\n\n只删除这一份，不影响其它快照。删除后无法恢复。')) return;
         var self = this;
-        this.deleting = key;
+        var confirmDel = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '删除这份快照',
+              danger: true,
+              okText: '删除',
+              meta: [['文件', it.name], ['位置', where]],
+              warn: '只删除这一份，不影响其它快照；删除后无法恢复'
+            })
+          : Promise.resolve(window.confirm('确定要删除这一份快照吗？\n\n文件: ' + it.name + '\n位置: ' + where +
+                '\n\n只删除这一份，不影响其它快照。删除后无法恢复。'));
+        confirmDel.then(function (ok) {
+          if (!ok) return;
+          self.deleting = key;
         fetch('/api/session/backups/delete', {
           method: 'POST',
           headers: {
@@ -2075,6 +2472,7 @@
         }).catch(function () {
           self.deleting = '';
           window.__toast('删除失败', 'error', '网络连接超时或异常');
+        });
         });
       },
       load: function () {
@@ -2221,7 +2619,16 @@
         var self = this;
         var where = it.origin === 'remote' ? 'OpenList 云端' : '本地';
         var kind = it.encrypted ? '（加密包）' : '（明文快照）';
-        var ok = window.confirm(
+        var confirmRestore = window.__uiConfirm
+          ? window.__uiConfirm({
+              title: '用这份快照还原 Session',
+              danger: true,
+              okText: '开始还原',
+              meta: [['快照', it.name], ['位置', where + kind], ['时间', (it.mtimeStr || '—')], ['大小', (it.sizeStr || '—')]],
+              body: '还原过程将：\n1) 先自动生成一份「还原前快照」以便回滚；\n2) 短暂停止下载后端容器，把 td.binlog 与管理台凭据写回；\n3) 自动重新启动后端容器。',
+              warn: '期间下载会中断数十秒'
+            })
+          : Promise.resolve(window.confirm(
           '确定要用这份快照还原 Session 吗？\n\n' +
           '快照: ' + it.name + '\n' +
           '位置: ' + where + kind + '\n' +
@@ -2231,9 +2638,10 @@
           '2) 短暂停止下载后端容器，把 td.binlog 与管理台凭据写回；\n' +
           '3) 自动重新启动后端容器。\n\n' +
           '期间下载会中断数十秒，确定继续？'
-        );
+        ));
+        confirmRestore.then(function (ok) {
         if (!ok) return;
-        this.restoring = true;
+        self.restoring = true;
         fetch('/api/session/restore', {
           method: 'POST',
           headers: {
@@ -2252,6 +2660,7 @@
         }).catch(function () {
           self.restoring = false;
           window.__toast('还原请求失败', 'error', '网络连接超时或异常');
+        });
         });
       }
     };
@@ -3104,7 +3513,7 @@
 
   /* ---------------- 页面加载兜底与 htmx 事件联动 ---------------- */
   if (typeof document !== 'undefined') {
-    if (!window.__DEFAULT_ARCH_DIR) {
+    if (!window.__DEFAULT_ARCH_DIR && document.querySelector('[data-arch-btn], #archiveModal')) {
       fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -3128,6 +3537,74 @@
         if (evt.detail && evt.detail.target && evt.detail.target.id === 'localFiles') {
           if (window.__localClearSelection) window.__localClearSelection();
         }
+      });
+
+      /* ---------------- 顶部切页/请求即时进度条 & 导航预热 ---------------- */
+      var navBarTimer = null;
+      function startNavProgress() {
+        var bar = document.getElementById('topNavProgress');
+        if (!bar) return;
+        if (navBarTimer) { clearTimeout(navBarTimer); navBarTimer = null; }
+        bar.classList.remove('done');
+        bar.classList.add('active');
+      }
+      function finishNavProgress() {
+        var bar = document.getElementById('topNavProgress');
+        if (!bar) return;
+        bar.classList.remove('active');
+        bar.classList.add('done');
+        navBarTimer = setTimeout(function () {
+          bar.classList.remove('done');
+        }, 320);
+      }
+      window.__startNavProgress = startNavProgress;
+      window.__finishNavProgress = finishNavProgress;
+
+      document.addEventListener('htmx:beforeRequest', function () {
+        startNavProgress();
+      });
+      document.addEventListener('htmx:afterRequest', function () {
+        finishNavProgress();
+      });
+      document.addEventListener('htmx:responseError', function () {
+        finishNavProgress();
+      });
+
+      /* 侧栏导航：手指按下/悬停即刻预热缓存，点击瞬间高亮 + 关抽屉 + 顶部进度条 */
+      var prefetchedUrls = {};
+      function prefetchNav(a) {
+        if (!a) return;
+        var href = a.getAttribute('href');
+        if (!href || href.charAt(0) !== '/' || href === window.location.pathname) return;
+        var now = Date.now();
+        if (prefetchedUrls[href] && now - prefetchedUrls[href] < 10000) return;
+        prefetchedUrls[href] = now;
+        try {
+          fetch(href, { method: 'GET', credentials: 'same-origin', priority: 'low' }).catch(function () {});
+        } catch (e) {}
+      }
+      document.addEventListener('mouseover', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (a) prefetchNav(a);
+      }, { passive: true });
+      document.addEventListener('touchstart', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (a) prefetchNav(a);
+      }, { passive: true });
+      document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
+        if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        var href = a.getAttribute('href');
+        if (!href || href.charAt(0) !== '/') return;
+        document.querySelectorAll('.sidebar .nav-item.active').forEach(function (el) {
+          el.classList.remove('active');
+        });
+        a.classList.add('active');
+        document.body.classList.remove('drawer-open');
+        startNavProgress();
+      });
+      window.addEventListener('pageshow', function () {
+        finishNavProgress();
       });
     }
   }

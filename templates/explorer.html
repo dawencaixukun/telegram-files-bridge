@@ -25,6 +25,153 @@
   gap: 12px;
 }
 
+/* ---- 统一工具条：搜索 + 统计 + 视图切换 + ⋯ 菜单 ----------------------
+   所有直接子元素同高（--toolbar-h），圆角/间距统一；窄屏仍按行等距换行。 */
+.explorer-toolbar {
+  --toolbar-h: 36px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.explorer-toolbar > * { flex: 0 0 auto; }
+.explorer-toolbar .btn,
+.explorer-toolbar .input,
+.explorer-toolbar .view-switch,
+.explorer-toolbar .toolbar-more-btn {
+  height: var(--toolbar-h);
+  box-sizing: border-box;
+}
+.explorer-toolbar .btn { padding: 0 12px; border-radius: 8px; }
+.toolbar-search {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 150px;
+  max-width: 420px;
+}
+.toolbar-search .input {
+  width: 100%;
+  padding-left: 32px;      /* 与放大镜 left:9px 对齐，间距 14px */
+  padding-right: 10px;
+  border-radius: 8px;
+}
+.toolbar-search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.toolbar-stats {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: 12px;        /* 搜索框与统计之间 12px */
+  white-space: nowrap;
+}
+.toolbar-stats strong { color: var(--text-1); font-weight: 600; }
+.toolbar-spacer { flex: 1 1 auto; min-width: 0; }
+
+/* 视图切换：两个等高按钮 */
+.view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  height: var(--toolbar-h, 36px);
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+}
+.view-switch .btn {
+  height: calc(var(--toolbar-h, 36px) - 6px);
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+/* ⋯ 更多菜单 */
+.toolbar-more { position: relative; }
+.toolbar-more-btn {
+  width: var(--toolbar-h, 36px);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.toolbar-more-btn .icon { width: 18px; height: 18px; }
+.toolbar-menu {
+  position: absolute;
+  /* 桌面端按钮在工具栏右端，向左展开是对的；手机端按钮换行到最左，
+     向左展开会整块跑出屏幕（实测 left=-174）。默认按「右对齐」保持桌面
+     观感，窄屏用下面的媒体查询翻成「左对齐 + 限宽」。 */
+  right: 0;
+  left: auto;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 236px;
+  max-width: calc(100vw - 24px);   /* 任何宽度下都不溢出视口 */
+  box-sizing: border-box;
+  padding: 5px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--glass-shadow, 0 10px 30px rgba(0, 0, 0, 0.45));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toolbar-menu-item:hover,
+.toolbar-menu-item:focus-visible {
+  background: var(--bg-3);
+  color: var(--text-1);
+  outline: none;
+}
+.toolbar-menu-item .icon { color: var(--text-3); flex: none; }
+
+@media (max-width: 720px) {
+  .explorer-toolbar { gap: 8px; padding: 8px; }
+  .toolbar-search { flex: 1 1 100%; max-width: none; margin-bottom: 2px; }
+  /* 窄屏只保留两行：搜索一整行 + 视图切换/⋯，统计文字收起以保持清爽 */
+  .toolbar-stats { display: none; }
+  /* spacer 必须留着：根目录没有视图切换，删掉它会让 ⋯ 落到最左端，
+     菜单再向左展开就整块跑到屏幕外。保留后 ⋯ 永远贴右。 */
+  .view-switch { margin-left: 0; }
+  /* 兜底：即便 ⋯ 不在右端（根目录/极窄屏），也由 JS 在展开时把菜单夹进视口
+     （见 driveExplorer 的 positionMoreMenu），这里只做宽度收敛。 */
+  .toolbar-menu {
+    min-width: 0;
+    width: min(260px, calc(100vw - 24px));
+  }
+}
+
+
 .explorer-breadcrumbs {
   display: flex;
   align-items: center;
@@ -109,72 +256,117 @@
   box-shadow: 0 0 6px var(--accent);
 }
 
-/* 网盘大卡片展示（根目录） */
-.drive-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--space-5);
-  margin-top: var(--space-4);
+/* 网盘列表（根目录）：整卡可点的横向卡片 */
+.drive-list-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: var(--space-3);
 }
-.drive-card {
-  background: var(--glass-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  padding: var(--space-5);
+.drive-list-head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 0;
+}
+.drive-list-head span { font-size: 12px; color: var(--text-3); }
+
+/* 根目录引导（大卡片已移除，只留一句提示） */
+/* 根目录网盘列表：手机上就是干净的列表行，点击整行进盘 */
+.drive-root-list {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: var(--space-4);
-  transition: all 0.25s ease;
-  position: relative;
-  overflow: hidden;
+  gap: 8px;
 }
-.drive-card:hover {
-  transform: translateY(-4px);
-  border-color: var(--accent);
-  box-shadow: var(--glass-shadow);
-}
-.drive-card-head {
+/* 根页面若已无任何网盘或存在其它内容，保留上下间距 */
+.drive-root-list + * { margin-top: var(--space-4); }
+.drive-root-card {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-}
-.drive-card-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(34, 211, 238, 0.2));
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  flex-shrink: 0;
-}
-.drive-card-info {
-  flex: 1;
-  min-width: 0;
-}
-.drive-card-title {
-  font-size: 16px;
-  font-weight: 600;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  min-height: 60px;
+  box-sizing: border-box;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg);
   color: var(--text-1);
-  margin-bottom: 4px;
+  text-decoration: none;
+  transition: background .16s var(--ease), border-color .16s var(--ease), transform .12s var(--ease);
 }
-.drive-card-driver {
-  font-size: 12px;
+.drive-root-card:hover { background: var(--surface-2); border-color: var(--glass-border-strong); }
+.drive-root-card:active { transform: scale(.995); }
+.drive-root-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drc-ico {
+  flex: none;
+  width: 38px; height: 38px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: rgba(124, 58, 237, .12);
+  color: var(--brand);
+}
+.drc-ico svg { width: 19px; height: 19px; }
+.drc-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.drc-name {
+  font-size: 14.5px; font-weight: 600; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drc-sub {
+  font-size: 11.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drc-path { color: var(--text-2); font-weight: 500; }
+.drc-dot { margin: 0 2px; opacity: .6; }
+.drc-chev {
+  flex: none; width: 15px; height: 15px;
   color: var(--text-3);
-  display: flex;
+  transform: rotate(-90deg);
+}
+
+/* 「全部网盘」下拉：紧凑小列表（每行 网盘名 + 一级统计） */
+.drive-picker-btn {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: var(--toolbar-h, 36px);
+  box-sizing: border-box;
+  padding: 0 10px 0 9px;
+  max-width: 46vw;
+  overflow: hidden;
 }
-.drive-card-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
+.drive-picker-btn > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.drive-picker-caret { width: 14px; height: 14px; margin-left: -2px; opacity: 0.7; flex: none; }
+/* 「全部网盘」迷你目录浏览器面板：复用 arch-dropdown 系列样式（crumb/行/底栏），
+   只在外层 toolbar-menu 基础上补齐 flex 纵向布局与滚动约束 */
+.drive-menu {
+  min-width: 232px;
+  width: min(320px, calc(100vw - 24px));  /* 不超屏 */
+  max-height: min(60vh, 420px);
+  overflow: hidden;
+  padding: 0;
+}
+.drive-dir-list { max-height: 340px; }  /* 列表区可滚动（.arch-dir-list 已有 overflow-y:auto） */
+.drive-dir-list .arch-up-row { color: var(--brand); font-weight: 600; }
+/* 根层级盘符行的 mount_path 小字（沿用旧下拉的视觉，但不再依赖 .drive-menu-item） */
+.dm-mount {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
   color: var(--text-2);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border);
+  opacity: .85;
 }
+@media (max-width: 720px) {
+  /* 手机：宽度收敛到视口内，列表限高可滚动 */
+  .drive-menu { width: min(280px, calc(100vw - 24px)); }
+  .drive-dir-list .arch-dir-row { min-height: 44px; font-size: 14px; padding: 10px 12px; }
+}
+
 
 /* 文件夹与文件卡片 */
 .thumb.folder-card {
@@ -187,6 +379,49 @@
 .thumb.folder-card .t-img {
   background: linear-gradient(135deg, rgba(234, 179, 8, 0.15), rgba(249, 115, 22, 0.12));
   color: #eab308;
+}
+/* 文件夹不做大图缩略图：网格视图整块隐藏 .t-img，只留「名称+时间+网盘+按钮」，
+   视觉高度明显低于媒体卡片；列表视图仍用它当 30px 行内类型图标。 */
+.thumb-grid:not(.view-list) .thumb.folder-card .t-img { display: none; }
+.thumb-grid:not(.view-list) .thumb.folder-card {
+  align-self: start;      /* 不跟随媒体卡片等高：文件夹卡片只占自身内容高度 */
+  height: auto;
+  /* main.css 的 content-visibility:auto + 280px 占位高会把文件夹卡片撑成媒体卡片那么高 */
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
+}
+.thumb-grid:not(.view-list) .thumb.folder-card .t-body { padding-top: var(--space-4); }
+/* 网格视图文件夹名前的 15px 小图标（列表视图行首已有 30px 类型图标，隐藏避免重复） */
+.t-folder-inline {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: #eab308;
+  vertical-align: -2px;
+  margin-right: 5px;
+}
+.thumb.folder-card .t-name {
+  display: flex;
+  align-items: flex-start;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: initial;
+  min-height: 0;
+}
+.thumb.folder-card .t-name .t-fn {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  word-break: break-word;
+}
+.thumb-grid.view-list .t-folder-inline { display: none; }
+.thumb-grid.view-list .thumb.folder-card .t-name { display: block; }
+.thumb-grid.view-list .thumb.folder-card .t-name .t-fn {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 /* 视频播放遮罩与图标 */
@@ -298,6 +533,234 @@
   justify-content: center;
 }
 
+/* ---- 视图切换：网格视图 / 列表视图（同一份 DOM，纯 CSS 换布局） ---- */
+
+/* 列表视图：把 .thumb 卡片压成一行横向排布 */
+.thumb-grid.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow-x: auto;
+}
+.thumb-grid.view-list .thumb {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  height: auto;
+  min-height: 46px;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  transition: background 0.15s ease;
+  /* main.css 给 .thumb 设了 content-visibility:auto + 280px 占位高，
+     列表行必须复位，否则每行被撑成 280px */
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
+}
+.thumb-grid.view-list .thumb:last-child { border-bottom: 0; }
+.thumb-grid.view-list .thumb.folder-card { background: transparent; }
+.thumb-grid.view-list .thumb:hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.045);
+}
+/* 缩略图缩成 30px 类型图标；大图/角标/遮罩在列表里隐藏 */
+.thumb-grid.view-list .t-img {
+  width: 30px;
+  height: 30px;
+  aspect-ratio: auto;
+  flex: none;
+  border-radius: 6px;
+  background: transparent;
+}
+.thumb-grid.view-list .t-img img,
+.thumb-grid.view-list .t-img .t-badge,
+.thumb-grid.view-list .t-img .t-ext,
+.thumb-grid.view-list .t-img .cloud-drive-float,
+.thumb-grid.view-list .t-video-overlay { display: none; }
+.thumb-grid.view-list .t-img svg { width: 18px; height: 18px; }
+.thumb-grid.view-list .t-body {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  min-height: 0;
+}
+.thumb-grid.view-list .t-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  display: block;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: initial;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb-grid.view-list .t-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  min-height: 0;
+  flex: none;
+  font-size: 11.5px;
+}
+.thumb-grid.view-list .t-meta .t-sep { display: none; }
+/* 网格视图文件夹没有大小列，隐藏占位；列表视图保留 —— 与表头「大小」列对齐 */
+.thumb-grid:not(.view-list) .t-meta .t-folder-size,
+.thumb-grid:not(.view-list) .t-meta .t-folder-sep { display: none; }
+.thumb-grid.view-list .t-meta .t-size {
+  display: inline-block;
+  order: 1;
+  width: 86px;
+  flex: none;
+  text-align: right;
+}
+.thumb-grid.view-list .t-meta .t-drive-tag { order: 2; margin-left: 12px; }
+.thumb-grid.view-list .t-meta .t-time { order: 3; width: 122px; flex: none; margin-left: 12px; }
+.thumb-grid.view-list .cloud-path-label { display: none; }
+.thumb-grid.view-list .t-foot {
+  margin: 0 0 0 auto;
+  flex: 0 0 320px;          /* 固定操作列宽：文件/文件夹两种行的各列才会对齐 */
+  width: 320px;
+  min-width: 0;
+  justify-content: flex-end;
+}
+.thumb-grid.view-list .explorer-card-btns {
+  width: 100%;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.thumb-grid.view-list .explorer-card-btns .btn {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+.thumb-grid.view-list .empty-card { min-width: 0; }
+
+/* 所属网盘标签：列表视图每行显示；网格视图只给「文件夹卡片」显示（媒体卡片用缩略图角标） */
+.t-drive-tag { display: none; }
+.t-drive-tag,
+.thumb-grid:not(.view-list) .thumb.folder-card .t-drive-tag,
+.thumb-grid.view-list .t-meta .t-drive-tag {
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb-grid.view-list .t-meta .t-drive-tag {
+  display: inline-flex;
+  width: 92px;
+  flex: none;
+  margin-left: 12px;
+}
+/* 网格视图文件夹：时间 + 网盘标签同一行 */
+.thumb-grid:not(.view-list) .thumb.folder-card .t-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.thumb-grid:not(.view-list) .thumb.folder-card .t-drive-tag {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+/* 「播放」按钮：仅列表视图出现（网格里点视频缩略图遮罩播放） */
+.t-play-btn { display: none; }
+.thumb-grid.view-list .t-play-btn { display: inline-flex; }
+
+/* 列表表头：仅列表视图显示 */
+.list-head { display: none; }
+.thumb-grid.view-list .list-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+.list-head .lh-icon { width: 30px; flex: none; }
+.list-head .lh-name { flex: 1 1 auto; min-width: 0; }
+.list-head .lh-size { width: 86px; flex: none; text-align: right; margin-left: 12px; }
+.list-head .lh-time { width: 122px; flex: none; margin-left: 12px; }
+.list-head .lh-drive { width: 92px; flex: none; margin-left: 12px; }
+.list-head .lh-actions {
+  flex: 0 0 320px;
+  width: 320px;
+  margin-left: auto;
+  text-align: right;
+}
+
+/* 移动端：列表视图精简列（隐藏修改时间/网盘，按钮可换行），绝不撑破布局 */
+@media (max-width: 720px) {
+  /* 手机列表视图：一行放不下「名称 + 大小 + 6 个操作」。
+     历史缺陷：操作列写死 152px，按钮实际需要 ~220px，整排被撑到卡片外；
+     外层 overflow-x:auto 又没有可滚动余量（scrollWidth == clientWidth），
+     所以用户看到的正是「往右拖不动、OpenList 点不到」。
+     修法：窄屏把行改成两段式——第一段图标+名称+大小，操作按钮整段换到第二行
+     并均分宽度；不再设固定操作列宽。 */
+  .thumb-grid.view-list .thumb {
+    flex-wrap: wrap;
+    padding: 8px;
+    gap: 6px 8px;
+  }
+  .thumb-grid.view-list .t-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* t-foot 在 .t-body 内部（不是行的直接子元素），只给 .thumb 换行没用：
+       必须在 t-body 这个 flex 容器内换行，操作区才能独占第二行。 */
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .thumb-grid.view-list .t-name { flex: 1 1 auto; min-width: 90px; }
+  .thumb-grid.view-list .t-meta { gap: 0; }
+  .thumb-grid.view-list .t-meta .t-time,
+  .thumb-grid.view-list .t-meta .t-drive-tag { display: none; }
+  .thumb-grid.view-list .t-size { width: auto; }
+  .thumb-grid.view-list .t-foot {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    margin: 2px 0 0;
+  }
+  .thumb-grid.view-list .explorer-card-btns {
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 4px;
+    justify-content: flex-start;
+  }
+  .thumb-grid.view-list .explorer-card-btns .btn {
+    flex: 1 1 auto;          /* 均分剩余宽度，任何按钮都不会被推出视口 */
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .thumb-grid.view-list .list-head { display: none; }  /* 两段式行不再需要表头列宽 */
+}
+
 /* 顶部任务通知横幅 */
 .active-task-banner {
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.12));
@@ -321,6 +784,10 @@ window.driveExplorer = function driveExplorer() {
     openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
     domainInput: '',
     showDomainModal: false,
+    showMoreMenu: false,
+    showDriveMenu: false,
+    /* 下拉按钮回显当前网盘名：/onedrive/xxx → OneDrive；根目录留空→显示「全部网盘」 */
+    currentDriveLabel: {{ (current_drive_label or '') | tojson }},
     showRenameModal: false,
     renameData: { path: '', oldName: '', newName: '', loading: false },
     showTransferModal: false,
@@ -328,6 +795,15 @@ window.driveExplorer = function driveExplorer() {
     transferData: { path: '', srcDir: '', name: '', targetDir: '', loading: false, progress: 0 },
     mountsList: {{ mounts | tojson if mounts else '[]' }},
     runningTasks: [],
+    /* 视图模式：'grid'（缩略图网格，默认）| 'list'（紧凑列表）。根路径不参与切换。 */
+    viewMode: (function () {
+      try {
+        if ({{ 'true' if is_root else 'false' }}) return 'grid';
+        return localStorage.getItem('explorer_view_mode') === 'list' ? 'list' : 'grid';
+      } catch (e) {
+        return 'grid';
+      }
+    })(),
 
     init: function () {
       if (!this.domainInput) {
@@ -338,6 +814,73 @@ window.driveExplorer = function driveExplorer() {
       setInterval(function () {
         self.pollTasks();
       }, 2000);
+    },
+
+    /* 网格/列表切换：纯前端改 state 并持久化，不刷新、不发请求 */
+    setViewMode: function (mode) {
+      var m = mode === 'list' ? 'list' : 'grid';
+      this.viewMode = m;
+      try {
+        localStorage.setItem('explorer_view_mode', m);
+      } catch (e) {}
+    },
+
+    /* ⋯ 菜单展开前把自身夹进视口。
+       历史缺陷：菜单是 absolute + right:0（向左展开）。手机上 ⋯ 可能换行落到
+       工具条最左（实测 button.left=21），菜单整块跑到屏幕外，左侧文字被裁掉
+       （用户看到的「菜单只有右半截、字看不见」）。这里按视口左右边界实时校正，
+       同时兼顾按钮贴在右边时不能溢出右侧。 */
+    /* ⋯ / 网盘 两个下拉共用的视口夹取。
+       历史缺陷 1：菜单 absolute + right:0 向左展开，手机上按钮贴左时整块跑出屏幕，
+       露出的那截深色底就是用户看到的「黑屏 / 菜单只有右半截、字看不见」。
+       历史缺陷 2：在 $nextTick 时菜单还没完成布局，getBoundingClientRect 全 0，
+       shift 恒为 0 → 矫正等于没做。这里改成双 rAF（等真正上屏）后量尺寸，
+       并对未布局的情况用 CSS 已知宽度兜底夹取。 */
+    _clampMenu: function (wrapRef, menuRef) {
+      var self = this;
+      var run = function () {
+        var wrap = self.$refs[wrapRef];
+        var menu = self.$refs[menuRef];
+        var btn = wrap && wrap.querySelector('button');
+        if (!wrap || !menu || !btn) return;
+        var wrapLeft = wrap.getBoundingClientRect().left;
+        var btnLeft = btn.getBoundingClientRect().left;
+        var vw = window.innerWidth;
+        var margin = 8;
+        var rect = menu.getBoundingClientRect();
+        // 未布局（宽度 0）时按 CSS 上限估算，避免矫正被跳过
+        var menuW = rect.width > 0 ? rect.width : Math.min(260, vw - 24);
+        var desiredLeft = btnLeft;
+        if (desiredLeft + menuW > vw - margin) desiredLeft = vw - margin - menuW;
+        if (desiredLeft < margin) desiredLeft = margin;
+        menu.style.right = 'auto';
+        menu.style.left = Math.round(desiredLeft - wrapLeft) + 'px';
+      };
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () { window.requestAnimationFrame(run); });
+      } else {
+        window.setTimeout(run, 16);
+      }
+    },
+
+    toggleDriveMenu: function () {
+      this.showDriveMenu = !this.showDriveMenu;
+      if (!this.showDriveMenu) return;
+      this.showMoreMenu = false;
+      var self = this;
+      this.$nextTick(function () {
+        self._clampMenu('driveWrap', 'driveMenu');
+        /* 面板收起再展开：与归档弹窗一致，重置回上次浏览位置（会话内记忆），没有则根 */
+        window.__driveBrowseLoad(window.__driveBrowseLast || '/');
+      });
+    },
+
+    positionMoreMenu: function () {
+      this.showMoreMenu = !this.showMoreMenu;
+      if (!this.showMoreMenu) return;
+      this.showDriveMenu = false;
+      var self = this;
+      this.$nextTick(function () { self._clampMenu('moreWrap', 'moreMenu'); });
     },
 
     displayDomain: function (url) {
@@ -580,6 +1123,11 @@ window.__moveExplorerFile = function (btn) {
   }
 };
 window.__moveCloudFile = window.__moveExplorerFile;
+
+/* 把模板渲染的挂载盘列表交给 app.js 的迷你目录浏览器（根层级直接列盘，不发请求） */
+window.__driveStorages = [
+  {% for s in storages %}{ "display_name": {{ s.display_name | tojson }}, "mount_path": {{ s.mount_path | tojson }} }{{ "," if not loop.last }}{% endfor %}
+];
 </script>
 {% endblock %}
 
@@ -605,53 +1153,116 @@ window.__moveCloudFile = window.__moveExplorerFile;
           </a>
         {% endfor %}
       </nav>
+    </div>
 
-      <!-- 顶栏快捷操作按钮 -->
-      <div class="row" style="gap:8px;align-items:center;">
+    <!-- 统一工具条：搜索（可伸缩） + 统计 + 视图切换 + ⋯ 更多菜单 -->
+    <div class="explorer-toolbar">
+      {% if not is_root %}
+      <div class="toolbar-search">
+        <input class="input sm" type="text" x-model="q" placeholder="在当前目录过滤文件名…" aria-label="过滤文件名">
+        <svg class="icon xs toolbar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <use href="#ic-search"/>
+        </svg>
+      </div>
+      <div class="toolbar-stats">
+        <span class="tnum">{{ dirs_count }}</span> 文件夹 ·
+        <span class="tnum">{{ files_count }}</span> 文件 ·
+        <strong class="tnum">{{ total_size_human }}</strong>
+      </div>
+      <div class="toolbar-spacer"></div>
+
+      <!-- 网格视图 / 列表视图切换 -->
+      <div class="view-switch" role="group" aria-label="视图切换">
         <button type="button" class="btn sm"
-                :class="openlistBase ? 'primary' : 'ghost'"
-                @click="openDomainModal()"
-                title="配置 OpenList 外部公网访问域名/IP与端口">
-          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
+                :class="viewMode === 'grid' ? 'primary' : 'ghost'"
+                :aria-pressed="viewMode === 'grid' ? 'true' : 'false'"
+                @click="setViewMode('grid')"
+                title="网格视图（缩略图）">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-grid"/></svg>
+          网格
+        </button>
+        <button type="button" class="btn sm"
+                :class="viewMode === 'list' ? 'primary' : 'ghost'"
+                :aria-pressed="viewMode === 'list' ? 'true' : 'false'"
+                @click="setViewMode('list')"
+                title="列表视图（紧凑行）">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-list"/></svg>
+          列表
+        </button>
+      </div>
+      {% else %}
+      <div class="toolbar-spacer"></div>
+      {% endif %}
+
+      <!-- 全部网盘：迷你目录浏览器下拉（形态对齐归档弹窗目录选择器）。
+           面板内逐级浏览不跳页，底栏「打开当前目录」才导航 /explorer?path=… -->
+      <div class="toolbar-more drive-picker" x-ref="driveWrap" @click.outside="showDriveMenu = false">
+        <button type="button" class="btn sm ghost drive-picker-btn"
+                @click="toggleDriveMenu()"
+                :class="showDriveMenu ? 'primary' : 'ghost'"
+                :aria-expanded="showDriveMenu ? 'true' : 'false'"
+                aria-haspopup="menu"
+                title="选择要浏览的网盘">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+          <span x-text="currentDriveLabel || '全部网盘'"></span>
+          <svg class="icon xs drive-picker-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <!-- 注意：不能再挂 @click="showDriveMenu = false"（旧静态列表的整层点击即收起），
+             否则面板内点目录行会立刻收起；收起只交给 @click.outside -->
+        <div class="toolbar-menu drive-menu" x-ref="driveMenu" x-show="showDriveMenu" x-cloak
+             role="menu" aria-label="浏览网盘目录">
+          <div class="arch-crumb" id="driveCrumb"></div>
+          <div class="arch-dir-list drive-dir-list" id="driveDirList"></div>
+          <div class="arch-drop-foot">
+            <span class="hint" id="driveRootHint" style="display:none;">请先进入某个网盘</span>
+            <span style="flex:1;"></span>
+            <button type="button" class="btn sm primary" id="driveOpenBtn"
+                    onclick="window.__driveBrowseOpen()">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
+              打开当前目录
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⋯ 更多菜单：刷新缓存 / OpenList 外跳 / OpenList 域名 -->
+      <div class="toolbar-more" x-ref="moreWrap" @click.outside="showMoreMenu = false">
+        <button type="button" class="btn sm ghost toolbar-more-btn"
+                @click="positionMoreMenu()"
+                :class="showMoreMenu ? 'primary' : 'ghost'"
+                :aria-expanded="showMoreMenu ? 'true' : 'false'"
+                aria-haspopup="menu"
+                title="更多操作">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
           </svg>
-          <span x-text="openlistBase ? ('OpenList: ' + displayDomain(openlistBase)) : '设置域名'"></span>
         </button>
-
-        <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
-           data-cloud-path="{{ current_path }}"
-           class="btn sm ghost"
-           onclick="return window.__openExplorerInOpenList(this, event)"
-           title="在 OpenList Web 界面中打开当前目录">
-          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
-          OpenList
-        </a>
-
-        <button type="button" class="btn sm ghost"
-                onclick="window.__refreshExplorerCache('{{ current_path }}')"
-                title="向云端网盘穿透拉取最新目录树">
-          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
-          刷新缓存
-        </button>
+        <div class="toolbar-menu" x-ref="moreMenu" x-show="showMoreMenu" x-cloak role="menu" @click="showMoreMenu = false">
+          <button type="button" class="toolbar-menu-item" role="menuitem"
+                  onclick="window.__refreshExplorerCache('{{ current_path }}')">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg>
+            <span>刷新缓存</span>
+          </button>
+          <a href="{{ openlist_url }}" target="_blank" rel="noopener noreferrer"
+             class="toolbar-menu-item" role="menuitem"
+             data-cloud-path="{{ current_path }}"
+             onclick="return window.__openExplorerInOpenList(this, event)">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
+            <span>在 OpenList 中打开当前目录</span>
+          </a>
+          <button type="button" class="toolbar-menu-item" role="menuitem" @click="openDomainModal()">
+            <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+            <span x-text="openlistBase ? ('OpenList 域名：' + displayDomain(openlistBase)) : '设置 OpenList 域名'"></span>
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- 常用网盘快速切换胶囊 -->
-    <div class="explorer-capsules-bar" role="tablist" aria-label="挂载网盘快速切换">
-      <a href="/explorer?path=/" class="capsule-btn {% if is_root %}active{% endif %}">
-        <span class="dot"></span>
-        <span>全部网盘</span>
-      </a>
-      {% for qd in quick_drives %}
-        <a href="/explorer?path={{ qd.path }}"
-           class="capsule-btn {% if qd.is_active %}active{% endif %}"
-           title="{{ qd.display_name }} ({{ qd.driver }})">
-          <span class="dot"></span>
-          <span>{{ qd.display_name }}</span>
-        </a>
-      {% endfor %}
-    </div>
+    <!-- 网盘快速切换胶囊已移除：根目录的网盘卡片本身就是入口，胶囊与之重复，
+         用户明确要求去掉（手机端还白白吃掉一行）。 -->
   </div>
 
   <!-- 进行中后台跨盘传输横幅通知 -->
@@ -667,100 +1278,68 @@ window.__moveCloudFile = window.__moveExplorerFile;
     <span class="badge accent" x-text="runningTasks.length + ' 传输中'"></span>
   </div>
 
-  <!-- 搜索过滤条（非根路径） -->
-  {% if not is_root %}
-  <div class="card" style="margin-bottom:var(--space-4);padding:var(--space-3) var(--space-4);">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-      <div style="position:relative;flex:1;max-width:360px;">
-        <input class="input sm" type="text" x-model="q" placeholder="在当前目录过滤文件名…" style="padding-left:32px;">
-        <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none;">
-          <use href="#ic-search"/>
-        </svg>
-      </div>
-      <div style="font-size:12px;color:var(--text-2);">
-        <span>{{ dirs_count }} 文件夹</span> ·
-        <span>{{ files_count }} 文件</span> ·
-        <span>总计 <strong style="color:var(--text-1);">{{ total_size_human }}</strong></span>
-      </div>
-    </div>
-  </div>
-  {% endif %}
+  <!-- 搜索与统计已并入上方统一工具条（.explorer-toolbar） -->
 
-  <!-- 主视图：根路径网盘大卡片 或 目录文件网格 -->
+  <!-- 主视图：根路径网盘列表 或 目录文件网格 -->
   {% if is_root %}
-    <!-- 根路径：挂载网盘列表大卡片 -->
-    <div style="margin-bottom:var(--space-4);">
-      <h2 style="font-size:15px;font-weight:600;color:var(--text-2);">已挂载的网盘 (共 {{ storages|length }} 个)</h2>
-    </div>
-
-    <div class="drive-grid">
+    <!-- 根目录：直接把网盘铺成列表（用户要求：主页面要看得见网盘，
+         不要在根页面只放一句「点左上角选择」的引导）。 -->
+    <div class="drive-root-list">
       {% for s in storages %}
-        <div class="drive-card">
-          <div class="drive-card-head">
-            <div class="drive-card-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:26px;height:26px;"><use href="#ic-cloud"/></svg>
-            </div>
-            <div class="drive-card-info">
-              <div class="drive-card-title">{{ s.display_name }}</div>
-              <div class="drive-card-driver">
-                <span>驱动: {{ s.driver }}</span> ·
-                <span class="badge ok" style="padding:1px 6px;font-size:11px;">{{ s.status_label }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="drive-card-meta">
-            <span class="tnum" style="color:var(--text-3);">{{ s.mount_path }}</span>
-            <span style="color:var(--text-2);">{{ s.capacity_str }}</span>
-          </div>
-
-          <div class="row" style="gap:8px;">
-            <a href="/explorer?path={{ s.mount_path }}" class="btn sm primary" style="flex:2;justify-content:center;">
-              进入网盘 →
-            </a>
-            <a href="{{ s.openlist_url }}" target="_blank" rel="noopener noreferrer"
-               data-cloud-path="{{ s.mount_path }}"
-               class="btn sm ghost" style="flex:1;justify-content:center;"
-               onclick="return window.__openExplorerInOpenList(this, event)"
-               title="在 OpenList 中打开此网盘">
-              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg>
-              OpenList
-            </a>
-          </div>
-        </div>
+      <a href="/explorer?path={{ s.mount_path }}" class="drive-root-card">
+        <span class="drc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#ic-cloud"/></svg></span>
+        <span class="drc-body">
+          <span class="drc-name">{{ s.display_name }}</span>
+          <span class="drc-sub">
+            <span class="drc-path tnum">{{ s.mount_path }}</span>
+            {% if s.stats %}<span class="drc-dot">·</span> {{ s.stats.dirs }} 文件夹 · {{ s.stats.files }} 文件 · {{ s.stats.size }}{% endif %}
+          </span>
+        </span>
+        <svg class="drc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
+      </a>
       {% else %}
-        <div class="card empty-card" style="grid-column: 1 / -1;text-align:center;padding:48px 24px;">
-          <svg class="icon xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px;margin-bottom:12px;color:var(--text-3);"><use href="#ic-alert"/></svg>
-          <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:6px;">未发现已挂载的网盘</div>
-          <div style="font-size:13px;color:var(--text-3);margin-bottom:16px;">请检查 OpenList 服务是否正常启动或凭据是否有效</div>
-          <a href="/settings" class="btn sm primary">前往设置配置 OpenList</a>
-        </div>
+      <div class="card" style="text-align:center;padding:32px 20px;">
+        <div style="font-size:14px;color:var(--text-2);">未发现已挂载的网盘</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:6px;">请检查 OpenList 是否运行、凭据是否有效</div>
+        <a href="/settings" class="btn sm primary" style="margin-top:14px;">前往设置</a>
+      </div>
       {% endfor %}
     </div>
 
   {% else %}
-    <!-- 子目录：文件夹与文件卡片网格 -->
-    <div class="thumb-grid">
+    <!-- 子目录：文件夹与文件卡片网格（view-list 时同一份 DOM 变成紧凑列表） -->
+    <div class="thumb-grid" :class="viewMode === 'list' ? 'view-list' : ''">
+      {% if entries %}
+      <div class="list-head" aria-hidden="true">
+        <span class="lh-icon"></span>
+        <span class="lh-name">名称</span>
+        <span class="lh-size">大小</span>
+        <span class="lh-time">修改时间</span>
+        <span class="lh-drive">所属网盘</span>
+        <span class="lh-actions">操作</span>
+      </div>
+      {% endif %}
       {% for f in entries %}
         {% if f.is_dir %}
           <!-- 文件夹卡片 -->
           <div class="thumb folder-card"
                onclick="window.location.href='/explorer?path={{ f.path }}'"
-               x-show="!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())">
+               x-show='!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())'>
             <div class="t-img">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="width:42px;height:42px;"><use href="#ic-folder"/></svg>
+              <svg class="t-folder-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#ic-folder"/></svg>
               <span class="t-badge"><span class="badge" style="background:rgba(234,179,8,.2);color:#eab308;">文件夹</span></span>
               <span class="cloud-drive-badge cloud-drive-float">[{{ f.drive_label }}]</span>
             </div>
             <div class="t-body">
-              <div class="t-name" title="{{ f.name }}">{{ f.name }}</div>
+              <div class="t-name" title="{{ f.name }}"><svg class="t-folder-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg><span class="t-fn">{{ f.name }}</span></div>
               <div class="t-meta">
-                <span class="tnum">{{ f.modified }}</span>
+                <span class="tnum t-size t-folder-size">—</span><span class="t-sep t-folder-sep"> · </span>
+                <span class="t-drive-tag" title="所属网盘：{{ f.drive_label }}">{{ f.drive_label }}</span>
+                <span class="tnum t-time">{{ f.modified }}</span>
               </div>
               <div class="cloud-path-label" title="{{ f.path }}">{{ f.path }}</div>
 
-              <div class="t-foot" style="margin-top:auto;" onclick="event.stopPropagation()">
+              <div class="t-foot" onclick="event.stopPropagation()">
                 <div class="explorer-card-btns">
                   <a href="/explorer?path={{ f.path }}" class="btn sm primary">进入</a>
                   <button type="button" class="btn sm ghost"
@@ -780,7 +1359,7 @@ window.__moveCloudFile = window.__moveExplorerFile;
           <!-- 文件卡片（视频/图片/其他） -->
           <div class="thumb explorer-card"
                data-cloud-card
-               x-show="!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())">
+               x-show='!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())'>
             <div class="t-img">
               {% if f.thumb %}
                 <img src="{{ f.thumb }}" alt="{{ f.name }}" loading="lazy" decoding="async">
@@ -810,10 +1389,12 @@ window.__moveCloudFile = window.__moveExplorerFile;
             </div>
 
             <div class="t-body">
-              <div class="t-name" title="{{ f.name }}">{{ f.name }}</div>
+              <div class="t-name" title="{{ f.name }}"
+                   {% if f.is_video %}@click="viewMode === 'list' && window.__playCloudVideo('{{ f.path }}', '{{ f.name }}')" :style="viewMode === 'list' ? 'cursor:pointer;' : ''"{% endif %}>{{ f.name }}</div>
               <div class="t-meta">
-                <span class="tnum">{{ f.size_human }}</span> ·
-                <span class="tnum">{{ f.modified }}</span>
+                <span class="tnum t-size">{{ f.size_human }}</span><span class="t-sep"> · </span>
+                <span class="t-drive-tag" title="所属网盘：{{ f.drive_label }}">{{ f.drive_label }}</span>
+                <span class="tnum t-time">{{ f.modified }}</span>
               </div>
               <div class="cloud-path-label" title="{{ f.path }}">{{ f.path }}</div>
 
@@ -829,8 +1410,14 @@ window.__moveCloudFile = window.__moveExplorerFile;
               </div>
 
               <!-- 操作栏 -->
-              <div class="t-foot" style="margin-top:auto;">
+              <div class="t-foot">
                 <div class="explorer-card-btns">
+                  {% if f.is_video %}
+                  <button type="button" class="btn sm primary t-play-btn"
+                          title="在线播放 {{ f.name }}"
+                          onclick="window.__playCloudVideo('{{ f.path }}', '{{ f.name }}')">播放</button>
+                  {% endif %}
+
                   <a href="{{ f.openlist_url }}" target="_blank" rel="noopener noreferrer"
                      data-cloud-path="{{ f.path }}"
                      data-openlist-url="{{ f.openlist_url }}"
