@@ -748,7 +748,9 @@
      ==================================================================== */
   var driveBrowsePath = '/';                  // 面板当前所在路径
   window.__driveBrowseLast = '';              // 收起再展开时回到的位置（会话内记忆）
-  window.__driveStorages = [];                // [{display_name, mount_path}]
+  // [{display_name, mount_path}] 由 explorer.html 内联 script 注入；此处只在未注入时兜底，
+  // 不能无条件覆盖（app.js 晚于内联 script 加载，覆盖会清空模板给的盘符列表）
+  if (!Array.isArray(window.__driveStorages)) window.__driveStorages = [];
 
   var driveBrowseLoadSeq = 0;                 // 请求序号：只采纳最后一次的响应
 
