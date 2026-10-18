@@ -946,7 +946,7 @@ window.driveExplorer = function driveExplorer() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': (document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]+)/) || [])[1] || ''
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
           },
           body: JSON.stringify({ path: path, name: newName })
         });
@@ -1022,7 +1022,7 @@ window.driveExplorer = function driveExplorer() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': (document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]+)/) || [])[1] || ''
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
           },
           body: JSON.stringify({ src_dir: src, dst_dir: dst, names: [name] })
         });
