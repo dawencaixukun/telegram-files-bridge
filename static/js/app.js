@@ -875,7 +875,7 @@
         upUse.setAttribute('href', '#ic-chevron');
         upSvg.appendChild(upUse);
         upSvg.style.transform = 'rotate(90deg)';
-        upSvg.className = 'arch-up-icon';
+        upSvg.setAttribute('class', 'arch-up-icon');  // SVG className 只读，必须用 setAttribute
         upRow.appendChild(upSvg);
         var upName = document.createElement('span');
         upName.className = 'd-name';
