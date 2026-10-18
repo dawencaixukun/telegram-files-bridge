@@ -799,7 +799,7 @@
       openBtn.disabled = atRoot;
       openBtn.title = atRoot ? '请先点击进入某个网盘' : '打开 ' + driveBrowsePath;
     }
-    if (rootHint) rootHint.style.display = '';
+    if (rootHint) rootHint.style.display = atRoot ? '' : 'none';
 
     function renderErr(msg) {
       list.textContent = '';
@@ -813,6 +813,7 @@
 
     // 根层级：直接列出各挂载盘（display_name + mount_path 小字），不发请求
     if (!driveBrowsePath || driveBrowsePath === '/') {
+      ++driveBrowseLoadSeq;  // 作废在途的目录请求，防止过期响应覆盖根列表
       list.textContent = '';
       var mounts = window.__driveStorages || [];
       if (!mounts.length) {
@@ -844,7 +845,7 @@
         row.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
-          window.__driveBrowseLoad(s.mount_path || ('/' + (s.name || '')));
+          window.__driveBrowseLoad(s.mount_path || '/');
         });
         list.appendChild(row);
       });

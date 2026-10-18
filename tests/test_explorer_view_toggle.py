@@ -200,7 +200,6 @@ class TestExplorerViewToggle(unittest.TestCase):
         self.assertIn(".thumb-grid.view-list .thumb {", html)
         # 只有一个卡片网格容器（没有为列表视图复制第二套卡片）
         self.assertEqual(html.count('class="thumb-grid"'), 1)
-        self.assertEqual(html.count("subfolder"), html.count("subfolder"))  # 占位一致性
         self.assertEqual(html.count('class="thumb folder-card"'), 1)
         self.assertEqual(html.count('class="thumb explorer-card"'), 1)
 
