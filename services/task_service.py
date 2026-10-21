@@ -5,6 +5,7 @@ services/task_service.py — 任务聚合引擎与状态监控服务
 负责跨账号/跨聊天任务聚合、FileRecord 状态转换、总览 KPI 统计与任务状态跃迁告警对账。
 """
 import os
+import re
 import time
 import json
 import shutil
@@ -17,7 +18,7 @@ from core.config import (
     APP_ROOT_DIR, BASE_DIR, CACHE_TTL, TG_READY, _pick, _pick_id,
     _fmt_size, _fmt_time, _match_size_bucket, _classify_file_type,
     ALLOWED_TG_DOMAINS, RE_TG_PRIVATE, RE_TG_PUBLIC, _LINK_PATTERNS, _tg_err_public,
-    _resolve_host_local_path
+    _resolve_host_local_path, _chat_title, _human_name, _CUSTOM_FILE_NOTES
 )
 from core.templates import _stages, _spark_points, _speed_chart_points
 from core.state import (
@@ -25,9 +26,10 @@ from core.state import (
     _format_waiting_disk_task, _format_flood_wait_task,
     _is_flood_wait_active, _get_flood_wait_status,
     _DELETED_LOCAL_UIDS, _alert_state, _ALERT_EVENT_LIMIT, _ALERTS_MAX,
-    _archive_latest_raw_of, _ARCHIVE_JOBS, _archive_index_snapshot
+    _archive_latest_raw_of, _ARCHIVE_JOBS, _archive_index_snapshot, _custom_notes_save
 )
-from core.backend import BACKEND, chat_sources
+from core.backend import BACKEND
+from services.browse_service import chat_sources
 from core.logging import log, LOG_STORE
 
 _TASK_STATUSES = ("downloading", "paused", "completed", "error")
@@ -90,18 +92,6 @@ def _stable_task_id(unique_id: Any, index: int) -> int:
         h = hashlib.sha1(str(unique_id).encode()).hexdigest()[:12]
         return int(h, 16) >> 4
     return index
-
-
-def _human_name(rec: Dict[str, Any]) -> str:
-    name = _pick(rec, "fileName", "filename", "title", "name", "message", default="")
-    if name:
-        return str(name)
-    chat = _pick(rec, "chatTitle", "chat_title", "chatName", "channel", default="")
-    return "文件 " + str(_pick_id(rec) or (chat or ""))
-
-
-def _chat_title(rec: Dict[str, Any]) -> str:
-    return str(_pick(rec, "chatTitle", "chat_title", "chatName", "channel", default=""))
 
 
 def _to_task(rec: Dict[str, Any], index: int, chat_titles: Optional[Dict[str, str]] = None,
@@ -263,22 +253,11 @@ def _to_local_file_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _to_cloud_file_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "archived_time": task.get("_archived_at_formatted") or task.get("time", "—"),
-        "filename": task.get("filename", "—"),
-        "size": task.get("size", "—"),
-        "cloud_path": "—",
-        "status": task.get("status", "archived"),
-    }
-
-
 async def _chat_title_map() -> Dict[str, str]:
     if _CHAT_TITLE_CACHE["expire"] > time.monotonic():
         return _CHAT_TITLE_CACHE["value"] or {}
     out: Dict[str, str] = {}
     try:
-        from core.backend import chat_sources
         sources = await chat_sources()
         for s in sources:
             if s.get("chatId") is not None:
@@ -328,7 +307,6 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
     if have_all_files:
         return tasks
 
-    from core.backend import chat_sources
     try:
         sources = await chat_sources(force=force)
     except Exception as e:  # noqa: BLE001
@@ -469,6 +447,14 @@ def _enrich_download_speed(tasks: List[Dict[str, Any]]) -> None:
         else:
             _DL_SPEED_STATE.pop(uid, None)
             _UL_SPEED_STATE.pop(uid, None)
+
+    # 快照表收敛：终态/离场任务（含后端 idle 重置）不再进任务列表，
+    # 其 uid 快照按清理，防止速率基准无界累积。
+    for _st in (_DL_SPEED_STATE, _UL_SPEED_STATE):
+        if len(_st) > 256:
+            keep = {str(t.get("_unique_id") or "") for t in tasks}
+            for k in [k for k in _st if k not in keep][:-256]:
+                _st.pop(k, None)
 
 
 async def _upload_speed_snapshot() -> float:
@@ -827,9 +813,8 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
     _dl_uids_with_size = set()
     _raw_files = []
     try:
-        from core.backend import BACKEND as _BK
-        _raw = await _BK.list_all_files_page_info(force=False)
-        _raw_files = list(_BK._unwrap_files(_raw) or [])
+        _raw = await BACKEND.list_all_files_page_info(force=False)
+        _raw_files = list(BACKEND._unwrap_files(_raw) or [])
         for f in _raw_files:
             v = f.get("downloadedSize")
             if not v and str(f.get("downloadStatus") or "") == "completed":
@@ -856,12 +841,21 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
     dl_total = _fmt_total_bytes(dl_total_bytes)
     ul_total = _fmt_total_bytes(ul_total_bytes)
     kpis = [
-        {"label": "累计下载", "icon": "ic-download", "value": dl_total[0],
-         "unit": dl_total[1], "id": "kpi-dl-total",
-         "delta": "", "d": "flat", "spark": "#22d3ee", "points": _spark_points([float(dl_total_bytes)] * 14)},
-        {"label": "累计上传", "icon": "ic-upload", "value": ul_total[0],
-         "unit": ul_total[1], "id": "kpi-ul-total",
-         "delta": "", "d": "flat", "spark": "#60a5fa", "points": _spark_points([float(ul_total_bytes)] * 14)},
+        {
+            "label": "累计下载 / 上传",
+            "icon": "ic-download",
+            "id": "kpi-transfer-total",
+            "items": [
+                {"label": "累计下载", "icon": "ic-download", "value": dl_total[0],
+                 "unit": dl_total[1], "id": "kpi-dl-total", "color": "#22d3ee",
+                 "points": _spark_points([float(dl_total_bytes)] * 14)},
+                {"label": "累计上传", "icon": "ic-upload", "value": ul_total[0],
+                 "unit": ul_total[1], "id": "kpi-ul-total", "color": "#60a5fa",
+                 "points": _spark_points([float(ul_total_bytes)] * 14)},
+            ],
+            "delta": "", "d": "flat", "spark": "#22d3ee",
+            "points": _spark_points([float(dl_total_bytes)] * 14),
+        },
         {"label": "本地磁盘占用", "icon": "ic-hdd",
          "value": str(int(disk.get("used_gb", 0))), "unit": "GB",
          "delta": "", "d": "flat", "spark": "#8b5cf6", "points": _spark_points(trend_disk)},
@@ -1025,7 +1019,7 @@ async def _ctx(request: Any, page_id="", active_nav="", active_page="", extra=No
             "alert_count": sum(1 for a in alerts if a["unread"]),
             "alerts": alerts,
             "done_today": sum(1 for t in tasks if t["status"] in ("downloaded", "archived")),
-            "stats": await _dashboard_stats(tasks, disk),
+            "stats": (await _dashboard_stats(tasks, disk)) if page_id in ("dashboard", "account", "") else {},
             "recent_tasks": tasks[:8],
             "tasks": tasks,
             "now_fmt": time.strftime("%H:%M"),
@@ -1130,14 +1124,67 @@ def _parse_link(line: str) -> Optional[str]:
     return None
 
 
-async def _resolve_links_to_files(links: List[str], force: bool = False) -> tuple:
+# 行内「链接 + 备注名」拆分。用户习惯是链接后面直接跟中文名：
+#   https://t.me/chan/123 我的自定义标题
+# 也兼容 ｜ | , ， 制表符 等分隔符，以及把备注写在链接前面的写法。
+_LINK_IN_LINE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:c/\d+|[A-Za-z0-9_]{4,32})/\d{1,12}",
+    re.IGNORECASE,
+)
+_NOTE_SEPARATORS = " \t\u3000|｜,，、;；"
+
+
+def _split_link_notes(raw_lines: List[str]) -> tuple:
+    """把「链接 备注」逐行拆成 (纯链接列表, {链接: 备注})。
+
+    备注为空的行走原样（保持旧行为：只有链接）。备注会以**文件名**身份落库，
+    所以这里顺手剥掉路径分隔符与首尾空白，避免用户贴进来的引号/书名号污染文件名。
+    """
+    links: List[str] = []
+    notes: Dict[str, str] = {}
+    for raw in raw_lines:
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        m = _LINK_IN_LINE.search(line)
+        if not m:
+            # 交给上层统一报「没有可识别的链接」，不在这里吞掉
+            links.append(line)
+            continue
+        link = m.group(0)
+        if not link.lower().startswith("http"):
+            link = "https://" + link
+        before = line[:m.start()].strip(_NOTE_SEPARATORS)
+        after = line[m.end():].strip(_NOTE_SEPARATORS)
+        note = after or before
+        note = re.sub(r'[\r\n\t]+', " ", note)
+        # 备注直接当文件名用：全角引号/书名号一律剔除（含中间的），
+        # 只留首尾 strip 会漏掉 `a「b` 这类残留。
+        for _ch in '"\'“”「」《》『』':
+            note = note.replace(_ch, "")
+        note = note.strip()
+        note = note.replace("/", "／").replace("\\", "＼")
+        links.append(link)
+        if note:
+            notes[link] = note
+    return links, notes
+
+
+async def _resolve_links_to_files(
+    links: List[str],
+    force: bool = False,
+    notes_by_link: Optional[Dict[str, str]] = None,
+    link_to_msg: Optional[Dict[str, Tuple[Any, Any]]] = None,
+) -> tuple:
     """t.me 链接两跳解析：后端没有「按链接下载」端点。
 
     第一跳 GET /telegram/{tg}/chat/0/files?link=...（TDLib GetMessageLinkInfo）
     解析出文件记录；第二跳把 {telegramId, chatId, messageId, fileId} 数组
     交给 /files/start-download-multiple。返回 (成功数, 失败原因)。
+    若附带 notes_by_link，解析成功后自动将备注与视频 uid 绑定。
     """
     from services.archive_service import _check_file_dedup
+    from services.watch_service import _LINK_MSG_TO_UID
     parsed = [p for p in (_parse_link(l) for l in links) if p]
     if not parsed:
         return 0, "没有可识别的链接"
@@ -1166,8 +1213,22 @@ async def _resolve_links_to_files(links: List[str], force: bool = False) -> tupl
                 try:
                     if rec.get("fileId") or rec.get("id") or rec.get("messageId"):
                         got.append(rec)
+                        uid = str(_pick_id(rec) or "")
+                        m_chat = rec.get("chatId")
+                        m_mid = rec.get("messageId")
+                        note = (notes_by_link or {}).get(link) or (notes_by_link or {}).get(rec.get("link", ""))
+                        if note:
+                            if uid:
+                                _CUSTOM_FILE_NOTES[uid] = note
+                            if m_chat and m_mid:
+                                _CUSTOM_FILE_NOTES[f"msg:{m_chat}:{m_mid}"] = note
+                        if link_to_msg and link in link_to_msg and uid:
+                            src_ch, src_mid = link_to_msg[link]
+                            _LINK_MSG_TO_UID[f"msg:{src_ch}:{src_mid}"] = uid
                 except Exception:  # noqa: BLE001
                     continue
+        if notes_by_link:
+            _custom_notes_save()
         if got:
             tg_for_files = tg_id
             payload_files = []

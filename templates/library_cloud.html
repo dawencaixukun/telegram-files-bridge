@@ -16,6 +16,16 @@ window.cloudLibrary = function cloudLibrary() {
     remoteDir: '',
     statusFilter: '',
     showDomainModal: false,
+    /* 手机端筛选区默认折叠：高级筛选（网盘/状态/目录）收进可展开面板，
+       只留一行「搜索 + 筛选」——原先 3 个带 label 的下拉竖排占掉半屏。 */
+    filtersOpen: false,
+    activeFilterCount: function () {
+      var n = 0;
+      if (this.drive) n++;
+      if (this.statusFilter) n++;
+      if (this.remoteDir) n++;
+      return n;
+    },
     openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
     domainInput: '',
     savingDomain: false,
@@ -123,8 +133,7 @@ window.cloudLibrary = function cloudLibrary() {
       }
 
       try {
-        var csrfMatch = document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]*)/);
-        var csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : (window.__csrfToken ? window.__csrfToken() : '');
+        var csrfToken = window.__csrfToken ? window.__csrfToken() : '';
         var res = await fetch(endpoint, {
           method: 'POST',
           headers: {
@@ -286,8 +295,7 @@ window.cloudLibrary = function cloudLibrary() {
       }
       this.savingDomain = true;
       try {
-        var csrfMatch = document.cookie.match(/(?:^|;\s*)tg_csrf=([^;]*)/);
-        var csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : (window.__csrfToken ? window.__csrfToken() : '');
+        var csrfToken = window.__csrfToken ? window.__csrfToken() : '';
         await fetch('/archive/config', {
           method: 'POST',
           headers: {
@@ -362,6 +370,83 @@ window.cloudLibrary = function cloudLibrary() {
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+/* ---- 顶部筛选区：一行搜索 + 「筛选」开关 ----
+   历史缺陷：手机上「搜索文件名 / 网盘分类 / 存档分类 / 独立归档目录」四个带
+   label 的控件竖排，占掉近半屏，文件列表被挤到首屏之下（用户截图指出
+   「这些占据手机端大部分 UI」）。改为：常驻只留一行（搜索 + 筛选 + 计数），
+   三个下拉收进可展开面板；桌面端（≥900px）面板自动常显，不丢原来的可见性。 */
+.cloud-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.cloud-search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.cloud-search .input {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  padding-left: 32px;
+  padding-right: 32px;
+  border-radius: 8px;
+}
+.cloud-search-icon {
+  position: absolute;
+  left: 9px;
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.cloud-search-clear {
+  position: absolute;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+}
+.cloud-filter-toggle {
+  height: 36px;
+  flex: none;
+  gap: 5px;
+}
+.cloud-filter-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent, #38bdf8);
+  color: #04121f;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.cloud-count-chip {
+  flex: none;
+  padding: 7px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cloud-filter-panel { flex: 1 1 100%; }
+@media (min-width: 900px) {
+  /* 桌面端：筛选面板常显（x-show 设的 inline display:none 需要 !important 覆盖） */
+  .cloud-filter-toggle { display: none !important; }
+  .cloud-filter-panel { display: block !important; }
+}
+@media (max-width: 899px) {
+  .cloud-filter-panel { margin-top: 2px; }
+  .cloud-filter-bar { flex-wrap: nowrap; }
+  .cloud-count-chip { display: none; }   /* 计数在分组标题与底部已有，手机省位置 */
+}
 .cloud-filter-form {
   display: flex;
   align-items: center;
@@ -371,7 +456,18 @@ window.cloudLibrary = function cloudLibrary() {
   max-width: 100%;
   flex-wrap: wrap;
 }
+.cloud-filter-form .field > label {
+  /* 手机端用 placeholder 式提示，label 缩短高度 */
+  font-size: 11px;
+}
 @media (max-width: 640px) {
+  .cloud-filter-form {
+    gap: 8px;
+  }
+  .cloud-filter-form .field {
+    flex: 1 1 calc(50% - 8px) !important;
+    min-width: 0 !important;
+  }
   .archived-folder > summary {
     flex-wrap: wrap;
     padding: 12px 14px;
@@ -386,6 +482,57 @@ window.cloudLibrary = function cloudLibrary() {
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
+}
+/* 图标按钮不能被 flex 压扁：父容器 nowrap 时 .icon-btn.xs 会被挤到 21px 宽，
+   svg 跟着缩成 7px —— 手机上看起来就是「一排空按钮框、图标看不见」。 */
+.cloud-actions-cell .icon-btn,
+.cloud-actions-cell .icon-btn.xs {
+  flex: 0 0 30px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  box-sizing: border-box;
+}
+.cloud-actions-cell .icon-btn svg,
+.cloud-actions-cell .icon-btn.xs svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+@media (max-width: 640px) {
+  /* 窄屏：操作区不再挤在卡片右侧一行。
+     历史布局：OpenList+取回 胶囊 → 改名/复制/移动/删除 4 个图标按钮全塞在一行，
+     332px 卡片里塞 181px 胶囊 + 4×30px 图标，图标几乎贴到边缘、点击热区太小。
+     改成两段式：第一行胶囊占满整行（两段均分），第二行 4 个图标按钮等距排开。 */
+  .cloud-actions-cell {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .cloud-actions-cell .pill-btns {
+    order: 1;
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .cloud-actions-cell .pill-btns .btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+  .cloud-actions-cell .icon-btn,
+  .cloud-actions-cell .icon-btn.xs {
+    order: 2;
+    flex: 1 1 0;
+    width: auto;
+    max-width: 64px;
+    height: 34px;
+  }
+  .cloud-actions-cell .icon-btn svg,
+  .cloud-actions-cell .icon-btn.xs svg {
+    width: 16px;
+    height: 16px;
+  }
 }
 .archived-folder {
   margin: 0 0 var(--space-3);
@@ -500,36 +647,7 @@ window.cloudLibrary = function cloudLibrary() {
     align-items: stretch;
   }
 }
-.cloud-transfer-progress {
-  margin-top: 6px;
-  padding: 4px 6px;
-  background: var(--bg-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.ctp-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  color: var(--text-2);
-}
-.ctp-track {
-  width: 100%;
-  height: 5px;
-  background: var(--bg-3);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.ctp-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 3px;
-  transition: width 0.25s ease;
-}
+
 </style>
 
 <div class="cloud-library" x-data="cloudLibrary()" x-init="init()">
@@ -539,17 +657,17 @@ window.cloudLibrary = function cloudLibrary() {
     <p>已归档到云端网盘的文件（查看 TG 历史归档记录与取回）</p>
   </div>
   <div class="row" style="gap:8px;align-items:center;">
-    <!-- 顶栏自定义 OpenList 域名配置按钮 -->
+    <!-- 顶栏自定义 OpenList 域名配置按钮：只显示「已配置好」，域名放进 title 提示 -->
     <button type="button" class="btn sm"
             :class="openlistBase ? 'primary' : 'ghost'"
             @click="openDomainModal()"
-            title="配置 OpenList 外部公网访问域名/IP与端口">
+            :title="openlistBase ? ('OpenList 外部访问域名：' + displayDomain(openlistBase) + '（点击修改）') : '配置 OpenList 外部公网访问域名/IP与端口'">
       <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10"/>
         <line x1="2" y1="12" x2="22" y2="12"/>
         <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
       </svg>
-      <span x-text="openlistBase ? ('OpenList: ' + displayDomain(openlistBase)) : '设置 OpenList 域名'"></span>
+      <span x-text="openlistBase ? '已配置好' : '设置 OpenList 域名'"></span>
     </button>
     <button type="button" class="btn sm danger" onclick="window.__clearMissingCloudFiles()" title="清理云端已不存在的失效记录">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
@@ -625,26 +743,41 @@ window.cloudLibrary = function cloudLibrary() {
   <!-- 顶部搜索框与网盘分类筛选下拉框 -->
   <div class="card" style="margin-bottom:var(--space-5);">
     <div class="cloud-toolbar-wrap">
-      <div class="cloud-filter-form">
-        <div class="field" style="margin:0;flex:2;min-width:200px;">
-          <label for="cloudSearch">搜索文件名</label>
-          <div style="position:relative;">
-            <input class="input" id="cloudSearch" type="text"
-                   x-model="q" placeholder="输入文件名实时过滤…" aria-label="搜索文件名"
-                   style="padding-left:36px;">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-3);width:16px;height:16px;pointer-events:none;">
-              <use href="#ic-search"/>
-            </svg>
-            <button type="button" x-show="q" @click="q=''" class="icon-btn xs"
-                    style="position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;background:transparent;"
-                    aria-label="清空搜索">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><use href="#ic-x"/></svg>
-            </button>
-          </div>
+      <!-- 常驻一行：搜索框 + 「筛选」开关（手机上默认收起，省掉半屏） -->
+      <div class="cloud-filter-bar">
+        <div class="cloud-search">
+          <svg class="icon cloud-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <use href="#ic-search"/>
+          </svg>
+          <input class="input" id="cloudSearch" type="text"
+                 x-model="q" placeholder="搜索文件名…" aria-label="搜索文件名">
+          <button type="button" x-show="q" @click="q=''" class="icon-btn xs cloud-search-clear"
+                  aria-label="清空搜索">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><use href="#ic-x"/></svg>
+          </button>
         </div>
 
-        <div class="field" style="margin:0;flex:1;min-width:160px;">
+        <button type="button" class="btn sm cloud-filter-toggle"
+                :class="(filtersOpen || activeFilterCount()) ? 'primary' : 'ghost'"
+                @click="filtersOpen = !filtersOpen"
+                :aria-expanded="filtersOpen ? 'true' : 'false'"
+                aria-controls="cloudFilterPanel">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3"/>
+          </svg>
+          <span>筛选</span>
+          <span class="cloud-filter-badge tnum" x-show="activeFilterCount()" x-text="activeFilterCount()"></span>
+        </button>
+
+        <span class="delta flat cloud-count-chip">
+          <strong class="tnum" x-text="visibleCount()">{{ cloud_files|length }}</strong> / {{ cloud_files|length }} 个
+        </span>
+      </div>
+
+      <!-- 高级筛选面板：桌面端常显（屏幕够宽），手机端点「筛选」才展开 -->
+      <div class="cloud-filter-panel" id="cloudFilterPanel" x-show="filtersOpen" x-cloak>
+      <div class="cloud-filter-form">
+        <div class="field" style="margin:0;flex:1;min-width:140px;">
           <label for="cloudDrive">网盘分类</label>
           <select class="select" id="cloudDrive" x-model="drive" aria-label="网盘分类筛选">
             <option value="">全部网盘</option>
@@ -659,7 +792,7 @@ window.cloudLibrary = function cloudLibrary() {
           {% endif %}
         </div>
 
-        <div class="field" style="margin:0;flex:1;min-width:150px;">
+        <div class="field" style="margin:0;flex:1;min-width:130px;">
           <label for="cloudStatus">存档分类</label>
           <select class="select" id="cloudStatus" x-model="statusFilter" aria-label="存档状态分类筛选">
             <option value="">全部状态</option>
@@ -668,7 +801,7 @@ window.cloudLibrary = function cloudLibrary() {
           </select>
         </div>
 
-        <div class="field" style="margin:0;flex:1;min-width:180px;">
+        <div class="field" style="margin:0;flex:1;min-width:150px;">
           <label for="cloudRemoteDir">独立归档目录</label>
           <select class="select" id="cloudRemoteDir" x-model="remoteDir" aria-label="独立归档目录筛选">
             <option value="">全部归档目录</option>
@@ -678,11 +811,6 @@ window.cloudLibrary = function cloudLibrary() {
           </select>
         </div>
       </div>
-
-      <div class="row" style="gap:8px;align-items:flex-end;">
-        <span class="delta flat" style="padding:7px 14px;">
-          显示 <strong class="tnum" x-text="visibleCount()">{{ cloud_files|length }}</strong> / 共 {{ cloud_files|length }} 个文件
-        </span>
       </div>
     </div>
   </div>

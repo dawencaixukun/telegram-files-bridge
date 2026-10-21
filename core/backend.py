@@ -422,53 +422,6 @@ class BackendClient:
 BACKEND = BackendClient(TG_API_URL)
 
 
-async def _chat_sources(force: bool = False) -> List[Dict[str, Any]]:
-    sources: List[Dict[str, Any]] = []
-    try:
-        telegrams = await BACKEND.list_telegrams(force=force)
-    except Exception as e:  # noqa: BLE001
-        log.warning("list_telegrams 失败: %s", e)
-        return sources
-    if not isinstance(telegrams, list):
-        return sources
-
-    async def _gather_chat(tg: Dict[str, Any]):
-        tg_id = _pick(tg, "telegramId", "telegram_id", "id")
-        if tg_id is None:
-            return []
-        try:
-            chats = await BACKEND.list_chats(tg_id, force=force)
-        except Exception as e:  # noqa: BLE001
-            log.warning("list_chats(%s) 失败: %s", tg_id, e)
-            return []
-        out = []
-        if isinstance(chats, list):
-            for ch in chats:
-                out.append({
-                    "chatId": _pick(ch, "chatId", "chat_id", "id"),
-                    "title": str(_pick(ch, "title", "name", "channel", "chatName", default="聊天")),
-                    "telegramId": tg_id,
-                })
-        return out
-
-    results = await asyncio.gather(*[_gather_chat(t) for t in telegrams])
-    for group in results:
-        sources.extend(group)
-    return sources
-
-
-CHAT_SOURCE_CACHE: Dict[str, Any] = {"key": None, "value": None}
-
-
-async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
-    key = int(time.time()) // 30
-    if not force and CHAT_SOURCE_CACHE["key"] == key:
-        return CHAT_SOURCE_CACHE["value"]
-    value = await _chat_sources(force=force)
-    CHAT_SOURCE_CACHE["key"] = key
-    CHAT_SOURCE_CACHE["value"] = value
-    return value
-
 
 def _save_backend_credentials(username: str, password: str) -> None:
     try:
