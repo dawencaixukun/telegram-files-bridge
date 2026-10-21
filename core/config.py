@@ -8,7 +8,8 @@ import os
 import re
 import time
 import posixpath
-from typing import Any, Dict, List, Optional
+import secrets
+from typing import Any, Dict, List, Optional, Set
 
 # ---------------------------------------------------------------------
 # 目录与环境配置
@@ -135,6 +136,7 @@ TG_API_METHOD_WHITELIST = {
     "GetMessage",
     # 频道/收藏监听：搜索会话消息（转发即下载的文本链接轮询用）
     "SearchChatMessages",
+    "GetChatHistory",
     "DownloadFile",
     "SendMessage",
 }
@@ -175,7 +177,6 @@ _LOG_STORE_LEVELS = ("INFO", "WARN", "ERROR")
 _CREDS_FILE = os.path.join(APP_ROOT_DIR, ".backend_creds")
 
 _WAITING_DISK_FILE = os.path.join(APP_ROOT_DIR, ".waiting_disk.json")
-_WAITING_DISK_TASKS_MAX = 500
 # 注意：磁盘水位阈值不在此处定义。真实生效值来自运行时可变配置
 # _ARCHIVE_CONFIG["diskHighWatermarkPercent" / "diskLowWatermarkPercent"]
 # （core/state.py，可在设置页调整并持久化到 .archive_config.json）。
@@ -183,27 +184,23 @@ _WAITING_DISK_TASKS_MAX = 500
 # 且默认值与真实值不一致，容易让运维误以为改这里能调水位 —— 已移除。
 
 _ARCHIVE_FILE = os.path.join(APP_ROOT_DIR, ".archive_jobs.json")
-_ARCHIVE_CFG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
-_ARCHIVE_CONFIG_FILE = _ARCHIVE_CFG_FILE
+_ARCHIVE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".archive_config.json")
 # 归档任务上限与并发信号量的真实定义在 core/state.py（_ARCHIVE_MAX_JOBS=5000、
 # asyncio.Semaphore(2)），曾在此重复定义 _ARCHIVE_JOBS_MAX=1000 与
 # _ARCHIVE_SEMAPHORE_LIMIT=2，与实际生效值矛盾且从未被引用 —— 已移除。
 
 _RETRIEVE_FILE = os.path.join(APP_ROOT_DIR, ".retrieve_jobs.json")
-_RETRIEVE_JOBS_MAX = 500
 # _RETRIEVE_SEMAPHORE_LIMIT 的真实定义在 services/retrieve_service.py —— 已移除。
 
 _SUBS_FILE = os.path.join(APP_ROOT_DIR, ".subscriptions.json")
-_SUBS_RULES_MAX = 100
+_CUSTOM_NOTES_FILE = os.path.join(APP_ROOT_DIR, ".custom_file_notes.json")
+_CUSTOM_FILE_NOTES: Dict[str, str] = {}
 
 _NOTIFY_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".notify_config.json")
-_NOTIFY_FILE = _NOTIFY_CONFIG_FILE
 _OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 
-_SESSION_BACKUP_STATUS_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_status.json")
 _SESSION_BACKUP_REMOTE_DIR = "/TG-Backups"
 _SESSION_BACKUP_SECRET_FILE = os.path.join(APP_ROOT_DIR, ".session_backup_key")
-_SESSION_BACKUP_KEY_FILE = _SESSION_BACKUP_SECRET_FILE
 _SESSION_BACKUP_MAX_KEEP = 7
 # 还原会话时必须先停掉写入 td.binlog/data.db 的后端容器（docker 容器名，可用环境变量覆盖）。
 # 不停容器直接覆盖会被运行中的 TDLib 进程立即回写，属于静默失败。
@@ -297,11 +294,107 @@ def _pick_id(rec: Dict[str, Any]) -> Any:
     return _pick(rec, "uniqueId", "unique_id", "id", "fileId", "file_id", "messageId", "message_id")
 
 
+_MEANINGLESS_NUMERIC_RE = re.compile(r"^\d{1,24}(?:\s*\(\d+\)|_\d+)?$")
+_MEANINGLESS_PREFIX_RE = re.compile(
+    r"^(?:video|vid|img|mov|doc|document|file|clip|media)[_\-\s]*\d[\d_\-\s:()]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_meaningless_filename(raw_name: str) -> bool:
+    """判定文件名是否为空或无意义的自动生成名（如 `文件_AgAD...`、`3 (1).mp4`、`video_2024-...`、纯数字 ID）。"""
+    s = str(raw_name or "").strip()
+    if not s or s == "未命名":
+        return True
+    stem, _ = posixpath.splitext(s)
+    stem = stem.strip()
+    if not stem or stem == "未命名":
+        return True
+    if stem.startswith("文件 ") or stem.startswith("文件_"):
+        return True
+    if _MEANINGLESS_NUMERIC_RE.match(stem):
+        return True
+    if _MEANINGLESS_PREFIX_RE.match(stem):
+        return True
+    return False
+
+
+def _sanitize_note_filename(note: str) -> str:
+    """将用户在收藏里发送的备注文本净化为合法文件名主干（去换行、禁路径分隔符与控制字符）。"""
+    raw = str(note or "").strip()
+    if not raw:
+        return ""
+    first_line = ""
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if s:
+            first_line = s
+            break
+    if not first_line:
+        return ""
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", first_line)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._-")
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "_")
+    return cleaned[:80]
+
+
+def _infer_rec_ext(rec: Dict[str, Any], raw_name: str = "") -> str:
+    ext = posixpath.splitext(str(raw_name or ""))[1]
+    if not ext:
+        lp = str(_pick(rec, "localPath", "local_path", default="") or "")
+        if lp and lp != "—":
+            ext = posixpath.splitext(lp)[1]
+    if not ext:
+        mime = str(_pick(rec, "mimeType", "_mimeType", default="") or "").strip().lower()
+        ext = _MIME_EXT.get(mime, "")
+    if not ext:
+        ftype = str(_pick(rec, "type", "_type", default="") or "").strip().lower()
+        ext = {"video": ".mp4", "audio": ".mp3", "photo": ".jpg"}.get(ftype, "")
+    return ext
+
+
 def _human_name(rec: Dict[str, Any]) -> str:
-    """后端可能用 fileName/title/name，取一个可靠的显示名。"""
-    name = _pick(rec, "fileName", "filename", "title", "name", "message", default="")
-    if name:
-        return str(name)
+    """后端可能用 fileName/title/name，取一个可靠的显示名。
+
+    优先级：
+    1. 用户在收藏/监听会话中为该视频备注的自定义名称（_CUSTOM_FILE_NOTES）；
+    2. 原始 fileName（若非空且非无意义自动生成名）；
+    3. 视频自带的 caption 文案首行（当原始 fileName 为空或如 `3 (1).mp4`、`video_2024-...` 等无意义名时）；
+    4. 原始 fileName 兜底或 `文件 <uniqueId>`。
+    """
+    raw_name = str(_pick(rec, "fileName", "filename", "title", "name", "message", default="") or "").strip()
+    uid = str(_pick(rec, "uniqueId", "unique_id", default="") or "").strip()
+    chat_id = _pick(rec, "chatId", "chat_id", default="")
+    msg_id = _pick(rec, "messageId", "message_id", default="")
+    custom_note = ""
+    if uid and uid in _CUSTOM_FILE_NOTES:
+        custom_note = _CUSTOM_FILE_NOTES[uid]
+    elif chat_id and msg_id and f"msg:{chat_id}:{msg_id}" in _CUSTOM_FILE_NOTES:
+        custom_note = _CUSTOM_FILE_NOTES[f"msg:{chat_id}:{msg_id}"]
+    if custom_note:
+        ext = _infer_rec_ext(rec, raw_name)
+        if ext and not custom_note.lower().endswith(ext.lower()):
+            return f"{custom_note}{ext}"
+        return custom_note
+
+    if not raw_name or _is_meaningless_filename(raw_name):
+        cap_raw = rec.get("caption")
+        if isinstance(cap_raw, dict):
+            cap_raw = cap_raw.get("text") or ""
+        cap_str = str(cap_raw or "").strip()
+        if cap_str:
+            first_ln = next((ln.strip() for ln in cap_str.splitlines() if ln.strip()), "")
+            if first_ln:
+                cap_clean = _sanitize_note_filename(_clean_archive_filename(first_ln, enabled=True))
+                if cap_clean and len(cap_clean) >= 2 and not _is_meaningless_filename(cap_clean):
+                    ext = _infer_rec_ext(rec, raw_name)
+                    if ext and not cap_clean.lower().endswith(ext.lower()):
+                        return f"{cap_clean}{ext}"
+                    return cap_clean
+
+    if raw_name:
+        return raw_name
     chat = _pick(rec, "chatTitle", "chat_title", "chatName", "channel", default="")
     return "文件 " + str(_pick_id(rec) or (chat or ""))
 
@@ -378,9 +471,34 @@ def _archive_join(remote_dir: str, filename: str) -> str:
 
 
 
+# @频道句柄 + 可选的尾部 `_<数字>`（Telegram 批量下载的兄弟文件序号）。
+# 必须把序号单独捕获并保留：见 _clean_archive_filename 第 2 步的说明 —— 序号跟着
+# 句柄一起被删掉，是同批文件洗成同名、进而互相覆盖的根源。
+_AD_HANDLE_RE = re.compile(r"@[A-Za-z0-9_]{3,32}?(_[0-9]{1,6})?(?![A-Za-z0-9_])")
+_INDEX_TAIL_RE = re.compile(r"_[0-9]{1,6}$")
+# 纯数字名（清洗后只剩序号，如 `@channel_10.mp4` → `10.mp4`）：用作安全网二判定
+_NUMERIC_ONLY_RE = re.compile(r"[0-9]{1,9}")
+
+
+def _keep_trailing_index(m: "re.Match") -> str:
+    """句柄整段删掉，但保留其尾部的 `_<数字>`（同批文件的区分标识）。"""
+    idx = m.group(1) or ""
+    return f" {idx.lstrip('_')} " if idx else " "
+
+
+def _keep_index_tail(s: str) -> str:
+    """把「名字尾部 `_<数字>`」规范成空格分隔，避免与下划线语义混淆。"""
+    return _INDEX_TAIL_RE.sub(lambda m: " " + m.group(0)[1:], s)
+
+
 # 方括号广告标签：要求括号内确实含广告特征词
+# 为何**不能**把 `@` 当特征（数据丢失级事故，实测）：`【优优】…电报搜：@siwasc8`
+# 含 `@` 会被整段清掉，而同一秒下载的兄弟文件是 `…@siwasc8_10/11/31.mp4`，
+# 它们只差句柄后面的序号 —— 句柄一删，同一批文件全部洗成同一个名字，
+# 归档时同一路径互相覆盖（云端只剩最后一个，且 deleteLocal 已删本地）。
+# 句柄由下方第 2 步 `@[A-Za-z0-9_]{3,32}` 精确处理，无需进括号特征集。
 _AD_BRACKET_RE = re.compile(
-    r"[【\[（\(][^】\]）\)]*(?:电报|群|发布|分享|关注|首发|唯一|永久|地址|资源|频道|水印|防失联|防封|公众号|微信|企鹅|招商|@|t\.me|http)[^】\]）\)]*[】\]）\)]",
+    r"[【\[（\(][^】\]）\)]*(?:电报|群|发布|分享|关注|首发|唯一|永久|地址|资源|频道|水印|防失联|防封|公众号|微信|企鹅|招商|t\.me|http)[^】\]）\)]*[】\]）\)]",
     re.IGNORECASE,
 )
 # 网址 / 域名：整段匹配（含 TLD 与路径）。
@@ -423,7 +541,14 @@ def _clean_archive_filename(raw_name: str, enabled: bool = True) -> str:
     # 1) 方括号广告标签
     name = _AD_BRACKET_RE.sub(" ", name)
     # 2) @频道句柄
-    name = re.sub(r"@[A-Za-z0-9_]{3,32}", " ", name)
+    #    关键（数据丢失级事故根源）：句柄字符集含 `_`，而 Telegram 批量下载的兄弟文件
+    #    就差句柄后面的序号 —— `@siwasc8_10` / `@siwasc8_11` / `@siwasc8_31`。
+    #    贪心的 `@[A-Za-z0-9_]{3,32}` 会把 `_10` 一起吃进句柄，三个不同文件于是洗出
+    #    完全相同的名字，归档时争同一个 remote_path 互相覆盖。
+    #    这里改成「照旧清掉整个句柄，但句柄尾部的 `_<数字>` 段保留下来当区分标识」。
+    name = _AD_HANDLE_RE.sub(_keep_trailing_index, name)
+    # 2b) 上面保留下来的序号若落在名字尾部、且紧贴下划线，规范成空格分隔
+    name = _keep_index_tail(name)
     # 3) 推广群号：必须真的带「群 / 组」二字，或紧跟在广告词后的 @句柄。
     #    绝不允许把「资源」「发布」「首发」「电报」「TG」这类正常词单独吃掉。
     name = re.sub(r"(?:电报|TG|资源|发布|首发)(?:群|组)[@A-Za-z0-9_\-]*", " ", name, flags=re.IGNORECASE)
@@ -439,6 +564,13 @@ def _clean_archive_filename(raw_name: str, enabled: bool = True) -> str:
     # 安全网：清洗过度一律回退原名。改名丢文件，远比留个广告尾巴严重。
     if not name or len(name) < 2:
         name = original.strip(" ._-—#") or original
+    # 安全网二：名字被洗成「纯数字」（如 `@channel_10.mp4` → `10.mp4`）时，
+    # 序号成了唯一的内容，反而看不出这是什么文件；把它退回原名形态
+    # （保留句柄但至少认得出来），避免给用户一串无意义的数字名。
+    if _NUMERIC_ONLY_RE.fullmatch(name.strip()):
+        fallback = original.strip(" ._-—#") or original
+        if fallback and not _NUMERIC_ONLY_RE.fullmatch(fallback.strip()):
+            name = fallback
     return f"{name}{ext}" if ext else name
 
 
@@ -474,6 +606,84 @@ def _ensure_archive_ext(name: str, local_path: str = "", mime: str = "", ftype: 
     return f"{nm}{ext}" if ext else nm
 
 
+def _archive_unique_name(
+    remote_dir: str,
+    filename: str,
+    owner_of: Optional[Dict[str, set]] = None,
+    uid: str = "",
+    suffix: str = "",
+) -> str:
+    """把清洗后的文件名唯一化：该路径已被**别的文件**占用时补 ` (N)`，返回文件名。
+
+    为什么必须在归档路径上做这一步（数据丢失级事故）：
+
+    1. 文件名清洗会整段删掉 Telegram 广告尾巴，而**区分文件的关键信息经常就长在
+       尾巴里**（`…@siwasc8_10.mp4` / `…_11` / `…_31`）。清洗后它们变成完全相同的
+       名字，于是多个不同文件指向同一个 `remote_path`。
+    2. 后端 OpenList 的同路径上传是**覆盖**语义（受控实测：先传 300000B 再传
+       500000B 到同一路径，远端只剩 500000B，两次都返回 200 OK，从返回码和目录
+       列表都看不出丢了东西）；两个上传并发时则报
+       `resourceModified`（eTag mismatch）。所以「批量失败、手动一个个点却成功」
+       是同一处缺陷的两种表现。
+    3. `deleteLocal` 默认 True，归档成功即删本地 —— 覆盖 + 删本地 = 云端只剩最后一个，
+       其余本地也没了，两头落空。实测已造成 12 个文件（约 11.44 GB）无法找回。
+
+    这里是**最后一道防线**：即使清洗规则本身有偏差（规则集里的 `@` 曾让整段
+    方括号名被吃掉），也不会再有两个不同文件争同一个云端路径。
+
+    `owner_of` 是 `{remote_path.lower(): {unique_id, ...}}`；同一 uid 复用自己
+    的原路径算安全（同一份内容重复上传是幂等的），只有**别的** uid 占用才让路。
+    `suffix` 用于「序号已被清洗吃掉」时把区分信息补回名字。
+    """
+    base_name = str(filename or "") or "未命名"
+    stem, ext = posixpath.splitext(base_name)
+    if not ext:
+        stem, ext = base_name, ""
+    if suffix and suffix not in stem:
+        stem = f"{stem} {suffix}"
+
+    def _taken(s: str) -> bool:
+        others = (owner_of or {}).get(_archive_join(remote_dir, f"{s}{ext}").lower())
+        return bool(others) and any(str(u) != str(uid) for u in others)
+
+    if not _taken(stem):
+        return f"{stem}{ext}"
+    n = 1
+    while _taken(f"{stem} ({n})"):
+        n += 1
+        if n > 9999:  # 兜底：极端情况用随机串保证唯一
+            return f"{stem} ({secrets.token_hex(4)}){ext}"
+    return f"{stem} ({n}){ext}"
+
+
+def _archive_name_suffix(raw_name: str, clean_name: str) -> str:
+    """清洗把区分序号吃掉了？返回可补回的短标识（否则空串）。
+
+    背景：Telegram 同批文件常叫 `…@siwasc8_10.mp4` / `…_11` / `…_31`，**只差
+    句柄后面的序号**。清洗规则会整段删掉 `@句柄`，序号跟着一起没了 —— 同批文件
+    于是洗出同一个名字（实测 22 个不同文件撞同一路径）。
+
+    这里在名字**已经**被洗得没有区分度时，把序号补回名字里，让用户一眼能分辨：
+        清洗前 `【优优】…电报搜：@siwasc8_10.mp4`
+        清洗后 `【优优】…电报搜：.mp4`       → 补成 `【优优】…电报搜： 10.mp4`
+    只在「确实丢了区分信息」时才补：若清洗结果里已含该序号（或本来就没有序号），
+    保持原样，避免给正常文件名加噪音。
+    """
+    raw = str(raw_name or "")
+    clean = str(clean_name or "")
+    if not raw or not clean:
+        return ""
+    # 取原始名里最后一个下划线/连字符后的数字段（Telegram 批量后缀）
+    m = re.search(r"[_\-.]([0-9]{1,6})(?=\.[A-Za-z0-9]{1,5}$|$)", raw)
+    if not m:
+        return ""
+    tok = m.group(1)
+    # 清洗结果里已经保留了就说不上「被吃掉」
+    if re.search(r"(?<![0-9])%s(?![0-9])" % re.escape(tok), clean):
+        return ""
+    return tok
+
+
 def _same_file_name(a: str, b: str) -> bool:
     """判定两个文件名是否指向同一个文件（用于查重指纹）。
 
@@ -496,24 +706,6 @@ def _same_file_name(a: str, b: str) -> bool:
         # 一方没后缀：只允许主干完全相等（不是前缀、不是只比第一个点之前）
         return (sa or na) == (sb or nb)
     return sa == sb and ea == eb
-
-
-def _human_to_bytes(size_str: str):
-    if not size_str or not isinstance(size_str, str):
-        return None
-    s = size_str.strip().upper()
-    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-    for u, mul in sorted(units.items(), key=lambda x: -len(x[0])):
-        if s.endswith(u):
-            try:
-                val = float(s[:-len(u)].strip())
-                return int(val * mul)
-            except (ValueError, TypeError):
-                return None
-    try:
-        return int(float(s))
-    except (ValueError, TypeError):
-        return None
 
 
 def _sum_human(files: List[Dict[str, Any]]) -> str:

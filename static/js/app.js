@@ -73,7 +73,6 @@
     host.appendChild(svg);
     host.appendChild(label);
   }
-  window.__thumbFallback = thumbFallback;
   document.addEventListener('error', function (e) {
     var t = e.target;
     if (t && t.tagName === 'IMG' && t.closest('.t-img')) thumbFallback(t);
@@ -233,11 +232,6 @@
   window.__toast = toast;
 
   /* ---------------- Submit modal ---------------- */
-  var submitBackdrop = null;
-  window.__openSubmit = function () {
-    var b = document.getElementById('submitBackdrop');
-    if (b) { b.classList.add('show'); document.body.style.overflow = 'hidden'; }
-  };
   window.__closeSubmit = function () {
     var b = document.getElementById('submitBackdrop');
     if (b) { b.classList.remove('show'); document.body.style.overflow = ''; }
@@ -245,13 +239,12 @@
   // wire escape key to close modal/dropdowns
   if (firstBoot) {
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { window.__closeSubmit(); window.__closeArchive(); window.__closeQuickDl(); window.__closeDrawer(); }
+      if (e.key === 'Escape') { window.__closeSubmit(); window.__closeArchive(); window.__closeDrawer(); }
     });
     // allow backdrop click to close
     document.addEventListener('click', function (e) {
       if (e.target && e.target.id === 'submitBackdrop') window.__closeSubmit();
       if (e.target && e.target.id === 'archiveBackdrop') window.__closeArchive();
-      if (e.target && e.target.id === 'quickDlBackdrop') window.__closeQuickDl();
     });
   }
 
@@ -285,151 +278,6 @@
     });
   };
 
-  /* ---------------- Quick Link Resolve & Direct Download ---------------- */
-  var currentQuickData = null;
-
-  window.__openQuickDl = function () {
-    var b = document.getElementById('quickDlBackdrop');
-    if (b) { b.classList.add('show'); document.body.style.overflow = 'hidden'; }
-  };
-
-  window.__closeQuickDl = function () {
-    var b = document.getElementById('quickDlBackdrop');
-    if (b) { b.classList.remove('show'); document.body.style.overflow = ''; }
-    currentQuickData = null;
-  };
-
-  window.__toggleQuickArchiveOptions = function () {
-    var chk = document.getElementById('quickAutoArchive');
-    var wrap = document.getElementById('quickDirWrap');
-    if (chk && wrap) {
-      wrap.style.display = chk.checked ? 'block' : 'none';
-    }
-  };
-
-  window.__resolveQuickLink = function () {
-    var inp = document.getElementById('quickLinkInput');
-    var val = (inp && inp.value ? inp.value.trim() : '');
-    if (!val) {
-      toast('请输入 Telegram 消息链接', 'error');
-      if (inp) inp.focus();
-      return;
-    }
-
-    var btn = document.getElementById('quickResolveBtn');
-    var spinner = document.getElementById('quickResolveSpinner');
-    var btnText = btn ? btn.querySelector('.quick-btn-text') : null;
-    if (btn) btn.disabled = true;
-    if (spinner) spinner.style.display = 'inline-block';
-    if (btnText) btnText.style.display = 'none';
-
-    postJSON('/api/tg/resolve-link', { link: val })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (!d || !d.ok) {
-          toast('解析失败', 'error', (d && d.message) || '无法解析该链接');
-          return;
-        }
-        window.__openQuickDlModal(d.data);
-      })
-      .catch(function (err) {
-        toast('解析失败', 'error', '网络异常或服务暂不可用');
-      })
-      .finally(function () {
-        if (btn) btn.disabled = false;
-        if (spinner) spinner.style.display = 'none';
-        if (btnText) btnText.style.display = 'inline';
-      });
-  };
-
-  window.__openQuickDlModal = function (data) {
-    if (!data || !data.files || !data.files.length) {
-      toast('未找到媒体', 'error', '该消息未包含有效媒体文件');
-      return;
-    }
-    currentQuickData = data;
-    var f0 = data.files[0];
-
-    var titleEl = document.getElementById('quickMediaTitle');
-    var sizeEl = document.getElementById('quickMetaSize');
-    var typeEl = document.getElementById('quickMetaType');
-    var chatEl = document.getElementById('quickMetaChat');
-    var msgEl = document.getElementById('quickMetaMsg');
-    var bannerEl = document.getElementById('quickStatusBanner');
-
-    if (titleEl) titleEl.textContent = f0.filename || '未命名媒体文件';
-    if (sizeEl) sizeEl.textContent = f0.sizeHuman || '未知大小';
-    if (typeEl) typeEl.textContent = (f0.fileType || 'file').toUpperCase();
-    if (chatEl) chatEl.textContent = f0.chatTitle || ('Chat #' + f0.chatId);
-    if (msgEl) msgEl.textContent = '#' + (f0.messageId || data.messageId);
-
-    if (bannerEl) {
-      if (f0.isAlreadyArchived) {
-        bannerEl.style.display = 'block';
-        bannerEl.className = 'quick-status-banner warning';
-        bannerEl.innerHTML = '⚠️ <b>提示：</b>该文件已在 OpenList 云端归档库中存在。直投仍可重新下载。';
-      } else if (f0.isAlreadyDownloaded) {
-        bannerEl.style.display = 'block';
-        bannerEl.className = 'quick-status-banner info';
-        bannerEl.innerHTML = 'ℹ️ <b>提示：</b>该文件在本地在存库中已下载完成。直投将重新入队校验。';
-      } else {
-        bannerEl.style.display = 'none';
-        bannerEl.innerHTML = '';
-      }
-    }
-
-    // 默认云端目录记忆
-    var dirInp = document.getElementById('quickArchiveDir');
-    var savedDir = localStorage.getItem('tg-archive-last-dir');
-    if (dirInp && savedDir) {
-      dirInp.value = savedDir;
-    }
-
-    window.__openQuickDl();
-  };
-
-  window.__confirmQuickDownload = function () {
-    if (!currentQuickData) {
-      toast('无法提交', 'error', '解析数据已失效，请重新解析');
-      window.__closeQuickDl();
-      return;
-    }
-
-    var chk = document.getElementById('quickAutoArchive');
-    var autoArchive = chk ? chk.checked : true;
-    var dirInp = document.getElementById('quickArchiveDir');
-    var archiveDir = dirInp ? dirInp.value.trim() : '/阿里云盘/tg-archive/';
-    if (autoArchive && archiveDir) {
-      localStorage.setItem('tg-archive-last-dir', archiveDir);
-    }
-
-    var startBtn = document.getElementById('quickStartDlBtn');
-    if (startBtn) startBtn.disabled = true;
-
-    postJSON('/api/tg/quick-download', {
-      link: currentQuickData.link,
-      files: currentQuickData.files,
-      autoArchive: autoArchive,
-      archiveDir: archiveDir
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && d.ok) {
-          window.__closeQuickDl();
-          var inp = document.getElementById('quickLinkInput');
-          if (inp) inp.value = '';
-          toast('直投下载成功', 'success', '已加入下载队列' + (autoArchive ? '，完成后自动归档' : ''));
-        } else {
-          toast('直投失败', 'error', (d && d.message) || '提交失败');
-        }
-      })
-      .catch(function (err) {
-        toast('提交失败', 'error', '网络或服务端异常');
-      })
-      .finally(function () {
-        if (startBtn) startBtn.disabled = false;
-      });
-  };
 
   /* ---------------- Archive modal (本地在存 → OpenList 云端归档) ----------------
      弹窗 partial: templates/partials/_archive_modal.html
@@ -1095,9 +943,6 @@
   window.__pageOnLeave(function () {
     if (archTimer) { clearInterval(archTimer); archTimer = null; }
   });
-  // 归档胶水版本标记：与 _archive_modal.html 的自愈守卫对账，
-  // 旧缓存 JS 会触发一次整页刷新拉新版本
-  window.__ARCH_GLUE = 'v20260905a';
 
   /* ---------------- 本地在存增强：多选、批量归档、单项/批量删除 ---------------- */
   function safeSelectorVal(val) {
@@ -3560,8 +3405,6 @@
           bar.classList.remove('done');
         }, 320);
       }
-      window.__startNavProgress = startNavProgress;
-      window.__finishNavProgress = finishNavProgress;
 
       document.addEventListener('htmx:beforeRequest', function () {
         startNavProgress();

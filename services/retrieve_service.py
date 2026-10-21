@@ -7,16 +7,10 @@ services/retrieve_service.py — 云端文件取回服务 (Retrieve Workflow)
 import os
 import time
 import asyncio
-import posixpath
 from urllib.parse import urljoin
 from typing import Any, Dict, List, Optional
-from core.config import (
-    APP_ROOT_DIR, OPENLIST_URL, _resolve_host_local_path,
-    _norm_remote_path
-)
-from core.state import (
-    _RETRIEVE_JOBS, _ARCHIVE_JOBS, _RETRIEVE_JOBS_MAX
-)
+from core.config import APP_ROOT_DIR, OPENLIST_URL
+from core.state import _RETRIEVE_JOBS
 from core.logging import log
 from services.openlist_service import (
     _openlist_client, _openlist_upload_client, _openlist_token,
@@ -222,11 +216,6 @@ async def _retrieve_worker(job: Dict[str, Any]) -> None:
             log.warning("云端取回失败 (%s): %s", job["remote_path"], e)
         finally:
             _RETRIEVE_TASKS.pop(job.get("id"), None)
-
-
-def retrieve_status() -> List[Dict[str, Any]]:
-    jobs = sorted(_RETRIEVE_JOBS.values(), key=lambda j: j.get("created_at") or 0.0, reverse=True)
-    return [_retrieve_public(j) for j in jobs[:50]]
 
 
 # 残片 TTL：失败会刻意保留 .part 供断点续传，但若任务从此不再重试，

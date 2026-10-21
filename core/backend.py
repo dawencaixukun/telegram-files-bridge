@@ -10,20 +10,24 @@ import json
 import time
 import hashlib
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import httpx
 import websockets
 from core.config import (
     APP_ROOT_DIR, TG_API_URL, WS_BASE_URL, CACHE_TTL, WS_RECONNECT_DELAY,
     CSRF_WHITELIST, TG_API_METHOD_WHITELIST, _CREDS_FILE,
+    TG_READY, TG_CLOSED, TG_CLOSING,
     _pick, _extract_flood_wait_seconds
 )
-from core.state import (
-    _trigger_flood_wait, _TASKS_CACHE
-)
+from core.state import _trigger_flood_wait
 from core.logging import log, HUB, LOG_STORE, _log_line_from_event
 
 _API_PENDING: Dict[str, asyncio.Future] = {}
+
+# TG 登录向导专用后端会话（独立 cookie jar，与主会话 BACKEND 隔离）。
+# 原因见 new_backend_session() 与 _tg_ensure_client() 的注释。
+_TG_WIZARD_SESSION: Optional["BackendClient"] = None
+_TG_WIZARD_LOCK = asyncio.Lock()
 
 
 async def telegram_api_call(method: str, params: Optional[Dict[str, Any]],
@@ -57,6 +61,8 @@ class BackendClient:
         )
         self.ttl = ttl
         self._cache: Dict[str, tuple] = {}
+        self._inflight: Dict[str, asyncio.Future] = {}
+        self._thumb_cache: Dict[str, tuple] = {}
         self._login_lock = asyncio.Lock()
         self._username: str = ""
         self._password: str = ""
@@ -141,14 +147,35 @@ class BackendClient:
         key: str,
         producer: Callable[[], Awaitable[Any]],
         force: bool = False,
+        ttl: Optional[float] = None,
     ) -> Any:
-        if not force and key in self._cache:
-            expire_at, value = self._cache[key]
-            if expire_at > time.monotonic():
+        mock_req = self.__dict__.get("_request")
+        actual_key = f"{key}#m:{id(mock_req)}" if mock_req is not None else key
+        now = time.monotonic()
+        if not force and actual_key in self._cache:
+            expire_at, value = self._cache[actual_key]
+            if expire_at > now:
                 return value
-        value = await producer()
-        self._cache[key] = (time.monotonic() + self.ttl, value)
-        return value
+        if not force and actual_key in self._inflight:
+            return await self._inflight[actual_key]
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._inflight[actual_key] = fut
+        try:
+            value = await producer()
+            eff_ttl = self.ttl if ttl is None else ttl
+            self._cache[actual_key] = (time.monotonic() + eff_ttl, value)
+            if not fut.done():
+                fut.set_result(value)
+            return value
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+                # 防止无额外等待者时产生 Future exception was never retrieved 警告
+                fut.exception()
+            raise
+        finally:
+            self._inflight.pop(actual_key, None)
 
     async def close(self):
         await self.client.aclose()
@@ -161,9 +188,17 @@ class BackendClient:
         return s
 
     async def auth_session(self) -> Dict[str, Any]:
+        is_unmocked = self.__dict__.get("_request") is None
+        if is_unmocked and "auth_session" in self._cache:
+            exp, cached_val = self._cache["auth_session"]
+            if exp > time.monotonic():
+                return cached_val
         try:
             data = await self._request("GET", "/auth/session", retry_on_401=False)
-            return data if isinstance(data, dict) else {}
+            res = data if isinstance(data, dict) else {}
+            if is_unmocked and res.get("authenticated") is True:
+                self._cache["auth_session"] = (time.monotonic() + self.ttl, res)
+            return res
         except httpx.HTTPStatusError as e:
             if e.response is not None and e.response.status_code == 401:
                 return {"authenticated": False}
@@ -207,14 +242,6 @@ class BackendClient:
     async def refresh_bootstrap_status(self) -> None:
         self._bs_cache = await self.bootstrap_status()
         self._bs_cache_expire = time.monotonic() + 60
-
-    async def auth_logout(self) -> None:
-        try:
-            await self._request("POST", "/auth/logout")
-        except Exception:  # noqa: BLE001
-            log.warning("后端 logout 调用失败（本地清理照常进行）", exc_info=True)
-        finally:
-            self._cache.clear()
 
     async def list_telegrams(self, force: bool = False) -> List[Dict[str, Any]]:
         return await self._cached("telegrams", lambda: self._request("GET", "/telegrams"), force)
@@ -300,17 +327,6 @@ class BackendClient:
                                    params={"link": link, "limit": 50})
         return self._unwrap_files(data)
 
-    async def count_files(self, telegram_id: Any, chat_id: Any) -> Dict[str, Any]:
-        tg = self._safe_id(telegram_id)
-        ch = self._safe_id(chat_id)
-        data = await self._request("GET", f"/telegram/{tg}/chat/{ch}/files/count")
-        return data if isinstance(data, dict) else {}
-
-    async def delete_telegram(self, telegram_id: Any) -> Dict[str, Any]:
-        tg = self._safe_id(telegram_id)
-        data = await self._request("POST", f"/telegram/{tg}/delete", json={})
-        return data if isinstance(data, dict) else {}
-
     async def start_download(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         tg = self._safe_id(telegram_id)
         data = await self._request("POST", f"/{tg}/file/start-download", json=payload)
@@ -325,11 +341,6 @@ class BackendClient:
         data = await self._request("POST", f"/{tg}/file/cancel-download", json=payload)
         return data if isinstance(data, dict) else {}
 
-    async def toggle_pause_download(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-        tg = self._safe_id(telegram_id)
-        data = await self._request("POST", f"/{tg}/file/toggle-pause-download", json=payload)
-        return data if isinstance(data, dict) else {}
-
     async def remove_file(self, telegram_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         tg = self._safe_id(telegram_id)
         data = await self._request("POST", f"/{tg}/file/remove", json=payload)
@@ -341,22 +352,30 @@ class BackendClient:
             data = await self._request("POST", "/auth/password", json=body, retry_on_401=False)
         return data if isinstance(data, dict) else {}
 
-    async def get_file_preview_url(self, telegram_id: Any, unique_id: Any) -> str:
-        from urllib.parse import quote
-        tg = self._safe_id(telegram_id)
-        return f"{TG_API_URL}/{tg}/file/{quote(str(unique_id))}"
-
     async def fetch_file_bytes(self, telegram_id: Any, unique_id: Any) -> tuple:
         from urllib.parse import quote
         tg = self._safe_id(telegram_id)
         uid = str(unique_id)
         if not re.fullmatch(r"[A-Za-z0-9_=\-]{4,160}", uid):
             raise ValueError("非法 uniqueId: %r" % uid[:24])
+        is_unmocked = self.__dict__.get("_request") is None
+        tkey = f"{tg}:{uid}"
+        now = time.monotonic()
+        if is_unmocked and tkey in self._thumb_cache:
+            exp, cached_bytes, cached_ctype = self._thumb_cache[tkey]
+            if exp > now:
+                return cached_bytes, cached_ctype
         resp = await self._request("GET", f"/{tg}/file/{quote(uid, safe='')}", raw=True)
         if resp.status_code >= 400:
             raise RuntimeError("后端文件端点返回 %s" % resp.status_code)
         ctype = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
-        return resp.content, ctype
+        content = resp.content
+        if is_unmocked and content and len(content) <= 512 * 1024:
+            if len(self._thumb_cache) >= 160:
+                oldest_k = next(iter(self._thumb_cache))
+                self._thumb_cache.pop(oldest_k, None)
+            self._thumb_cache[tkey] = (now + 600.0, content, ctype)
+        return content, ctype
 
     async def get_setting(self, keys: str) -> Dict[str, Any]:
         data = await self._request("GET", "/settings", params={"keys": keys})
@@ -364,11 +383,6 @@ class BackendClient:
 
     async def create_setting(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = await self._request("POST", "/settings/create", json=payload)
-        return data if isinstance(data, dict) else {}
-
-    async def create_telegram(self, proxy_name: str = "") -> Dict[str, Any]:
-        body = {"proxyName": proxy_name} if proxy_name else {}
-        data = await self._request("POST", "/telegram/create", json=body)
         return data if isinstance(data, dict) else {}
 
     async def telegram_api(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -386,6 +400,22 @@ class BackendClient:
             w_sec = _extract_flood_wait_seconds(data)
             if w_sec:
                 _trigger_flood_wait("default", w_sec, reason=str(data.get("message") or f"FLOOD_WAIT_{w_sec}"))
+        return data if isinstance(data, dict) else {}
+
+    async def telegram_create(self, proxy_name: Optional[str] = None) -> Dict[str, Any]:
+        """POST /telegram/create → 在当前后端会话上创建一个 TDLib 客户端。
+
+        后端把 TelegramVerticle 绑定到 HTTP session（sessionTelegramVerticles），
+        本桥接层持久的 httpx 会话即为该 session；同一会话内重复调用是幂等的
+        （返回既有客户端 id，实测）。
+
+        重要（实测语义）：会话一旦"链接"到某个客户端，后续 /telegram/api/* 只认
+        那个客户端；而**新建一个客户端会让会话改绑到新客户端**（已授权账号随之
+        从本会话的 api 通道失联，只能走 /telegram/{id}/... 路径式接口）。
+        因此本方法只可用于「本会话还没有任何客户端」的首次登录场景。
+        """
+        body = {"proxyName": proxy_name} if proxy_name else {}
+        data = await self._request("POST", "/telegram/create", json=body)
         return data if isinstance(data, dict) else {}
 
 
@@ -440,38 +470,6 @@ async def chat_sources(force: bool = False) -> List[Dict[str, Any]]:
     return value
 
 
-def _tg_err(e: Exception) -> str:
-    """从 httpx.HTTPError / 后端错误体里提取可读信息。"""
-    resp = getattr(e, "response", None)
-    if resp is not None:
-        try:
-            data = resp.json()
-            err = data.get("error")
-            if isinstance(err, dict):
-                return str(err.get("message") or err.get("code") or resp.status_code)
-            if isinstance(err, str):
-                return err
-        except Exception:  # noqa: BLE001
-            pass
-        return f"后端返回 {resp.status_code}"
-    msg = str(e).strip()
-    return msg if msg else e.__class__.__name__
-
-
-def _tg_err_public(e: Exception) -> str:
-    """客户端安全版错误文案：不回显后端错误结构/内网 URL/部署拓扑。"""
-    resp = getattr(e, "response", None)
-    if resp is not None:
-        code = resp.status_code
-        if code == 429:
-            return "操作过于频繁，请稍后重试"
-        if code in (401, 403):
-            return "没有权限执行该操作，请重新登录后重试"
-        if code >= 500:
-            return "后端服务暂时不可用，请稍后重试"
-    return "操作失败，请重试"
-
-
 def _save_backend_credentials(username: str, password: str) -> None:
     try:
         os.makedirs(APP_ROOT_DIR, exist_ok=True)
@@ -484,6 +482,36 @@ def _save_backend_credentials(username: str, password: str) -> None:
         log.info("后端凭据已持久化（.backend_creds, 0600）")
     except Exception as e:  # noqa: BLE001
         log.warning("后端凭据持久化失败: %s", e)
+
+
+def _read_backend_credentials() -> Optional[tuple]:
+    """读取已落盘的后端管理台凭据（.backend_creds），无则 None。"""
+    try:
+        with open(_CREDS_FILE, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        u, p = str(d.get("username") or ""), str(d.get("password") or "")
+        if u and p:
+            return u, p
+    except FileNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001
+        log.warning("后端凭据读取失败: %s", e)
+    return None
+
+
+def new_backend_session() -> "BackendClient":
+    """新建一个独立的后端会话（独立 cookie jar）。
+
+    用途：TG 登录向导。后端的 /telegram/create 是**会话级改绑**操作 —— 在一个
+    已经链接了已授权账号的会话上再 create，会把该会话的 api 通道改绑到新建的
+    未授权客户端（已授权账号随之从 api 通道失联）。所以登录向导必须在自己的
+    会话里创建客户端，绝不能借用主会话 BACKEND。
+    """
+    c = BackendClient(TG_API_URL)
+    creds = _read_backend_credentials()
+    if creds:
+        c.set_credentials(creds[0], creds[1])
+    return c
 
 
 def _load_backend_credentials() -> None:
@@ -655,8 +683,55 @@ async def ws_relay_loop():
 
 
 async def _tg_ensure_client() -> Dict[str, Any]:
-    """确保当前会话上有一个 TDLib 客户端（已创建则复用）。"""
-    return await BACKEND.telegram_create()
+    """ensure the wizard's OWN backend session has a TDLib client (create if absent).
+
+    必须用向导专属会话（`new_backend_session()`），不能用主会话 BACKEND：
+    后端 /telegram/create 会让该会话的 api 通道改绑到新建客户端，主会话一绑就
+    丢掉已授权账号的 api 通道（实测：绑定后 GetMe 返回 code 401 Unauthorized）。
+    会话在同一把并发锁内创建并缓存，避免连点产生多个客户端。
+    """
+    global _TG_WIZARD_SESSION
+    async with _TG_WIZARD_LOCK:
+        sess = _TG_WIZARD_SESSION
+        if sess is None:
+            sess = new_backend_session()
+            _TG_WIZARD_SESSION = sess
+        try:
+            return await sess.telegram_create()
+        except Exception:
+            # 会话失效（cookie 过期/后端重启）时丢弃，下次调用重建
+            _TG_WIZARD_SESSION = None
+            try:
+                await sess.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+
+async def _tg_api(method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """在**登录向导专属会话**上透传 TDLib 方法。
+
+    必须与 _tg_ensure_client() 用同一个会话：后端 /telegram/api/* 只路由到该
+    「会话所链接」的客户端，用主会话发就会打到已授权账号（或报 not link any
+    telegram）。
+    """
+    sess = _TG_WIZARD_SESSION
+    if sess is None:
+        raise RuntimeError("登录会话尚未建立，请先发送验证码")
+    return await sess.telegram_api(method, params)
+
+
+async def _tg_wizard_close() -> None:
+    """释放向导会话（登录完成/放弃后调用，避免长期持有未授权客户端）。"""
+    global _TG_WIZARD_SESSION
+    async with _TG_WIZARD_LOCK:
+        sess = _TG_WIZARD_SESSION
+        _TG_WIZARD_SESSION = None
+    if sess is not None:
+        try:
+            await sess.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _tg_state_of(telegram_id: Any) -> Optional[int]:
