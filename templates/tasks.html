@@ -21,21 +21,6 @@
 <!-- Filter bar -->
 <div class="card" style="margin-bottom:var(--space-5);">
   <form class="row" hx-get="/partials/tasks" hx-target="#tasksTable" hx-swap="outerHTML" hx-trigger="change, submit" style="gap:var(--space-3);">
-    <div class="field" style="margin:0;flex:1;min-width:140px;">
-      <label>状态</label>
-      <select class="select" name="status" aria-label="状态过滤">
-        <option value="">全部</option>
-        <option value="active">⚡ 进行中 / 活跃任务</option>
-        <option value="pending">待处理</option>
-        <option value="waiting_disk">磁盘挂起</option>
-        <option value="download">下载中</option>
-        <option value="downloaded">已下载</option>
-        <option value="upload">归档中</option>
-        <option value="archived">已归档</option>
-        <option value="isolated">隔离</option>
-        <option value="failed">失败</option>
-      </select>
-    </div>
     <div class="field" style="margin:0;flex:1;min-width:150px;">
       <label>日期范围</label>
       <input class="input" type="date" name="date_from" aria-label="开始日期">

@@ -3,16 +3,14 @@
 """
 routers/system.py — 表现层路由模块：系统设置、日志中心、OpenList控制、TG向导、Doctor探针、Session冷备与磁盘保护
 """
+from core import *
+from services import *
 import os
-import re
 import time
 import json
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
-from core import *
-from services import *
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 
 
@@ -151,6 +149,16 @@ async def tg_login_account():
     return {"ok": False}
 
 
+@router.post("/tg-login/reset")
+async def tg_login_reset():
+    """开始新一次登录：释放向导会话，使下一次发送验证码建全新客户端。
+
+    用途 = 「添加账号」：不使用它时，向导会复用上一次未完成的客户端。
+    """
+    await _tg_wizard_close()
+    return {"ok": True}
+
+
 @router.post("/tg-login/step1")
 async def tg_login_step1(request: Request):
     """步骤1：创建客户端并发送验证码 → SetAuthenticationPhoneNumber → 等 WAIT_CODE。"""
@@ -162,12 +170,15 @@ async def tg_login_step1(request: Request):
     phone = str((body or {}).get("phone", "")).strip()
     if not phone:
         return {"ok": False, "message": "请输入手机号"}
+    if (body or {}).get("fresh"):
+        # 「添加账号」：先丢弃上一次的向导会话，确保建新客户端而不是复用旧号
+        await _tg_wizard_close()
     full_phone = phone if phone.startswith("+") else f"{country}{phone}"
     try:
         created = await _tg_ensure_client()
         telegram_id = created.get("id")
-        await BACKEND.telegram_api("SetAuthenticationPhoneNumber",
-                                   {"phoneNumber": full_phone, "settings": None})
+        await _tg_api("SetAuthenticationPhoneNumber",
+                      {"phoneNumber": full_phone, "settings": None})
         state = await _tg_wait_state(telegram_id, {TG_WAIT_CODE, TG_WAIT_PASSWORD, TG_READY})
         if state == TG_WAIT_CODE:
             return {"ok": True, "state": "WAIT_CODE", "telegramId": telegram_id}
@@ -202,7 +213,7 @@ async def tg_login_step2(request: Request):
     try:
         created = await _tg_ensure_client()
         telegram_id = created.get("id")
-        await BACKEND.telegram_api("CheckAuthenticationCode", {"code": code})
+        await _tg_api("CheckAuthenticationCode", {"code": code})
         state = await _tg_wait_state(telegram_id, {TG_WAIT_PASSWORD, TG_READY, TG_WAIT_PHONE})
         if state == TG_READY:
             return {"ok": True, "state": "READY", "done": True}
@@ -233,7 +244,7 @@ async def tg_login_step3(request: Request):
     try:
         created = await _tg_ensure_client()
         telegram_id = created.get("id")
-        await BACKEND.telegram_api("CheckAuthenticationPassword", {"password": password})
+        await _tg_api("CheckAuthenticationPassword", {"password": password})
         state = await _tg_wait_state(telegram_id, {TG_READY, TG_WAIT_PASSWORD})
         if state == TG_READY:
             return {"ok": True, "state": "READY", "done": True}
@@ -405,84 +416,15 @@ async def alerts_read(request: Request):
 
 
 @router.get("/openlist/dirs")
-async def openlist_dirs(path: str = "/"):
-    """归档弹窗的目录选择器：逐级列出 OpenList 挂载的目录（多网盘浏览）。"""
-    d = _archive_norm_dir(path)
-    if d is None:
-        return {"ok": False, "message": "非法路径"}
-    try:
-        token = await _openlist_token()
-    except RuntimeError as e:
-        return {"ok": False, "message": str(e)}
-    try:
-        async def _list_once(tok: str):
-            return await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": d, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                headers={"Authorization": tok})
-
-        resp = await _list_once(token)
-        code, data, msg = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
-            token = await _openlist_relogin()
-            resp = await _list_once(token)
-            code, data, msg = _openlist_env(resp)
-        if code != 200:
-            return {"ok": False, "message": msg or f"OpenList 返回业务码 {code}"}
-        base = "" if d == "/" else d
-        dirs = []
-        for c in (data.get("content") or []):
-            if c.get("is_dir"):
-                name = str(c.get("name") or "")
-                if name:
-                    dirs.append({"name": name, "path": f"{base}/{name}"})
-        return {"ok": True, "path": d, "dirs": dirs}
-    except RuntimeError as e:
-        return {"ok": False, "message": str(e)}
-    except Exception as e:  # noqa: BLE001
-        log.error("读取 OpenList 目录失败（%s）: %s", d, e)
-        return {"ok": False, "message": "读取 OpenList 目录失败，请稍后重试"}
+async def _ep_openlist_dirs(path: str = "/"):
+    """归档弹窗的目录选择器（实现见 services.openlist_service.openlist_dirs）。"""
+    return await openlist_dirs(path)
 
 
 @router.get("/openlist/stream-url")
-async def openlist_stream_url(path: str = ""):
-    """获取视频在线播放直链（OpenList 302直链/WebDAV直链）。"""
-    if not path:
-        return JSONResponse({"ok": False, "message": "缺少 path 参数"}, status_code=400)
-    norm = posixpath.normpath("/" + str(path).strip().replace("\\", "/"))
-    filename = posixpath.basename(norm)
-    direct_url = _openlist_direct_url(norm)
-
-    raw_url = ""
-    try:
-        token = await _openlist_token()
-        async def _get_link(tok: str):
-            return await _openlist_client.post(
-                "/api/fs/link",
-                json={"path": norm},
-                headers={"Authorization": tok}
-            )
-        resp = await _get_link(token)
-        code, data, _ = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
-            token = await _openlist_relogin()
-            resp = await _get_link(token)
-            code, data, _ = _openlist_env(resp)
-        if code == 200 and isinstance(data, dict) and data.get("url"):
-            raw_url = str(data["url"])
-    except Exception as e:
-        log.debug("获取 OpenList 视频串流直链失败，回退 Web 界面直达: %s", e)
-
-    if not raw_url:
-        raw_url = direct_url
-
-    return {
-        "ok": True,
-        "url": raw_url,
-        "directUrl": direct_url,
-        "path": norm,
-        "filename": filename,
-    }
+async def _ep_openlist_stream_url(path: str = ""):
+    """视频在线播放直链（实现见 services.openlist_service.openlist_stream_url）。"""
+    return await openlist_stream_url(path)
 
 
 @router.get("/api/notify/config")
@@ -536,6 +478,11 @@ async def api_notify_save_config(request: Request):
 
     _notify_config_save()
     log.info("Telegram 通知配置已更新并落盘")
+    if _NOTIFY_CONFIG.get("botToken"):
+        asyncio.create_task(ensure_bot_commands_registered(
+            str(_NOTIFY_CONFIG.get("botToken") or ""),
+            str(_NOTIFY_CONFIG.get("chatId") or ""),
+        ))
     return {"ok": True, "message": "通知配置已保存", "config": _get_notify_config_public()}
 
 

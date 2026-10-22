@@ -9,17 +9,11 @@ import time
 import shutil
 import asyncio
 import httpx
-from typing import Any, Dict, List
-from core.config import (
-    APP_ROOT_DIR, BASE_DIR, _mask_secret, _fmt_size
-)
-from core.state import (
-    _OPENLIST, _is_flood_wait_active
-)
+from typing import Any, Dict
+from core.config import APP_ROOT_DIR, BASE_DIR, _mask_secret, _fmt_size
+from core.state import _OPENLIST, _is_flood_wait_active
 from core.backend import BACKEND
-from services.openlist_service import (
-    _openlist_ready, openlist_dirs
-)
+from services.openlist_service import _openlist_ready, openlist_dirs
 
 # 单个探针的总时间预算（秒）。四大探针并发执行，整个 doctor 的 SLA 是 < 3.0s，
 # 因此每个探针内部的多步串联调用必须共享同一预算，不能各自独立设置超时叠加。

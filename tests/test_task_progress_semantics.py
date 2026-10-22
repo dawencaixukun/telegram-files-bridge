@@ -79,14 +79,19 @@ class TestArchiveProgressSemantics(unittest.TestCase):
         self.assertEqual(t["upload_progress"], 6)
 
     def test_uploading_template_no_longer_says_downloaded(self):
-        """渲染真实模板：不得出现「已下载 6%」，必须是「已上传 6%」。"""
+        """归档上传中的行：主状态是「已下载」，上传进度降级为副文案。
+
+        用户明确要求任务列表「只需要保留下载时状态」，所以归档阶段不再占
+        主状态位；但历史缺陷「把上传 6% 写成已下载 6%」仍必须被挡住。
+        """
         self._put_job("uploading", 6)
         t = _to_task(_file_record(), 1, {})
         html = templates.get_template("partials/_tasks_table.html").render(
             {"request": _FakeRequest(), "tasks": [t]}
         )
         self.assertNotIn("已下载 6%", html)
-        self.assertIn("已上传 6%", html)
+        self.assertIn("已下载", html)
+        self.assertIn("归档 6%", html, "上传进度应以副文案出现，不能整条信息丢掉")
         self.assertIn("1.6 GB", html)
 
     def test_timeline_upload_stage_is_active_not_done(self):

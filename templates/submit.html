@@ -19,8 +19,11 @@
       <label for="submitLinks">消息链接</label>
       <textarea class="textarea" id="submitLinks" name="links"
         x-ref="text" @input="parse()"
-        placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456"></textarea>
-      <div class="hint">支持两种格式：公开频道 <code>https://t.me/channel/消息ID</code> 与私密频道 <code>https://t.me/c/频道ID/消息ID</code></div>
+        placeholder="https://t.me/channel/123&#10;https://t.me/c/2333333/456 我的自定义文件名"></textarea>
+      <div class="hint">
+        支持两种格式：公开频道 <code>https://t.me/channel/消息ID</code> 与私密频道 <code>https://t.me/c/频道ID/消息ID</code>。<br>
+        链接后面可以跟一个<b style="color:var(--text-1);">中文备注名</b>（空格或 <code>｜</code> 分隔），它会直接作为下载/归档的文件名；不写备注就用视频自带的文件名/文案。
+      </div>
     </div>
 
     <!-- validation summary -->
@@ -64,12 +67,22 @@
       get invalidCount() { return this.rows.filter(function(r){ return !r.valid; }).length; },
       parse: function () {
         var text = (this.$refs.text && this.$refs.text.value) || '';
-        var seen = 0;
         var self = this;
         this.rows = text.split(/\n+/).filter(function (l) { return l.trim(); }).map(function (l) {
-          seen++;
-          return { line: l.trim(), valid: self.__isValid(l.trim()) };
+          var raw = l.trim();
+          var sp = self.__split(raw);
+          return { line: raw, link: sp.link, note: sp.note, valid: self.__isValid(sp.link) };
         });
+      },
+      /* 拆「链接 + 备注」：备注写在链接后面（或前面），分隔符可为空格/｜/|/,/， */
+      __split: function (raw) {
+        var m = raw.match(/(?:https?:\/\/)?(?:t\.me|telegram\.me)\/(?:c\/\d+|[A-Za-z0-9_]{4,32})\/\d{1,12}/i);
+        if (!m) return { link: raw, note: '' };
+        var link = m[0].indexOf('http') === 0 ? m[0] : 'https://' + m[0];
+        var before = raw.slice(0, m.index).replace(/^[\s|｜,，、;；]+|[\s|｜,，、;；]+$/g, '');
+        var after = raw.slice(m.index + m[0].length).replace(/^[\s|｜,，、;；]+|[\s|｜,，、;；]+$/g, '');
+        var note = (after || before || '').replace(/["'“”「」《》]/g, '').trim();
+        return { link: link, note: note };
       },
       __isValid: function (l) {
         var pub = /^https:\/\/t\.me\/[A-Za-z0-9_]{4,32}\/\d{1,12}$/;
@@ -79,11 +92,15 @@
       submit: function () {
         var self = this;
         if (this.validCount === 0) { window.__toast('没有合法链接', 'error'); return; }
-        var links = this.rows.filter(function (r) { return r.valid; }).map(function (r) { return r.line; });
+        var rows = this.rows.filter(function (r) { return r.valid; });
+        var links = rows.map(function (r) { return r.link; });
+        /* 带上备注：后端按链接绑定为文件名（无备注就留空，沿用视频自带名字） */
+        var notes = {};
+        rows.forEach(function (r) { if (r.note) notes[r.link] = r.note; });
         fetch('/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
-          body: JSON.stringify({ links: links })
+          body: JSON.stringify({ links: links, notes: notes })
         }).then(function (r) { return r.json(); }).then(function (d) {
           if (d && d.ok) {
             window.__toast('已提交 ' + links.length + ' 条链接', 'success', '已加入下载队列');

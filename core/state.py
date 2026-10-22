@@ -13,10 +13,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from core.config import (
-    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _WAITING_DISK_TASKS_MAX,
-    _ARCHIVE_FILE, _ARCHIVE_CFG_FILE, _SUBS_FILE, _SUBS_RULES_MAX,
-    _NOTIFY_FILE, _OPENLIST_FILE, _SESSION_BACKUP_STATUS_FILE,
-    _FLOOD_WAIT_FILE, _mask_token, _same_file_name,
+    APP_ROOT_DIR, OPENLIST_URL, _WAITING_DISK_FILE, _ARCHIVE_FILE, _SUBS_FILE, _OPENLIST_FILE, _FLOOD_WAIT_FILE, _CUSTOM_NOTES_FILE, _CUSTOM_FILE_NOTES, _mask_token, _same_file_name
 )
 from core.logging import log
 
@@ -41,7 +38,16 @@ _FLOOD_WAIT_TIMER_TASK: Optional[asyncio.Task] = None
 # ---------------------------------------------------------------------
 _TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
 
+
+def _tasks_cache_invalidate() -> None:
+    """任务列表缓存统一失效入口（新任务入队/任务取消/状态变更后调用）。"""
+    global _TASKS_CACHE
+    _TASKS_CACHE["expire"] = 0.0
+    _TASKS_CACHE["value"] = None
+
+
 _WAITING_DISK_TASKS: Dict[str, Dict[str, Any]] = {}
+_WAITING_DISK_TASKS_MAX = 500  # 挂起队列上限：超过后拒绝新挂起入队（防无界增长）
 
 # ---------------------------------------------------------------------
 # 3. 归档与取回状态
@@ -130,7 +136,6 @@ _openlist_upload_client = httpx.AsyncClient(
     follow_redirects=False,
     trust_env=False,
 )
-_OPENLIST_FILE = os.path.join(APP_ROOT_DIR, ".openlist_auth")
 _OPENLIST: Dict[str, Any] = {}
 
 # ---------------------------------------------------------------------
@@ -152,6 +157,8 @@ _alert_state: Dict[str, Any] = {
 # ---------------------------------------------------------------------
 _archive_lock = asyncio.Lock()
 _archive_sem = asyncio.Semaphore(2)
+# 同一 remote_path 的上传串行锁（见 _archive_upload_lock）。
+_ARCHIVE_UPLOAD_LOCKS: Dict[str, asyncio.Lock] = {}
 _subs_lock = asyncio.Lock()
 _disk_lock = asyncio.Lock()
 _openlist_lock = asyncio.Lock()
@@ -221,9 +228,7 @@ def _trigger_flood_wait(account: str = "default", wait_seconds: int = 30, reason
 
     _ensure_flood_wait_timer()
 
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     return new_until
 
 
@@ -269,9 +274,7 @@ def _reset_flood_wait(account: str = "default") -> None:
     _FLOOD_WAIT_STATE["reason"] = ""
     _FLOOD_WAIT_STATE["suspended_tasks"] = {}
     _flood_wait_save()
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     log.info("管理员已强制清除 Telegram FloodWait 冷却状态")
 
 
@@ -279,9 +282,7 @@ async def _wake_flood_wait_tasks() -> int:
     suspended = dict(_FLOOD_WAIT_STATE.get("suspended_tasks", {}))
     _FLOOD_WAIT_STATE["suspended_tasks"].clear()
     _flood_wait_save()
-    global _TASKS_CACHE
-    _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _tasks_cache_invalidate()
     woken = len(suspended)
     if woken > 0:
         log.info("已自动唤醒 %d 条 FloodWait 挂起任务", woken)
@@ -828,6 +829,41 @@ def _archive_state_of(unique_id: Any) -> Optional[Dict[str, Any]]:
     return _archive_public(latest) if latest else None
 
 
+def _archive_path_owners() -> Dict[str, set]:
+    """云端路径 → 曾使用它的 unique_id 集合（路径小写）。供归档入队时判「这个路径是否已被**别的文件**占用」。
+    为什么按 unique_id 记账而不是简单「路径是否存在过」：
+      - 同一文件重复归档（用户再点一次「重新归档」）应当允许复用原路径 ——
+        它是同一份内容，覆盖自己是幂等的，不该被改名成 ` (1)` 越积越多。
+      - 路径一旦被**另一个** unique_id 用过，就说明它承载了两个不同文件：
+        再写进去就是静默覆盖（实测：同路径两次 PUT 都返回 200，远端只剩后写的那个）。
+    只排除 cancelled：失败任务的云端残片无法确证，宁可让路。
+    """
+    owners: Dict[str, set] = {}
+    for j in _ARCHIVE_JOBS.values():
+        rp = str(j.get("remote_path") or "")
+        uid = str(j.get("unique_id") or "")
+        if not rp or not uid or j.get("state") == "cancelled":
+            continue
+        owners.setdefault(rp.lower(), set()).add(uid)
+    return owners
+
+
+def _archive_upload_lock(remote_path: str) -> "asyncio.Lock":
+    """同一 remote_path 的串行上传锁（消灭同路径并发写的 eTag 冲突）。
+
+    为什么不能只靠文件名唯一化：唯一化让**新任务**不再撞车，但历史遗留的、
+    或经 `/archive/retry` 重放的任务仍可能指向同一路径。两个上传同时写同一路径
+    时 OneDrive 报 `resourceModified`，多轮重试全灭（实测日志 30 次）。
+    锁按路径懒创建、用完即弃，避免长期持有大量锁对象。
+    """
+    key = str(remote_path or "").lower()
+    lk = _ARCHIVE_UPLOAD_LOCKS.get(key)
+    if lk is None:
+        lk = asyncio.Lock()
+        _ARCHIVE_UPLOAD_LOCKS[key] = lk
+    return lk
+
+
 def _archive_active_of(unique_id: str) -> Optional[Dict[str, Any]]:
     """进行中（queued/uploading）的归档任务，幂等去重用。"""
     for j in _ARCHIVE_JOBS.values():
@@ -963,6 +999,39 @@ def _archive_registry_lookup(unique_id: str = "", filename: str = "", size_bytes
     return None
 
 
+def _custom_notes_load() -> None:
+    try:
+        with open(_CUSTOM_NOTES_FILE, "rb") as f:
+            d = json.loads(f.read().decode("utf-8"))
+        notes = d.get("notes") if isinstance(d, dict) else None
+        if isinstance(notes, dict):
+            _CUSTOM_FILE_NOTES.clear()
+            for k, v in notes.items():
+                if k and v and isinstance(v, str):
+                    _CUSTOM_FILE_NOTES[str(k)] = v.strip()
+        if _CUSTOM_FILE_NOTES:
+            log.info("已恢复视频自定义备注命名映射（%d 条）", len(_CUSTOM_FILE_NOTES))
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复视频自定义备注失败: %s", e)
+
+
+def _custom_notes_save() -> None:
+    try:
+        if len(_CUSTOM_FILE_NOTES) > 4000:
+            drop = len(_CUSTOM_FILE_NOTES) - 4000
+            for k in list(_CUSTOM_FILE_NOTES.keys())[:drop]:
+                _CUSTOM_FILE_NOTES.pop(k, None)
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps({"notes": _CUSTOM_FILE_NOTES}, ensure_ascii=False, indent=2).encode("utf-8")
+        fd = os.open(_CUSTOM_NOTES_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存视频自定义备注失败: %s", e)
+
+
 # 模块装载时从磁盘加载已有状态
 _flood_wait_load()
 _waiting_disk_load()
@@ -972,3 +1041,4 @@ _subs_load()
 _watch_seen_load()
 _notify_config_load()
 _openlist_load()
+_custom_notes_load()

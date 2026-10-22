@@ -56,6 +56,11 @@
   --glass-bg-strong: rgba(255, 255, 255, 0.14); /* data-dense areas */
   /* 下拉/浮层专用：压在密集文字上时必须近乎实底，否则双重曝光看不清（用户反馈） */
   --surface-popover: rgba(15, 18, 30, 0.97);
+  /* 语义别名：模板里的下拉/悬停底色统一走这里，不要在模板里写死颜色
+     （历史坑：写了 var(--bg-1, #111827) 的兜底，浅色主题下渲染成纯黑块） */
+  --bg-1: var(--surface-popover);
+  --bg-2: var(--surface-2);
+  --bg-3: var(--surface-3);
   --glass-border: rgba(255, 255, 255, 0.15);
   --glass-border-strong: rgba(255, 255, 255, 0.26);
   --glass-blur: blur(20px) saturate(140%);
@@ -123,6 +128,11 @@
   --surface-3: rgba(40, 40, 90, 0.09);
   --border: rgba(40, 40, 90, 0.16);
   --border-subtle: rgba(40, 40, 90, 0.10);
+
+  /* 与暗色一一对应的语义别名（浅色下是白底浮层 + 淡灰悬停） */
+  --bg-1: var(--surface-popover);
+  --bg-2: var(--surface-2);
+  --bg-3: var(--surface-3);
 
   --text-1: rgba(20, 22, 40, 0.92);
   --text-2: rgba(20, 22, 40, 0.6);

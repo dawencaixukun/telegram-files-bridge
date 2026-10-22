@@ -60,7 +60,7 @@ class TestWatchFromManage(unittest.TestCase):
         self.assertTrue(rules[0]["watch"])
         self.assertTrue(rules[0]["enabled"])
         self.assertEqual(str(rules[0]["chatId"]), "-100999")
-        self.assertIn("tg-archive", rules[0]["dirTemplate"])
+        self.assertTrue(rules[0]["dirTemplate"].startswith("/"))
 
     def test_on_twice_idempotent(self):
         self._set()

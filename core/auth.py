@@ -11,7 +11,7 @@ import hashlib
 import hmac as _hmac
 import secrets
 import ipaddress
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from core.config import (
@@ -29,6 +29,13 @@ from core.logging import log
 # 磁盘不可写时的进程级回退密钥：只生成一次，保证同一进程内签发与校验一致
 # （旧代码每次调用都新生成 → 全体 401 循环；见 _portal_secret 的注释）。
 _FALLBACK_PORTAL_SECRET = secrets.token_bytes(32)
+
+# CSP 里 img-src / media-src 允许的跨域来源。
+# 浏览器加载网盘缩略图（OneDrive → *.mediap.svc.ms、Google Drive →
+# *.googleusercontent.com…）和播放直链（*personalcontent.com、openlist 302 到的
+# CDN）都是跨域的；原策略只有 'self' data:，一条都放不出去。硬编码域名列表
+# 会随云盘驱动升级而失效，所以按 scheme 放开 https/http 与 WebDAV 自签场景。
+_CSP_MEDIA_SCHEMES = "https: http:"
 
 # 单 IP 失败时间戳上限，防止无界增长
 _LOGIN_FAILURE_MAX_PER_IP = 100
@@ -239,9 +246,16 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # 缩略图与播放直链都是跨域的：OpenList 把云盘原生 thumb/直链（OneDrive 的
+    # canadacentral1-mediap.svc.ms、Google Drive 的 lh3.googleusercontent.com…）
+    # 直接交给浏览器加载。CSP 不放开 img-src/media-src 时会被静默拦截 ——
+    # 表现为「卡片全占位图、点播放黑屏」，media 报 Media load rejected by URL safety check。
+    # 这里按 scheme 放开（而非穷举域名）：网盘 CDN 域名随驱动变化，穷举必漏。
     resp.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; img-src 'self' data:; "
+        "default-src 'self'; "
+        f"img-src 'self' data: blob: {_CSP_MEDIA_SCHEMES}; "
+        f"media-src 'self' blob: {_CSP_MEDIA_SCHEMES}; "
         "style-src 'self' 'unsafe-inline'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'",

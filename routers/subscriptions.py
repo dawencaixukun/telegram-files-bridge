@@ -3,16 +3,12 @@
 """
 routers/subscriptions.py — 表现层路由模块：自动化订阅规则管理、模板预览与巡检执行
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import time
+import asyncio
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
 
 
 

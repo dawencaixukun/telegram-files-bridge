@@ -13,8 +13,8 @@ from core.config import (
     APP_ROOT_DIR, BASE_DIR, _pick_id, _resolve_host_local_path
 )
 from core.state import (
-    _ARCHIVE_CONFIG, _WAITING_DISK_TASKS, _ARCHIVE_JOBS,
-    _waiting_disk_save, _TASKS_CACHE
+    _ARCHIVE_CONFIG, _WAITING_DISK_TASKS, _WAITING_DISK_TASKS_MAX, _ARCHIVE_JOBS,
+    _waiting_disk_save, _TASKS_CACHE, _tasks_cache_invalidate
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
@@ -108,12 +108,64 @@ async def _check_and_wake_waiting_disk_tasks() -> int:
         # 即使一个都没唤醒成功，只要清掉了占位记录也必须落盘，否则重启后
         # 这些无法恢复的空壳会一直占据挂起队列、每次巡检重复报警。
         _waiting_disk_save()
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
     if woken_count:
         LOG_STORE.append("INFO", f"磁盘回落至 {cur_pct:.1f}%，已自动唤醒 {woken_count} 个挂起下载任务")
 
     return woken_count
+
+
+async def _disk_guard_or_enqueue(raw, payload_files, source_tag: str):
+    """提交前统一水位门禁：高水位时挂起入队并失效任务缓存，返回响应 dict 或 None。
+
+    raw: 原始请求体（链接列表或文件列表，供 waiting_disk 挂起还原）；
+    payload_files: 已解析的下载 payload；source_tag: 日志定位用来源标签。
+    返回 None 表示未熔断，调用方继续正常提交。
+    """
+    high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
+    if high_exceeded:
+        await _disk_guard_check()
+        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
+
+    if not high_exceeded:
+        return None
+    low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
+    enqueued_count = _enqueue_waiting_disk_files(raw, payload_files, cur_pct, high_threshold, low_threshold)
+    _tasks_cache_invalidate()
+    msg = (f"本地磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），"
+           f"已将 {enqueued_count} 个任务安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复")
+    log.warning("磁盘水位熔断拦截 [%s]：%s", source_tag, msg)
+    return {
+        "ok": False,
+        "code": "DISK_WATERMARK_EXCEEDED",
+        "state": "waiting_disk",
+        "count": enqueued_count,
+        "message": msg,
+    }
+
+
+async def _disk_guard_or_enqueue_links(links: List[str], source_tag: str):
+    """链接提交版水位门禁：高水位时链接挂起入队并失效任务缓存，返回响应 dict 或 None。"""
+    high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
+    if high_exceeded:
+        await _disk_guard_check()
+        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
+
+    if not high_exceeded:
+        return None
+    low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
+    enqueued_count = await _enqueue_waiting_disk_links(links, cur_pct, high_threshold, low_threshold)
+    _tasks_cache_invalidate()
+    msg = (f"磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），"
+           f"已将 {enqueued_count} 条下载安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复")
+    log.warning("磁盘水位熔断拦截 [%s]：%s", source_tag, msg)
+    return {
+        "ok": False,
+        "code": "DISK_WATERMARK_EXCEEDED",
+        "state": "waiting_disk",
+        "count": enqueued_count,
+        "message": msg,
+    }
 
 
 async def _disk_guard_check() -> int:
@@ -205,8 +257,7 @@ async def _notify_backend_remove_uid(uid: str) -> None:
         log.debug("_notify_backend_remove_uid 失败: %s", e)
     finally:
         BACKEND._cache.clear()
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
 
 
 async def _delete_local_file_by_job(job: Dict[str, Any]) -> Tuple[bool, str]:
@@ -267,6 +318,9 @@ def _enqueue_waiting_disk_files(meta_files: Any, payload_files: List[Dict[str, A
         }
         enqueued += 1
 
+    if enqueued and len(_WAITING_DISK_TASKS) >= _WAITING_DISK_TASKS_MAX:
+        log.warning("waiting_disk 挂起队列已达上限 %s，拒绝继续入队", _WAITING_DISK_TASKS_MAX)
+        return 0
     _waiting_disk_save()
     return enqueued
 

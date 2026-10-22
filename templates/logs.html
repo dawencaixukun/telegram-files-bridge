@@ -77,7 +77,6 @@
       </button>
       <button type="button" class="fail-cat-pill" :class="activeCategory==='unknown'?'active':''" @click="setCategory('unknown')" x-show="categories.unknown > 0">
         ❓ 未知异常 (<span x-text="categories.unknown"></span>)
-        ❓ 未知异常 (<span x-text="categories.unknown"></span>)
       </button>
       <button type="button" class="fail-cat-pill" :class="activeCategory==='source_missing'?'active':''" @click="setCategory('source_missing')" x-show="categories.source_missing > 0">
         🗑️ 本地文件已丢失 (<span x-text="categories.source_missing"></span>)

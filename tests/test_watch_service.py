@@ -233,7 +233,7 @@ class TestWatchService(unittest.TestCase):
             import services.task_service as ts
             calls = []
 
-            async def fake_resolve(links, force=False):
+            async def fake_resolve(links, force=False, **kwargs):
                 calls.append(list(links))
                 return len(links), ""
 
@@ -258,7 +258,7 @@ class TestWatchService(unittest.TestCase):
         import services.task_service as ts
         calls = []
 
-        async def fake_resolve(links, force=False):
+        async def fake_resolve(links, force=False, **kwargs):
             calls.append(list(links))
             return len(links), ""
 
@@ -292,7 +292,7 @@ class TestWatchService(unittest.TestCase):
         import services.task_service as ts
         calls = []
 
-        async def fake_resolve(links, force=False):
+        async def fake_resolve(links, force=False, **kwargs):
             calls.append(list(links))
             return len(links), ""
 

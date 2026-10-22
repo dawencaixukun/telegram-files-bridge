@@ -367,8 +367,25 @@
     });
   });
 
+  /* 管理会话弹窗必须挂在 body 直下。
+     #browseManageBackdrop 原本写在 #content 内，而 #content 带
+     view-transition-name → 独立层叠上下文，弹窗的 z-index:90 只在该上下文内
+     有效；会话侧栏被搬到 body 下（z-index:85）后就把弹窗整体压住 ——
+     手机端表现为「点管理会话后页面出不来 / 弹窗被会话列表盖住且关不掉」。
+     与 __browseReparentSidePanel 同样的修复：脱离 #content 的层叠上下文。 */
+  window.__browseReparentManage = function () {
+    var bd = document.getElementById('browseManageBackdrop');
+    try {
+      if (bd && bd.parentElement !== document.body) document.body.appendChild(bd);
+    } catch (e) {}
+  };
+  window.__browseReparentManage();
+
   window.__browseOpenManage = function () {
     var bd = document.getElementById('browseManageBackdrop');
+    window.__browseReparentManage();
+    // 弹窗盖在会话侧栏之上：先收起侧栏（含其遮罩），避免手机端两层叠着抢点击
+    if (window.__browseToggleSidePanel) window.__browseToggleSidePanel(true);
     if (bd) bd.classList.add('show');
     var list = document.getElementById('browseManageList');
     if (list) list.innerHTML = '<div style="color:var(--text-3);font-size:13px;padding:16px 0;">正在加载会话…</div>';
@@ -633,6 +650,18 @@
     var bd = document.getElementById('browseManageBackdrop');
     if (bd) bd.classList.remove('show');
   };
+  /* 手机端关闭通道：点遮罩空白处 / 按 Esc 都能退出。
+     弹窗搬到 body 下后自身不再是滚动容器，遮罩就是可点区域。 */
+  document.addEventListener('click', function (e) {
+    var bd = document.getElementById('browseManageBackdrop');
+    if (!bd || !bd.classList.contains('show')) return;
+    if (e.target === bd) window.__browseCloseManage();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var bd = document.getElementById('browseManageBackdrop');
+    if (bd && bd.classList.contains('show')) window.__browseCloseManage();
+  });
 
   /* ---------------- 会话面板开关（顶栏「切换会话」按钮） ----------------
      关键：面板原本在 #content 内，而 #content 有 view-transition-name

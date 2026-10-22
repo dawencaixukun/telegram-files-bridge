@@ -314,37 +314,40 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                    stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
             </button>
-            <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'block' : 'none' }">
+            <div class="arch-dd-scrim" x-show="dirOpen" x-cloak @click="dirOpen = false"></div>
+            <div class="arch-dropdown" x-show="dirOpen" @click.away="dirOpen = false" style="display:none;" :style="{ display: dirOpen ? 'flex' : 'none' }">
               <div class="arch-crumb">
                 <template x-for="(seg, idx) in crumbList" :key="idx">
-                  <span>
+                  <span class="crumb-seg">
                     <a href="javascript:void(0)" class="crumb-link" :class="{ 'cur': idx === crumbList.length - 1 }"
                        @click="loadDir(seg.path)" x-text="seg.label"></a>
                     <span class="crumb-sep" x-show="idx < crumbList.length - 1">/</span>
                   </span>
                 </template>
               </div>
-              <div class="arch-dir-list" style="max-height:220px;overflow-y:auto;">
+              <div class="arch-dir-list">
                 <div class="arch-dir-row arch-up-row" x-show="browsePath && browsePath !== '/'"
-                     style="color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;"
                      @click="goUpDir()">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(90deg);"><use href="#ic-chevron"/></svg>
-                  <span class="d-name">⮬ 返回上一级</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round" class="arch-up-icon"><use href="#ic-chevron"/></svg>
+                  <span class="d-name">返回上一级</span>
                 </div>
                 <template x-for="d in dirs" :key="d.path">
                   <div class="arch-dir-row" @click="loadDir(d.path)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+                    <span class="arch-dir-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#ic-folder"/></svg></span>
                     <span class="d-name" x-text="d.name"></span>
+                    <svg class="arch-dir-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round"><use href="#ic-chevron"/></svg>
                   </div>
                 </template>
-                <div class="empty" x-show="!dirs.length && !loadingDirs" style="padding:12px 0;font-size:12px;">此目录下无子目录</div>
-                <div class="empty" x-show="loadingDirs" style="padding:12px 0;font-size:12px;">加载中…</div>
+                <div class="arch-dir-empty" x-show="!dirs.length && !loadingDirs">此目录下无子目录</div>
+                <div class="arch-dir-empty" x-show="loadingDirs">加载中…</div>
               </div>
               <div class="arch-drop-foot">
-                <span style="flex:1;"></span>
+                <span class="arch-drop-cur" x-text="browsePath || '/'"></span>
                 <button type="button" class="btn sm primary" @click="pickCurrentDir()">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
-                  使用当前目录
+                  使用此目录
                 </button>
               </div>
             </div>
@@ -625,8 +628,8 @@
     </div>
   </div>
 
-  <div class="row" style="position:sticky;bottom:16px;justify-content:flex-end;z-index:10;">
-    <button class="btn primary" style="padding:13px 28px;" :disabled="saving" @click="save()">
+  <div class="row" style="position:sticky;bottom:16px;justify-content:flex-end;z-index:10;pointer-events:none;">
+    <button class="btn primary" style="padding:13px 28px;pointer-events:auto;" :disabled="saving" @click="save()">
       <span x-show="saving" class="spinner"></span>
       <svg x-show="!saving" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-check"/></svg>
       保存

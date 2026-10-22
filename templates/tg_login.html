@@ -35,13 +35,12 @@
         <div class="field">
           <label>手机号</label>
           <div class="row" style="gap:10px;align-items:flex-start;">
-            <div style="position:relative;width:200px;flex-shrink:0;" @click.outside="countryOpen=false" @keydown.escape.window="countryOpen=false">
+            <div class="country-picker" @click.outside="countryOpen=false" @keydown.escape.window="countryOpen=false">
               <!-- Trigger button -->
-              <button type="button" class="input" @click="countryOpen=!countryOpen"
-                      style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:6px;height:42px;padding:0 12px;user-select:none;"
-                      :style="countryOpen ? 'border-color:var(--focus-ring);box-shadow:0 0 0 3px var(--focus-ring);' : ''">
+              <button type="button" class="input" :class="{'focused': countryOpen}" @click="countryOpen=!countryOpen"
+                      style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:6px;height:42px;padding:0 12px;user-select:none;">
                 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;" x-text="currentCountryLabel()"></span>
-                <svg style="width:14px;height:14px;color:var(--text-2);flex-shrink:0;transition:transform 0.2s;" :style="countryOpen ? 'transform:rotate(180deg);' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
+                <svg class="dd-caret" :class="{'open': countryOpen}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
               </button>
 
               <!-- Custom glassmorphic country dropdown -->
@@ -56,10 +55,9 @@
                 <!-- Countries scroll list -->
                 <div style="overflow-y:auto;flex:1;padding:4px;">
                   <template x-for="item in filteredCountries()" :key="item.code + item.name">
-                    <button type="button" class="dd-item"
+                    <button type="button" class="dd-item" :class="{'is-active': country === item.code}"
                             style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 12px;border:none;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;text-align:left;"
-                            :style="country === item.code ? 'background:rgba(124,58,237,0.22);color:var(--text-1);font-weight:600;' : ''"
-                            @click="country=item.code; countryOpen=false; countrySearch='';">
+                            @click="country=item.code; countryOpen=false; countrySearch=''">
                       <div style="display:flex;align-items:center;gap:8px;">
                         <span x-text="item.flag" style="font-size:16px;"></span>
                         <span x-text="item.name"></span>
@@ -140,7 +138,11 @@
             <span class="pill" style="color:var(--ok);background:rgba(52,211,153,.16);margin-top:6px;"><span class="p-dot"></span>已连接</span>
           </div>
         </div>
-        <div class="row mt-4" style="justify-content:flex-end;">
+        <div class="row mt-4" style="justify-content:space-between;">
+          <button class="btn ghost" @click="startNew()">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
+            再添加一个账号
+          </button>
           <a class="btn primary" href="/">前往总览</a>
         </div>
       </div>
@@ -210,6 +212,34 @@
       tfa: '',
       account: { name: '', id: '' },
       init: function () {},
+      // 「添加账号」模式：?fresh=1 进来（或点完成页的按钮）时，发送验证码会先
+      // 丢弃上一次的向导会话，强制后端建一个全新 TDLib 客户端 —— 这样已有
+      // 账号不会被复用、也不会被新客户端顶掉。
+      fresh: (function () {
+        try {
+          return new URLSearchParams(window.location.search).get('fresh') === '1';
+        } catch (e) { return false; }
+      })(),
+      startNew: function () {
+        var self = this;
+        fetch('/tg-login/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: '{}'
+        }).then(function () {
+          self.fresh = true;
+          self.step = 1;
+          self.phone = '';
+          self.otp = ['', '', '', '', ''];
+          self.tfa = '';
+          window.__toast('可以开始绑定新账号了', 'info');
+        }).catch(function () {
+          // 重置失败也让用户继续：下一次 step1 会再试
+          self.fresh = true;
+          self.step = 1;
+          window.__toast('已进入添加账号模式', 'info');
+        });
+      },
       _post: function (url, payload) {
         return fetch(url, {
           method: 'POST',
@@ -221,7 +251,7 @@
         var self = this;
         if (!this.phone) { window.__toast('请输入手机号', 'error'); return; }
         this.loading = true;
-        this._post('/tg-login/step1', { country: this.country, phone: this.phone })
+        this._post('/tg-login/step1', { country: this.country, phone: this.phone, fresh: this.fresh })
           .then(function (res) {
             self.loading = false;
             if (res && res.ok && res.done) { self.step = 4; window.__toast('TG 登录成功', 'success'); }

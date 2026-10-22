@@ -113,8 +113,14 @@
       <p>绑定后即可在此查看账号授权状态。</p>
     </div>
     {% endif %}
-    <div class="row mt-4">
+    <div class="row mt-4" style="gap:10px;">
       <a class="btn ghost" href="/tg-login">{% if tg_state == 'ok' %}前往登录向导{% else %}前往绑定 / 继续登录{% endif %}</a>
+      {% if tg_state == 'ok' %}
+      <a class="btn primary" href="/tg-login?fresh=1">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-plus"/></svg>
+        添加账号
+      </a>
+      {% endif %}
     </div>
   </div>
 

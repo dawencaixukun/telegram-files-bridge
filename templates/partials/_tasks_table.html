@@ -34,25 +34,24 @@
         </thead>
         <tbody>
           {% for t in tasks %}
-          <tr class="clickable-row" data-task-id="{{ t.id }}" onclick="window.__toggleTask(this)">
+          <tr class="clickable-row" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__toggleTask(this)">
             <td onclick="event.stopPropagation()"><input type="checkbox" class="check task-check" aria-label="选择任务 {{ t.id }}"></td>
             <td>{{ t.time }}</td>
             <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
             <td><a class="link" href="/tasks/{{ t.id }}" onclick="event.stopPropagation()">{{ t.filename }}</a></td>
             <td>{{ t.size }}</td>
             <td>
-              {% if t.status in ('download', 'upload') %}
-                {# 进度条口径必须与状态一致：下载中显示下载进度，归档中显示上传进度。
-                   历史上这里恒写「已下载」，把归档上传的 6% 说成「已下载 6%」，
-                   用户会以为文件没下载完 / 下载失败。 #}
+              {# 阶段列只反映「下载」状态（用户要求：只需要保留下载时状态）。
+                 归档进度仍在卡片下方与详情页可见，这里统一收敛为
+                 待下载 / 下载中 / 已下载 / 失败，避免同一行既有「已下载 6%」
+                 又有「归档中」两套互相打脸的口径。 #}
+              {% if t.status == 'download' %}
                 <div>
-                  <div class="progress {{ 'blue' if t.status=='download' else 'purple' }}">
+                  <div class="progress blue">
                     <span style="width:{{ t.progress }}%"></span>
                   </div>
                   <div class="progress-meta">
-                    {# progress_label 由后端按进度口径给出；未富化的渲染方（如预览服务器）
-                       回退为按状态推断，避免出现空标签或再次退化回「已下载」。 #}
-                    <span>{{ t.progress_label | default('已上传' if t.status == 'upload' else '已下载') }} {{ t.loaded }} · {{ t.size }}</span>
+                    <span>下载中 {{ t.loaded }} · {{ t.size }}</span>
                     <span>{% if t.speed_label %}<span class="tnum" title="实时下载速率（页面自动刷新）">{{ t.speed_label }}</span> · {% endif %}{{ t.progress }}%</span>
                   </div>
                 </div>
@@ -61,18 +60,25 @@
                   <span class="pill warn" title="{{ t.error_msg or '本地磁盘使用率超 85%，任务已安全挂起，回落至 75% 自动恢复调度' }}"><span class="p-dot"></span>磁盘挂起</span>
                   <div class="sub" style="margin-top:4px;color:var(--wait);font-size:12px;">{{ t.error_msg or '等待磁盘空间释放' }}</div>
                 </div>
+              {% elif t.status == 'failed' %}
+                <span class="pill failed"><span class="p-dot"></span>下载失败</span>
+                <span class="sub" style="margin-top:4px;">{{ t.error_msg }}</span>
+              {% elif t.status in ('pending',) %}
+                <span class="pill pending"><span class="p-dot"></span>待下载</span>
+              {% elif t.status == 'isolated' %}
+                <span class="pill failed"><span class="p-dot"></span>已隔离</span>
               {% else %}
-                {{ pill(t.status) }}
-                {% if t.status == 'failed' %}<span class="sub" style="margin-top:4px;">{{ t.error_msg }}</span>{% endif %}
+                <span class="pill downloaded"><span class="p-dot"></span>已下载</span>
+                {% if t.status == 'upload' %}<span class="sub" style="margin-top:4px;">归档 {{ t.progress }}%</span>{% endif %}
               {% endif %}
             </td>
             <td>
               <div class="row-actions" onclick="event.stopPropagation()">
                 {% if t.status in ('failed','isolated','pending','waiting_disk') %}
-                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
+                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
                 {% endif %}
                 {% if t.status in ('pending','download','upload','verify','waiting_disk') %}
-                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
+                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
                 {% endif %}
                 <a class="icon-btn xs" aria-label="详情" title="详情" href="/tasks/{{ t.id }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg></a>
               </div>
@@ -116,6 +122,7 @@
   window.__TASK_META = window.__TASK_META || {};
   {% for t in tasks %}
   window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}] = { displayId: {{ t.id | tojson }}, uniqueId: {{ t._unique_id | tojson }}, telegramId: {{ t._telegram_id | tojson }} };
+  window.__TASK_META[{{ ('id:' ~ t.id) | tojson }}] = window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}];
   {% endfor %}
 </script>
 <script>

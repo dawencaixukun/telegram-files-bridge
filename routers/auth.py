@@ -3,16 +3,13 @@
 """
 routers/auth.py — 表现层路由模块：身份认证、登录表单、初始化向导与改密登出
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import os
+import re
+import asyncio
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 
 
@@ -40,8 +37,7 @@ async def login_submit(request: Request):
         BACKEND.set_credentials(username, password)
         _save_backend_credentials(username, password)
         BACKEND._cache.clear()
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
         CHAT_SOURCE_CACHE["key"] = None
         CHAT_SOURCE_CACHE["value"] = None
         _clear_login_failures(ip)
@@ -93,8 +89,7 @@ async def init_submit(request: Request):
     if not otp:
         return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "请输入初始化一次性码"})
     # 后端用户名规则：[a-z0-9][a-z0-9._-]{2,63}
-    import re as _re
-    if not _re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", username):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", username):
         return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "用户名需 3-64 位小写字母/数字/._- 开头为字母或数字"})
     try:
         await BACKEND.auth_bootstrap(otp, username, password)

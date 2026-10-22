@@ -14,14 +14,28 @@
   </div>
 </div>
 
-<!-- KPI row：实时下载/上传速率（双色区分：下载青色、上传紫色），前端每 2s 轮询 /api/speeds -->
-<div class="grid g-4" style="margin-bottom:var(--space-5);">
+<!-- KPI row：顶部 3 张卡片（累计下载/上传合并卡 + 本地磁盘占用 + 云端归档累计） -->
+<div class="grid g-3" style="margin-bottom:var(--space-5);">
   {% for k in (stats.get('kpis') if stats else []) %}
-  <div class="card kpi">
+  {% set sub_items = k.get('items') %}
+  <div class="card kpi{% if sub_items %} kpi-dual{% endif %}">
     <div class="k-head">
       <span class="k-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#{{ k.icon }}"/></svg></span>
       {{ k.label }}
     </div>
+    {% if sub_items %}
+    <div class="k-dual-grid">
+      {% for item in sub_items %}
+      <div class="k-dual-col">
+        <div class="k-dual-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ item.color }}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#{{ item.icon }}"/></svg>
+          <span>{{ item.label }}</span>
+        </div>
+        <div class="k-value tnum"{% if item.id %} id="{{ item.id }}"{% endif %}>{{ item.value }}<small>{{ item.unit }}</small></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
     <div class="k-value tnum"{% if k.id %} id="{{ k.id }}"{% endif %}{% if k.value_color %} style="color:{{ k.value_color }};"{% endif %}>{{ k.value }}<small>{{ k.unit }}</small></div>
     <div class="k-foot">
       <span class="delta {{ k.d }}" style="{% if not k.delta %}display:none;{% endif %}">{{ k.delta }}</span>
@@ -29,6 +43,7 @@
         <polyline points="{{ k.points }}" stroke="{{ k.spark }}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
+    {% endif %}
   </div>
   {% endfor %}
 </div>

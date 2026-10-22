@@ -3,16 +3,11 @@
 """
 routers/tasks.py — 表现层路由模块：任务列表、任务详情、链接直投提交与任务重试/取消
 """
-import os
-import re
-import time
-import json
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
-from fastapi import APIRouter, Request, Response, Form, Query, Header, Cookie, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from core import *
 from services import *
+import time
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 
 
@@ -46,25 +41,36 @@ async def task_detail(request: Request, task_id: str):
 
 @router.post("/tasks", response_class=HTMLResponse)
 async def post_task(request: Request):
-    """顶栏模态的 hx-post='/tasks' 与 fetch JSON /tasks 转发（提交 links 给后端批量下载）。"""
+    """顶栏模态的 hx-post='/tasks' 与 fetch JSON /tasks 转发（提交 links 给后端批量下载）。
+
+    每行格式：`链接` 或 `链接 备注名`（备注间可用空格/制表符/｜/|/, 分隔）。
+    备注名会绑定到解析出的文件上，作为下载与归档的最终文件名。
+    """
     ok = False
     message = ""
     try:
         content_type = request.headers.get("content-type", "")
+        body_notes = {}
         if "application/json" in content_type:
             body = await request.json()
             links = body.get("links", "") if isinstance(body, dict) else ""
+            if isinstance(body, dict) and isinstance(body.get("notes"), dict):
+                body_notes = {str(k): str(v) for k, v in body["notes"].items() if str(v or "").strip()}
         else:
             form = await request.form()
             links = str(form.get("links", ""))
-        # links 可能是字符串（每行一条）也可能是数组（fetch JSON 路径）
+        # links 可能是字符串（每行一条）也可能是数组（fetch JSON 路径）；
+        # 数组元素允许是 {"url": "...", "note": "..."} 或 "链接 备注" 字符串。
         if isinstance(links, list):
             raw_lines = [str(l) for l in links]
         else:
             raw_lines = str(links).splitlines()
-        lines = [l.strip() for l in raw_lines if l.strip()]
-        if lines:
-            ok, err = await _resolve_links_to_files(lines)
+        links_clean, notes_by_link = _split_link_notes(raw_lines)
+        # 前端显式传来的 notes（链接→备注名）优先级最高
+        for k, v in body_notes.items():
+            notes_by_link[k.strip()] = v.strip()
+        if links_clean:
+            ok, err = await _resolve_links_to_files(links_clean, notes_by_link=notes_by_link)
             if ok:
                 message = "已提交 %d 条链接" % ok
             else:
@@ -103,16 +109,9 @@ async def submit_post(request: Request):
     error = ""
     ok_count = 0
     if lines:
-        high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-        if high_exceeded:
-            await _disk_guard_check()
-            high_exceeded, cur_pct, high_threshold = _is_disk_high_watermark_exceeded()
-
-        if high_exceeded:
-            low_threshold = float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent", 75.0) or 75.0)
-            enqueued = await _enqueue_waiting_disk_links(lines, cur_pct, high_threshold, low_threshold)
-            error = f"磁盘占用率已达 {cur_pct:.1f}%（超过 {high_threshold:.1f}% 警戒线），已将 {enqueued} 条下载安全置入 waiting_disk 挂起队列，降至 {low_threshold:.1f}% 自动恢复"
-            _TASKS_CACHE["expire"] = 0.0
+        guard = await _disk_guard_or_enqueue_links(lines, "submit")
+        if guard is not None:
+            error = guard["message"]
             log.warning("磁盘水位熔断拦截 [/submit]：%s", error)
         else:
             ok_count, error = await _resolve_links_to_files(lines, force=force)
@@ -158,6 +157,7 @@ async def task_retry(request: Request):
             "messageId": int(msg_id),
             "fileId": int(file_id),
         })
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已重新加入下载队列"}
     except Exception as e:  # noqa: BLE001
         log.error("任务重试失败: %s", e)
@@ -179,29 +179,53 @@ async def task_cancel(request: Request):
     if unique_id in _WAITING_DISK_TASKS:
         _WAITING_DISK_TASKS.pop(unique_id, None)
         _waiting_disk_save()
-        global _TASKS_CACHE
-        _TASKS_CACHE["expire"] = 0.0
-        _TASKS_CACHE["value"] = None
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
     for tid, w in list(_WAITING_DISK_TASKS.items()):
         if str(w.get("uniqueId")) == unique_id or str(w.get("id")) == unique_id:
             _WAITING_DISK_TASKS.pop(tid, None)
             _waiting_disk_save()
-            _TASKS_CACHE["expire"] = 0.0
-            _TASKS_CACHE["value"] = None
+            _tasks_cache_invalidate()
             return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
+
+    # 若该任务正在归档上传/排队，同步取消归档上传任务
+    arch_cancelled = False
+    for jid, j in list(_ARCHIVE_JOBS.items()):
+        if str(j.get("unique_id") or "") == unique_id and j.get("state") in ("queued", "uploading", "waiting_disk"):
+            act_t = _ARCHIVE_TASKS.get(jid)
+            if act_t and not act_t.done():
+                act_t.cancel()
+            j["state"] = "cancelled"
+            j["error"] = "用户已取消"
+            j["updated_at"] = time.time()
+            arch_cancelled = True
+    if arch_cancelled:
+        _archive_save()
 
     rec = _find_task_by_uid(await tasks_all(force=True), unique_id)
     if rec is None:
+        if arch_cancelled:
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         return {"ok": False, "message": "任务不存在或已被移除"}
     telegram_id = rec.get("_telegram_id")
     file_id = rec.get("_file_id")
     if telegram_id is None or file_id is None:
+        if arch_cancelled:
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         return {"ok": False, "message": "任务记录缺少 fileId，无法取消"}
     try:
-        await BACKEND.cancel_download(telegram_id, {"fileId": int(file_id)})
+        if str(rec.get("_download_status") or "") != "completed" or not arch_cancelled:
+            await BACKEND.cancel_download(telegram_id, {"fileId": int(file_id)})
+        BACKEND._cache.clear()
+        _tasks_cache_invalidate()
         return {"ok": True, "message": "已取消任务"}
     except Exception as e:  # noqa: BLE001
+        if arch_cancelled:
+            BACKEND._cache.clear()
+            _tasks_cache_invalidate()
+            return {"ok": True, "message": "已取消归档上传任务"}
         log.error("任务取消失败: %s", e)
         return {"ok": False, "message": "取消失败：" + _tg_err_public(e)}
 
