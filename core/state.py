@@ -8,6 +8,7 @@ import os
 import json
 import time
 import math
+import posixpath
 import asyncio
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -156,7 +157,19 @@ _alert_state: Dict[str, Any] = {
 # 8. 异步并发锁与信号量
 # ---------------------------------------------------------------------
 _archive_lock = asyncio.Lock()
-_archive_sem = asyncio.Semaphore(2)
+# 归档上传并发上限。
+# 历史值硬编码为 2，但线上实测并发远不止 2：归档 sweep 每隔 30s 扫一轮，
+# 每轮会把所有「已下载待归档」的文件一次性 _archive_enqueue 出去（实测单轮
+# 35 个），每个 job 立刻 create_task 起协程，只是排队等这把信号量而已。
+# 信号量本身确实限住了「同时真在传」的数量，但它掩盖了另一层问题：
+# 排队中的 job 状态已经是 uploading（worker 在信号量外设置），前端看到的
+# 「归档中」数量 = 已入队数量而非真实并发数，用户观感就是「并发过头」。
+# 现在把并发放进配置（BRIDGE_ARCHIVE_CONCURRENCY，默认 2），并让排队中的
+# job 保持 queued 状态（见 _archive_worker），不再冒充 uploading。
+_ARCHIVE_CONCURRENCY_DEFAULT = 2
+_ARCHIVE_CONCURRENCY = max(1, int(os.environ.get(
+    "BRIDGE_ARCHIVE_CONCURRENCY", str(_ARCHIVE_CONCURRENCY_DEFAULT)) or _ARCHIVE_CONCURRENCY_DEFAULT))
+_archive_sem = asyncio.Semaphore(_ARCHIVE_CONCURRENCY)
 # 同一 remote_path 的上传串行锁（见 _archive_upload_lock）。
 _ARCHIVE_UPLOAD_LOCKS: Dict[str, asyncio.Lock] = {}
 _subs_lock = asyncio.Lock()
@@ -276,6 +289,345 @@ def _reset_flood_wait(account: str = "default") -> None:
     _flood_wait_save()
     _tasks_cache_invalidate()
     log.info("管理员已强制清除 Telegram FloodWait 冷却状态")
+
+
+# ---------------------------------------------------------------------
+# 8b. 在线播放流量统计（累计字节）
+# ---------------------------------------------------------------------
+# 口径：云端在线播放经 bridge 代理的字节数 = 「从网盘下载」的流量；
+# 按「上传下载对等」记账规则，同时计入累计下载与累计上传两张 KPI
+# （VPS 视角：网盘 → VPS 是下载，VPS → 浏览器是上传，天然对等）。
+# 持久化到 .stream_stats.json，bridge 重启不清零。
+_STREAM_STATS_FILE = os.path.join(APP_ROOT_DIR, ".stream_stats.json")
+_STREAM_STATS: Dict[str, Any] = {"total_bytes": 0, "updated_at": 0.0}
+
+
+def _stream_stats_add(n_bytes: int) -> None:
+    """累加本次在线播放经代理流出的字节数并落盘（节流：≥1MB 或首次写盘）。"""
+    try:
+        _STREAM_STATS["total_bytes"] = int(_STREAM_STATS.get("total_bytes") or 0) + int(n_bytes)
+        _STREAM_STATS["updated_at"] = time.time()
+        _stream_stats_save()
+    except Exception as e:  # noqa: BLE001
+        log.debug("在线播放流量记账失败: %s", e)
+
+
+def _stream_stats_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps(_STREAM_STATS, ensure_ascii=False).encode("utf-8")
+        fd = os.open(_STREAM_STATS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存在线播放流量统计失败: %s", e)
+
+
+def _stream_stats_load() -> None:
+    try:
+        if os.path.exists(_STREAM_STATS_FILE):
+            with open(_STREAM_STATS_FILE, "r", encoding="utf-8") as f:
+                d = json.loads(f.read())
+            if isinstance(d, dict):
+                _STREAM_STATS.clear()
+                _STREAM_STATS.update(d)
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复在线播放流量统计失败: %s", e)
+
+
+# ---------------------------------------------------------------------
+# 8c. 网盘浏览位置记忆（上次浏览的目录 + 常去网盘排行）
+# ---------------------------------------------------------------------
+# 用户诉求：刷新/重新进入「浏览」标签后，还要能回到上次点击的那个文件夹。
+# 为什么存服务端而不是 localStorage：侧栏「浏览」链接要能**服务端重定向**到
+# 上次的目录 —— 只有 bridge 知道这个位置，localStorage 做不到（首屏就会
+# 先渲染根页再跳，且中键/新标签页/换浏览器全部失效）。
+# recent 是访问计数排行（用于根页「常去网盘」chips 排序），上限 12 条防膨胀。
+_BROWSE_MEMORY_FILE = os.path.join(APP_ROOT_DIR, ".browse_memory.json")
+_BROWSE_MEMORY: Dict[str, Any] = {"last_path": "", "updated_at": 0.0, "recent": {}}
+_BROWSE_MEMORY_MAX_RECENT = 12
+
+
+def _browse_memory_remember(path: str) -> None:
+    """记录一次网盘目录访问：更新 last_path 并累加该路径所属网盘的访问计数。"""
+    try:
+        norm = posixpath.normpath("/" + str(path or "").strip().lstrip("/"))
+        if norm in ("", ".", "/"):
+            return
+        _BROWSE_MEMORY["last_path"] = norm
+        _BROWSE_MEMORY["updated_at"] = time.time()
+        drive = "/" + norm.strip("/").split("/")[0]
+        recent = _BROWSE_MEMORY.setdefault("recent", {})
+        if not isinstance(recent, dict):
+            recent = {}
+            _BROWSE_MEMORY["recent"] = recent
+        recent[drive] = int(recent.get(drive) or 0) + 1
+        # 排行上限：按访问次数保留前 N，避免网盘增删后残留无限增长
+        if len(recent) > _BROWSE_MEMORY_MAX_RECENT:
+            keep = sorted(recent.items(), key=lambda kv: -int(kv[1]))[:_BROWSE_MEMORY_MAX_RECENT]
+            _BROWSE_MEMORY["recent"] = dict(keep)
+        _browse_memory_save()
+    except Exception as e:  # noqa: BLE001
+        log.debug("记录网盘浏览位置失败: %s", e)
+
+
+def _browse_memory_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps(_BROWSE_MEMORY, ensure_ascii=False).encode("utf-8")
+        fd = os.open(_BROWSE_MEMORY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存网盘浏览记忆失败: %s", e)
+
+
+def _browse_memory_load() -> None:
+    try:
+        if os.path.exists(_BROWSE_MEMORY_FILE):
+            with open(_BROWSE_MEMORY_FILE, "r", encoding="utf-8") as f:
+                d = json.loads(f.read())
+            if isinstance(d, dict):
+                _BROWSE_MEMORY.clear()
+                _BROWSE_MEMORY.update({
+                    "last_path": str(d.get("last_path") or ""),
+                    "updated_at": float(d.get("updated_at") or 0.0),
+                    "recent": d.get("recent") if isinstance(d.get("recent"), dict) else {},
+                })
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复网盘浏览记忆失败: %s", e)
+
+
+# ---------------------------------------------------------------------
+# 8d. TG 请求节流（随机节奏 + 每日预算 + 跨日自动续跑）
+# ---------------------------------------------------------------------
+# 用户诉求：账号曾在批量下载时被 Telegram 风控，"限制了 5 个并发但它能一直下"。
+# 根因不是并发数——后端 autoDownloadLimit 只限制同时在跑的任务数，第 1 个一结束
+# 第 2 个立刻顶上，请求速率恒为 0 间隔的满负荷，这在 TG 反滥用看来与脚本无异。
+# 真正要控的是【请求速率随时间的形状】：
+#   1. 文件之间插入随机间隔（6~25 秒），不呈现机械等距；
+#   2. 首批最多 concurrencyMax 个并发下，其余排队按间隔放行；
+#   3. 每日预算封顶（平衡档 200 个），用完即挂起，次日零点自动续跑；
+#   4. 缩略图补图是第二大 TG 请求源（翻云端归档每张卡片一次 GetMessage），
+#      同样计入预算，超预算时直接跳过补图而不是阻塞页面。
+# 配置/预算/队列三者分别落盘（.throttle_config / .throttle_state /
+# .throttle_queue），与 waiting_disk 队列同一套"重启不丢"语义。
+_THROTTLE_CONFIG_FILE = os.path.join(APP_ROOT_DIR, ".throttle_config.json")
+_THROTTLE_STATE_FILE = os.path.join(APP_ROOT_DIR, ".throttle_state.json")
+_THROTTLE_QUEUE_FILE = os.path.join(APP_ROOT_DIR, ".throttle_queue.json")
+
+# 四档预设。用户拍板：默认用「平衡档」（并发 2~4、间隔 6~25 秒、日预算 200）。
+# budget=0 表示不设上限（「只加随机间隔」档）。
+_THROTTLE_PROFILES: Dict[str, Dict[str, Any]] = {
+    "conservative": {"label": "保守档", "concurrencyMin": 1, "concurrencyMax": 2,
+                     "intervalMin": 30.0, "intervalMax": 120.0, "dailyBudget": 40,
+                     "desc": "并发 1~2、间隔 30~120 秒、日预算 40 个。适合新号或已被警告过的号"},
+    "robust": {"label": "稳健档", "concurrencyMin": 1, "concurrencyMax": 3,
+               "intervalMin": 15.0, "intervalMax": 60.0, "dailyBudget": 80,
+               "desc": "并发 1~3、间隔 15~60 秒、日预算 80 个。最保守的安全节奏"},
+    "balanced": {"label": "平衡档", "concurrencyMin": 2, "concurrencyMax": 4,
+                 "intervalMin": 6.0, "intervalMax": 25.0, "dailyBudget": 200,
+                 "desc": "并发 2~4、间隔 6~25 秒、日预算 200 个。速度快且保留人类节奏特征"},
+    "unlimited": {"label": "只加随机间隔", "concurrencyMin": 2, "concurrencyMax": 4,
+                  "intervalMin": 6.0, "intervalMax": 25.0, "dailyBudget": 0,
+                  "desc": "不限制每日总量，只把零间隔改成随机间隔"},
+}
+_THROTTLE_DEFAULT_PROFILE = "balanced"
+
+_THROTTLE_CONFIG: Dict[str, Any] = {
+    "enabled": True,
+    "profile": _THROTTLE_DEFAULT_PROFILE,
+    # 覆盖范围：默认四项全开（用户明确要求把「链接/直投/监听」「缩略图补图」都纳入）。
+    # retrieve（网盘取回）走 OpenList 不碰 TG，恒不纳入。
+    "scope": {
+        "browse": True,        # 浏览页勾选下载
+        "submit": True,        # /submit 链接提交
+        "api": True,           # /api/tg/quick-download 一键直投
+        "watch": True,         # 频道监听自动入队
+        "thumb": True,         # 缩略图补图（GetMessage）
+    },
+    # 生效参数（切换档位时由服务层按预设回填，用户也可单独微调）
+    "concurrencyMin": 2,
+    "concurrencyMax": 4,
+    "intervalMin": 6.0,
+    "intervalMax": 25.0,
+    "dailyBudget": 200,
+    # 预算耗尽行为：挂起到次日自动续跑（用户指定）。仅支持该语义，
+    # 字段留存以便未来扩展 "reject"/"slowdown"。
+    "budgetBehavior": "suspend_next_day",
+    # 次日续跑的起始钟点（本地时间，小时）。0 = 零点一过立刻续跑。
+    "resumeHour": 0,
+}
+
+_THROTTLE_STATE: Dict[str, Any] = {
+    "date": "",          # 预算归属日 YYYY-MM-DD
+    "used": 0,           # 当日已放行的 TG 下载文件数（含缩略图补图次数单独计）
+    "thumbUsed": 0,      # 当日缩略图补图消耗（计入 used）
+    "submitted": 0,      # 当日累计受理文件数
+    "lastSubmitAt": 0.0, # 上次放行时间戳（间隔控制基准）
+    "lastWakeAt": 0.0,   # 上次跨日续跑时间
+    "nextReleaseAt": 0.0,  # 下一次允许放行的时间戳（随机间隔闸门）
+}
+
+_THROTTLE_QUEUE: Dict[str, Dict[str, Any]] = {}
+_THROTTLE_QUEUE_MAX = 2000
+
+
+def _throttle_today() -> str:
+    """预算归属日（本地时区 YYYY-MM-DD）。"""
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _throttle_config_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps(_THROTTLE_CONFIG, ensure_ascii=False).encode("utf-8")
+        tmp = f"{_THROTTLE_CONFIG_FILE}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        os.replace(tmp, _THROTTLE_CONFIG_FILE)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存 TG 节流配置失败: %s", e)
+
+
+def _throttle_config_load() -> None:
+    try:
+        if not os.path.exists(_THROTTLE_CONFIG_FILE):
+            return
+        with open(_THROTTLE_CONFIG_FILE, "r", encoding="utf-8") as f:
+            d = json.loads(f.read() or "{}")
+        if not isinstance(d, dict):
+            return
+        if "enabled" in d:
+            _THROTTLE_CONFIG["enabled"] = bool(d["enabled"])
+        prof = str(d.get("profile") or "").strip()
+        if prof in _THROTTLE_PROFILES:
+            _THROTTLE_CONFIG["profile"] = prof
+        scope = d.get("scope")
+        if isinstance(scope, dict):
+            for k in list(_THROTTLE_CONFIG["scope"].keys()):
+                if k in scope:
+                    _THROTTLE_CONFIG["scope"][k] = bool(scope[k])
+        for k in ("concurrencyMin", "concurrencyMax", "dailyBudget"):
+            if k in d:
+                try:
+                    _THROTTLE_CONFIG[k] = int(d[k])
+                except (TypeError, ValueError):
+                    pass
+        for k in ("intervalMin", "intervalMax"):
+            if k in d:
+                try:
+                    _THROTTLE_CONFIG[k] = float(d[k])
+                except (TypeError, ValueError):
+                    pass
+        if d.get("budgetBehavior"):
+            _THROTTLE_CONFIG["budgetBehavior"] = str(d["budgetBehavior"])
+        if "resumeHour" in d:
+            try:
+                _THROTTLE_CONFIG["resumeHour"] = max(0, min(23, int(d["resumeHour"])))
+            except (TypeError, ValueError):
+                pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复 TG 节流配置失败: %s", e)
+
+
+def _throttle_state_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps(_THROTTLE_STATE, ensure_ascii=False).encode("utf-8")
+        fd = os.open(_THROTTLE_STATE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存 TG 节流预算失败: %s", e)
+
+
+def _throttle_state_load() -> None:
+    try:
+        if not os.path.exists(_THROTTLE_STATE_FILE):
+            return
+        with open(_THROTTLE_STATE_FILE, "r", encoding="utf-8") as f:
+            d = json.loads(f.read() or "{}")
+        if isinstance(d, dict):
+            _THROTTLE_STATE.clear()
+            _THROTTLE_STATE.update({
+                "date": str(d.get("date") or ""),
+                "used": int(d.get("used") or 0),
+                "thumbUsed": int(d.get("thumbUsed") or 0),
+                "submitted": int(d.get("submitted") or 0),
+                "lastSubmitAt": float(d.get("lastSubmitAt") or 0.0),
+                "lastWakeAt": float(d.get("lastWakeAt") or 0.0),
+                "nextReleaseAt": float(d.get("nextReleaseAt") or 0.0),
+            })
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复 TG 节流预算失败: %s", e)
+
+
+def _throttle_queue_save() -> None:
+    try:
+        os.makedirs(APP_ROOT_DIR, exist_ok=True)
+        payload = json.dumps({"tasks": _THROTTLE_QUEUE}, ensure_ascii=False).encode("utf-8")
+        tmp = f"{_THROTTLE_QUEUE_FILE}.tmp.{os.getpid()}"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        os.replace(tmp, _THROTTLE_QUEUE_FILE)
+    except Exception as e:  # noqa: BLE001
+        log.warning("保存 TG 节流队列失败: %s", e)
+
+
+def _throttle_queue_load() -> None:
+    try:
+        if not os.path.exists(_THROTTLE_QUEUE_FILE):
+            return
+        with open(_THROTTLE_QUEUE_FILE, "r", encoding="utf-8") as f:
+            d = json.loads(f.read() or "{}")
+        if isinstance(d, dict) and isinstance(d.get("tasks"), dict):
+            _THROTTLE_QUEUE.clear()
+            _THROTTLE_QUEUE.update(d["tasks"])
+            if _THROTTLE_QUEUE:
+                log.info("已恢复 TG 节流队列: %d 条待放行任务", len(_THROTTLE_QUEUE))
+    except Exception as e:  # noqa: BLE001
+        log.warning("恢复 TG 节流队列失败: %s", e)
+
+
+def _format_throttle_task(w: Dict[str, Any], error_msg: str = "") -> Dict[str, Any]:
+    """把节流队列条目渲染成任务列表行（status=waiting_throttle）。
+
+    与 waiting_disk 同构：任务页可见、可取消、重启不丢。状态独立命名，
+    不再借用 waiting_disk —— 否则用户看到「磁盘挂起」会去清磁盘，而真实
+    原因是当天 TG 请求预算已用完。
+    """
+    now = float(w.get("created_at") or time.time())
+    t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+    return {
+        "id": w["id"],
+        "filename": w.get("filename", "未知文件"),
+        "size": w.get("size_str", "未知大小"),
+        "size_bytes": w.get("size", 0),
+        "source": w.get("source", "TG 节流队列"),
+        "source_url": "",
+        "msg_id": w.get("msg_id", "—"),
+        "status": "waiting_throttle",
+        "progress": 0,
+        "loaded": "0 B",
+        "time": t_str,
+        "local_path": "—（等待随机节奏放行，不占磁盘）",
+        "error_msg": error_msg or w.get("error_msg") or "按随机节奏排队中，稍后自动放行",
+        "stages": [
+            {"name": "等待放行节奏", "done": "yes", "time": t_str, "dur": "排队中"},
+            {"name": "下载媒体", "done": "no", "time": "—", "dur": "—"},
+            {"name": "本地落盘", "done": "no", "time": "—", "dur": "—"},
+        ],
+        "_unique_id": w.get("uniqueId") or w.get("id", ""),
+        "_telegram_id": None,
+        "_file_id": None,
+    }
 
 
 async def _wake_flood_wait_tasks() -> int:
@@ -430,16 +782,29 @@ def _archive_load() -> None:
         except Exception as e:  # noqa: BLE001
             log.warning("归档日志恢复失败 (%s): %s", cf, e)
 
-    resumed = sum(
-        1 for j in _ARCHIVE_JOBS.values()
-        if j.get("state") in ("queued", "uploading"))
+    # 重启恢复要区分「真的传了一半」和「只是还在排队」：
+    #   旧实现把 queued 与 uploading 一律写 failed，线上实测 53 条告警里 45 条
+    #   全是 progress==0 的排队任务——它们一个字节都没传，却永久挂在「归档失败」
+    #   列表里要求用户手动重试，而真正被中断的上传是 0 条。
+    #   现在：queued(progress==0) 原样保留排队并打 resume_pending 标记，
+    #   由 _startup 拿到事件循环后自动重新入队；只有真的在上传中的才判失败。
+    queued_n = 0
+    interrupted = 0
     for j in _ARCHIVE_JOBS.values():
-        if j.get("state") in ("queued", "uploading"):
+        st = j.get("state")
+        if st == "queued" and not int(j.get("progress") or 0):
+            j["resume_pending"] = True
+            queued_n += 1
+        elif st in ("queued", "uploading"):
             j["state"] = "failed"
-            j["error"] = "bridge 重启导致上传中断，可重试"
+            j["error"] = "上传被中断（bridge 重启），可重试"
+            j["updated_at"] = time.time()
+            interrupted += 1
+    if queued_n:
+        log.info("已恢复 %d 条排队中的归档任务，将在启动后自动续跑", queued_n)
     if _ARCHIVE_JOBS:
         log.info("已恢复归档日志（%d 条任务，%d 条中断标记失败）",
-                 len(_ARCHIVE_JOBS), resumed)
+                 len(_ARCHIVE_JOBS), interrupted)
 
 
 def _archive_save() -> None:
@@ -554,6 +919,10 @@ def _archive_config_public() -> Dict[str, Any]:
         "diskAutoClean": bool(_ARCHIVE_CONFIG.get("diskAutoClean", True)),
         "diskHighWatermarkPercent": float(_ARCHIVE_CONFIG.get("diskHighWatermarkPercent") or 85.0),
         "diskLowWatermarkPercent": float(_ARCHIVE_CONFIG.get("diskLowWatermarkPercent") or 75.0),
+        # 上传并发与单轮入队上限（只读展示：真实并发由进程启动时的信号量决定，
+        # 改它需要设环境变量后重启，避免运行期改信号量导致正在上传的任务失去约束）。
+        "concurrency": int(_ARCHIVE_CONCURRENCY),
+        "sweepBatch": int(_ARCHIVE_CONFIG.get("sweepBatch") or 0) or None,
         "stats": {
             "enqueued": int(stats.get("enqueued") or 0),
             "done": int(stats.get("done") or 0),
@@ -788,6 +1157,9 @@ def _openlist_clear() -> None:
 _ARCH_PILL = {
     "queued": ("pending", "排队中"),
     "uploading": ("upload", "归档中"),
+    # 上传已成功、但云端大小暂时确认不了（OpenList 单文件探测超时）。
+    # 这既不是成功也不是失败：本地文件必须保留，稍后由后台复查自动转 done/failed。
+    "unverified": ("upload", "待核验"),
     "done": ("archived", "已归档"),
     "failed": ("failed", "归档失败"),
     "cancelled": ("pending", "已取消"),
@@ -812,6 +1184,7 @@ def _archive_public(job: Dict[str, Any]) -> Dict[str, Any]:
         "deleteLocal": bool(job.get("delete_local")),
         "localDeleted": bool(job.get("local_deleted")),
         "localDeleteError": str(job.get("local_delete_error") or ""),
+        "verifyPending": bool(job.get("verify_pending")),
         "pillCls": cls,
         "pillLabel": label,
     }
@@ -1042,3 +1415,8 @@ _watch_seen_load()
 _notify_config_load()
 _openlist_load()
 _custom_notes_load()
+_stream_stats_load()
+_browse_memory_load()
+_throttle_config_load()
+_throttle_state_load()
+_throttle_queue_load()

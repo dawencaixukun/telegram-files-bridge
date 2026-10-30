@@ -26,13 +26,28 @@ from core.state import (
     _format_waiting_disk_task, _format_flood_wait_task,
     _is_flood_wait_active, _get_flood_wait_status,
     _DELETED_LOCAL_UIDS, _alert_state, _ALERT_EVENT_LIMIT, _ALERTS_MAX,
-    _archive_latest_raw_of, _ARCHIVE_JOBS, _archive_index_snapshot, _custom_notes_save
+    _archive_latest_raw_of, _ARCHIVE_JOBS, _archive_index_snapshot, _custom_notes_save,
+    _STREAM_STATS, _THROTTLE_QUEUE
 )
 from core.backend import BACKEND
 from services.browse_service import chat_sources
+from services.throttle_service import throttle_plan_submit, throttle_pending_rows
 from core.logging import log, LOG_STORE
 
-_TASK_STATUSES = ("downloading", "paused", "completed", "error")
+# 后端 downloadStatus 里「算作任务」的状态。历史值只有 4 个，漏掉了 idle ——
+# 而 Java 后端在**归档成功后删除本地文件**时会把 downloadStatus 重置为 'idle'
+# 并清空 local_path（实测 .archive_jobs.json 里 461 条 done 的 uid，在
+# data.db 中全部是 idle + local_path=null）。于是「提交 100 个下载，任务队列
+# 只显示 10 条」：482 条媒体记录里 472 条 idle 被整条过滤，只剩 10 条
+# completed 进队列。idle 不是「没下载」，而是「后端已不再持有下载态」，
+# 必须保留并交由 _to_task 按归档记录还原成 archived，否则任务历史直接蒸发。
+_TASK_STATUSES = ("downloading", "paused", "completed", "error", "idle")
+
+# downloadStatus=idle 的记录里，只有真正被处理过的才算任务：
+#   * 归档记录里有这个 uid（下载过、归档过）→ 任务
+#   * downloadedSize > 0（下过一部分）→ 任务
+# 纯 idle 且没有归档、没下过一字节的是「浏览时被索引进来的频道媒体」，
+# 从未提交下载，混进任务队列会把真正的任务淹掉。
 _CHAT_TITLE_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
 
 # 任务队列展示优先级：进行中的任务必须浮到最前，已归档的沉到最后。
@@ -44,6 +59,7 @@ _TASK_RANK = {
     "upload": 0,         # 归档上传中
     "verify": 0,         # 校验中
     "waiting_disk": 1,   # 磁盘/风控挂起（等资源，但仍是活跃任务）
+    "waiting_throttle": 1,  # TG 节流排队（随机节奏放行 / 预算挂起待次日）
     "pending": 1,        # 待处理
     "failed": 2,         # 失败待重试（需要用户注意）
     "downloaded": 3,     # 已下载待归档（可操作）
@@ -117,6 +133,18 @@ def _to_task(rec: Dict[str, Any], index: int, chat_titles: Optional[Dict[str, st
             status = "upload"
         else:
             status = "downloaded"
+    elif dl_status == "idle":
+        # idle = 后端已丢弃下载态（归档删本地后会被重置成这样，见 _TASK_STATUSES
+        # 注释）。归档记录能证明它下载并归档过 → 仍然是「已归档」，
+        # 否则按「从未下载」的待处理态展示，绝不静默从队列里消失。
+        if arch_job and arch_job.get("state") == "done":
+            status = "archived"
+        elif arch_job and arch_job.get("state") == "uploading":
+            status = "upload"
+        elif arch_job and arch_job.get("state") == "failed":
+            status = "failed"
+        else:
+            status = "pending"
     elif dl_status == "downloading":
         status = "download"
     elif dl_status == "error":
@@ -269,6 +297,67 @@ async def _chat_title_map() -> Dict[str, str]:
     return out
 
 
+def _ts_seconds(value: Any) -> float:
+    """把后端可能给出的秒/毫秒时间戳统一成秒。"""
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0:
+        return 0.0
+    return v / 1000.0 if v > 1e12 else v
+
+
+def _count_done_today(tasks: List[Dict[str, Any]]) -> int:
+    """「今日完成」计数：只数今天（本地时区）完成的下载/归档。
+
+    归档项取云端完成时间 _archived_at（后端 completionDate，带毫秒），
+    纯下载项退回文件日期 _date_ts。没有时间戳的记录不计 —— 宁可少数，
+    也不把历史存量算成今日产出（旧口径是个无限累加器）。
+    """
+    start = _dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = start.timestamp()
+    day_end = day_start + 86400.0
+    n = 0
+    for t in tasks:
+        if str(t.get("status") or "") not in ("downloaded", "archived"):
+            continue
+        ts = _ts_seconds(t.get("_archived_at")) or _ts_seconds(t.get("_date_ts"))
+        if day_start <= ts < day_end:
+            n += 1
+    return n
+
+
+def _is_real_task(rec: Dict[str, Any], arch_index: Optional[Any] = None) -> bool:
+    """这条后端记录是否该进任务队列。
+
+    除 idle 外的状态（downloading/paused/completed/error）一律算任务 —— 这些
+    都是后端明确表达过的下载态。
+
+    idle 需要额外证据，否则会把「浏览时被索引进来的频道媒体」全当成任务：
+      * 归档记录里有这个 uid（下载过 / 正在归档 / 归档失败过）→ 算
+      * downloadedSize > 0（下过一部分）→ 算
+      * localPath 非空（后端还记着本地文件）→ 算
+    纯 idle + 无归档 + 零字节 + 无本地路径 = 从未提交下载，不进队列。
+    """
+    if str(rec.get("downloadStatus") or "").strip().lower() != "idle":
+        return True
+    uid = str(_pick_id(rec) or "")
+    if uid:
+        job = (arch_index.latest_of(uid) if arch_index is not None
+               else _archive_latest_raw_of(uid))
+        if job:
+            return True
+    try:
+        if float(rec.get("downloadedSize") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if str(rec.get("localPath") or "").strip():
+        return True
+    return False
+
+
 async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
     have_all_files = False
@@ -297,6 +386,8 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
         for i, rec in enumerate(records):
             try:
                 if rec.get("downloadStatus") not in _TASK_STATUSES:
+                    continue
+                if not _is_real_task(rec, arch_index):
                     continue
                 tasks.append(_to_task(rec, i + 1, titles, arch_index))
             except Exception as e:  # noqa: BLE001
@@ -328,6 +419,8 @@ async def _build_tasks(force: bool = False) -> List[Dict[str, Any]]:
         for rec in files:
             try:
                 if rec.get("downloadStatus") not in _TASK_STATUSES:
+                    continue
+                if not _is_real_task(rec, arch_index):
                     continue
                 idx += 1
                 t = _to_task(rec, idx, titles, arch_index)
@@ -502,6 +595,11 @@ async def tasks_all(force: bool = False) -> List[Dict[str, Any]]:
     if _WAITING_DISK_TASKS:
         waiting_tasks = [_format_waiting_disk_task(w) for w in _WAITING_DISK_TASKS.values()]
         tasks = waiting_tasks + tasks
+    # TG 节流队列：随机节奏排队中 / 预算耗尽挂起待次日续跑。
+    # 与 waiting_disk 并列而非复用同一批次 —— 用户看到「磁盘挂起」会去清磁盘，
+    # 而真实原因可能是当天 TG 请求预算已用完。
+    if _THROTTLE_QUEUE:
+        tasks = throttle_pending_rows() + tasks
     if _is_flood_wait_active():
         st = _get_flood_wait_status()
         rem_sec = st.get("remainingSeconds", 0)
@@ -792,8 +890,6 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
     trend_archived = [0] * 14
     for t in tasks:
         st = t["status"]
-        if st in ("completed", "archived"):
-            archived_total += 1
         if st == "failed":
             failed_count += 1
         if st == "isolated":
@@ -801,6 +897,64 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
         sz = int(t.get("_size_bytes") or 0)
         if sz > 0:
             total_bytes += sz
+
+    # 云端归档累计：真实口径是【归档引擎已成功上传的记录】，不是后端任务列表。
+    # 历史缺陷（用户可见：「归档了许多到网盘内，总览居然显示 0 归档」）：
+    # archived_total 只数 tasks 里 status 为 archived/completed 的条目，但
+    # VPS 后台会在归档完成后把任务清出列表（实测后端 309 个文件全是 idle、
+    # tasks_all() 返回 0 条），而 .archive_jobs.json 里躺着 312 条 done ——
+    # 于是计数恒为 0。
+    #
+    # 新口径：以 _ARCHIVE_JOBS 中 state=='done' 的记录为准，按 remote_path
+    # 去重（同一文件重复归档覆盖时只算一个文件），再并上 tasks 里已归档但
+    # 没有归档日志的历史遗留项（按 unique_id 去重），两边取并集不双计。
+    archived_total = 0   # 先复位，异常分支不会留下旧口径的残留值
+    try:
+        # ① 归档日志：按 remote_path 去重（重复归档同一目标只算一个文件），
+        #    没有 remote_path 的老记录回退用 unique_id 当键。
+        #
+        # 【历史缺陷，用户可见：「网盘里真有 900 多条记录？」—— 卡片显示 919，
+        # 实际只有 456 个文件】。旧代码把「去重键集合」和「跨源去重集合」混成了
+        # 同一个变量 _archived_uids：它只在**没有 remote_path** 时才写入 uid，
+        # 而线上 495 条 done 全部带 remote_path，于是 _archived_uids 恒为空。
+        # 第二步靠 `_uid in _archived_uids` 判断「这条任务是否已在归档日志里」，
+        # 恒空的集合让判断恒为 False —— 463 条已归档任务全部被当成「日志里没有的
+        # 新项」又加了一遍，456 + 463 = 919。
+        # 现在拆成两个集合：_archived_uid_only 负责计数兜底，_archived_seen_uids
+        # 收集**所有** done 的 uid，专门用于第二步跨源去重。
+        _archived_paths = set()
+        _archived_uid_only = set()
+        _archived_seen_uids = set()
+        for _j in _ARCHIVE_JOBS.values():
+            if _j.get("state") != "done":
+                continue
+            _p = str(_j.get("remote_path") or "")
+            _u = str(_j.get("unique_id") or "")
+            if _p:
+                _archived_paths.add(_p.lower())
+            elif _u:
+                _archived_uid_only.add(_u)
+            if _u:
+                _archived_seen_uids.add(_u)
+        archived_total = len(_archived_paths) + len(_archived_uid_only)
+        # ② 任务列表里的已归档项：只补计归档日志里没有的（老遗留记录），
+        #    避免同一文件在两边各算一次。
+        for _t in tasks:
+            if str(_t.get("status") or "") not in ("completed", "archived"):
+                continue
+            _uid = str(_t.get("_unique_id") or "")
+            if not _uid or _uid in _archived_seen_uids:
+                continue
+            _p = str(_t.get("_remote_path") or _t.get("_archive_path") or "")
+            if _p and _p.lower() in _archived_paths:
+                continue
+            archived_total += 1
+        log.debug("云端归档累计：归档日志 %s 个（按路径去重）+ 任务补充项 = %s",
+                  len(_archived_paths) + len(_archived_uid_only), archived_total)
+    except Exception as e:  # noqa: BLE001
+        log.debug("云端归档累计：归档日志不可用时回退任务计数: %s", e)
+        archived_total = sum(1 for _t in tasks
+                             if str(_t.get("status") or "") in ("completed", "archived"))
     # 磁盘占用迷你趋势：先落一条当天的真实采样，再按天回放历史
     _record_disk_sample(float(disk.get("used_gb", 0) or 0))
     trend_disk = _disk_trend(days, float(disk.get("used_gb", 0) or 0))
@@ -838,6 +992,12 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
         j_size = int(j.get("size_bytes") or 0)
         if j_uid and j_uid not in _dl_uids_with_size and j_size > 0:
             dl_total_bytes += j_size
+    # 在线播放流量（浏览标签播放弹窗经 bridge 代理的字节）按「上传下载对等」
+    # 记账：网盘 → bridge 是下载，bridge → 浏览器是上传，两边各计一份。
+    _stream_bytes = int(_STREAM_STATS.get("total_bytes") or 0)
+    if _stream_bytes > 0:
+        dl_total_bytes += _stream_bytes
+        ul_total_bytes += _stream_bytes
     dl_total = _fmt_total_bytes(dl_total_bytes)
     ul_total = _fmt_total_bytes(ul_total_bytes)
     kpis = [
@@ -856,9 +1016,12 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
             "delta": "", "d": "flat", "spark": "#22d3ee",
             "points": _spark_points([float(dl_total_bytes)] * 14),
         },
+        # 磁盘卡可点：点开看「这 27 GB 被哪些目录占着」。
+        # 只给一个分区总数，用户无法判断该删什么，KPI 等于没有可操作性。
         {"label": "本地磁盘占用", "icon": "ic-hdd",
          "value": str(int(disk.get("used_gb", 0))), "unit": "GB",
-         "delta": "", "d": "flat", "spark": "#8b5cf6", "points": _spark_points(trend_disk)},
+         "delta": "", "d": "flat", "spark": "#8b5cf6", "points": _spark_points(trend_disk),
+         "click": "disk"},
         {"label": "云端归档累计", "icon": "ic-cloud", "value": f"{archived_total:,}", "unit": "个",
          "delta": "", "d": "flat", "spark": "#34d399", "points": _spark_points(trend_archived)},
     ]
@@ -1018,7 +1181,11 @@ async def _ctx(request: Any, page_id="", active_nav="", active_page="", extra=No
             "isolated_count": await _isolated_count(tasks),
             "alert_count": sum(1 for a in alerts if a["unread"]),
             "alerts": alerts,
-            "done_today": sum(1 for t in tasks if t["status"] in ("downloaded", "archived")),
+            # 「今日完成」必须真的只数今天：旧口径数的是「所有已下载 + 已归档」，
+            # 一旦 idle 记录（归档删本地后被后端重置的那批）回到任务队列，
+            # 这个数字会从 10 直接跳到 470+ —— 那就是把历史存量冒充今日产出。
+            # 归档项用云端完成时间 _archived_at，纯下载项退回文件日期 _date_ts。
+            "done_today": _count_done_today(tasks),
             "stats": (await _dashboard_stats(tasks, disk)) if page_id in ("dashboard", "account", "") else {},
             "recent_tasks": tasks[:8],
             "tasks": tasks,
@@ -1198,6 +1365,7 @@ async def _resolve_links_to_files(
     # 逐账号解析（链接归属哪个账号未知；第一个成功解析的账号负责下载）
     files: List[Dict[str, Any]] = []
     errors: List[str] = []
+    queued_accepted = 0
     for s in sources:
         tg_id = s.get("telegramId")
         if tg_id is None:
@@ -1266,18 +1434,33 @@ async def _resolve_links_to_files(
                         continue
                     payload_files = clean_payload
                 if payload_files:
+                    # TG 请求随机节流：/submit 一次可能解析出几十个文件，同样不能整批零间隔下发
+                    plan = await throttle_plan_submit(payload_files, "submit", {}, "链接提交")
+                    if plan is not None:
+                        payload_files = plan.get("submit") or []
                     try:
-                        await BACKEND.start_download_multiple({"files": payload_files})
-                        files.extend(payload_files)
-                        # 清后端数据缓存，否则 /files 旧数据让新任务不可见（任务表+告警都不触发）
-                        BACKEND._cache.clear()
+                        if payload_files:
+                            await BACKEND.start_download_multiple({"files": payload_files})
+                            files.extend(payload_files)
+                            # 清后端数据缓存，否则 /files 旧数据让新任务不可见（任务表+告警都不触发）
+                            BACKEND._cache.clear()
                     except Exception as e:  # noqa: BLE001
                         log.error("start-download-multiple 失败: %s", e)
                         errors.append(_tg_err_public(e))
+                    if plan is not None:
+                        # 节流已受理全部文件：已下发 head + 队列 queued 都算"已提交"。
+                        # 必须立刻跳出多账号循环 —— 否则下一个账号会把同一批链接
+                        # 再解析一遍并再次入队，队列里出现重复条目。
+                        queued_accepted += int(plan.get("queued") or 0)
+                        if plan.get("message"):
+                            errors.append(plan["message"])
+                        break
             # 解析成功的账号已覆盖这批链接，不再换账号重试
-            if files:
+            if files or queued_accepted:
                 break
-    if files:
-        return len(files), ""
+    if files or queued_accepted:
+        # 节流队列已受理（预算耗尽时可能 0 个立即下发）：按"已受理"返回条数，
+        # 调用方提示「已提交 N 条链接」，任务页能看到 waiting_throttle 行。
+        return len(files) + queued_accepted, ""
     return 0, (errors[0] if errors else "链接解析不到可下载的文件")
 

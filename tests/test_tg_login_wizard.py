@@ -161,7 +161,8 @@ class TestWizardRoutes(unittest.TestCase):
         with patch.object(core_backend, "new_backend_session", lambda: second), \
              patch.object(core_backend, "_tg_wait_state",
                           AsyncMock(return_value=TG_WAIT_CODE)), \
-             patch.object(core_backend, "_tg_state_of", AsyncMock(return_value=TG_WAIT_CODE)):
+             patch.object(core_backend, "_tg_state_of", AsyncMock(return_value=TG_WAIT_CODE)), \
+             patch.object(core_backend, "_tg_code_length", AsyncMock(return_value=6)):
             r = self._post("/tg-login/step1", {"country": "+86", "phone": "13800000000", "fresh": True})
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -178,7 +179,8 @@ class TestWizardRoutes(unittest.TestCase):
                           lambda: self.fail("不应新建会话")), \
              patch.object(core_backend, "_tg_wait_state",
                           AsyncMock(return_value=TG_WAIT_CODE)), \
-             patch.object(core_backend, "_tg_state_of", AsyncMock(return_value=TG_WAIT_CODE)):
+             patch.object(core_backend, "_tg_state_of", AsyncMock(return_value=TG_WAIT_CODE)), \
+             patch.object(core_backend, "_tg_code_length", AsyncMock(return_value=6)):
             r = self._post("/tg-login/step1", {"country": "+86", "phone": "13800000000"})
         self.assertTrue(r.json()["ok"])
         self.assertEqual(r.json()["telegramId"], "first-client")
@@ -229,6 +231,106 @@ class TestTemplateWiring(unittest.TestCase):
         m = _re.search(r"@media \(max-width: 480px\) \{\s*\.country-picker \{[^}]*\}", css)
         self.assertIsNotNone(m, "缺少 .country-picker 的窄屏收窄媒体查询")
         self.assertIn("max-width: 132px", m.group(0) if m else "")
+
+
+class TestCodeLength(unittest.TestCase):
+    """验证码位数不固定（5 位 / 6 位）：后端读取 TDLib codeInfo，前端动态渲染格数。
+
+    历史缺陷：登录向导写死 5 格 + 满 5 位自动提交 —— Telegram 现在常见发 6 位码，
+    第 6 位根本输不进去，输到第 5 位就被截断提交，报「验证码错误」，
+    多账号登录时反复踩坑（用户实测反馈）。
+    """
+
+    def setUp(self):
+        core_backend._TG_WIZARD_SESSION = None
+
+    @staticmethod
+    def _rows(state):
+        return [{"id": "c1", "lastAuthorizationState": state}]
+
+    def _run(self, state):
+        with patch.object(core_backend.BACKEND, "list_telegrams_raw",
+                          new=AsyncMock(return_value=self._rows(state))):
+            return asyncio.run(core_backend._tg_code_length("c1"))
+
+    def test_reads_camel_case_code_info(self):
+        got = self._run({"constructor": TG_WAIT_CODE,
+                         "codeInfo": {"codeLength": 6, "phoneCodeHash": "x"}})
+        self.assertEqual(got, 6)
+
+    def test_reads_snake_case_code_info(self):
+        got = self._run({"constructor": TG_WAIT_CODE,
+                         "code_info": {"code_length": 5}})
+        self.assertEqual(got, 5)
+
+    def test_missing_code_info_returns_none(self):
+        """旧后端不序列化 codeInfo：返回 None，前端退回 5/6 自适应，绝不崩。"""
+        self.assertIsNone(self._run({"constructor": TG_WAIT_CODE}))
+
+    def test_out_of_range_length_rejected(self):
+        self.assertIsNone(self._run({"constructor": TG_WAIT_CODE,
+                                     "codeInfo": {"codeLength": 99}}))
+
+    def test_step1_returns_code_length(self):
+        """step1 的 WAIT_CODE 响应必须带上 codeLength 字段（可为 None）。"""
+        second = _FakeSession("second")
+        core_backend._TG_WIZARD_SESSION = second
+        client = get_test_client()
+        token = bridge_server._make_portal_token()
+        csrf = "csrf-code-length"
+        client.cookies.set(bridge_server.PORTAL_COOKIE, token)
+        client.cookies.set(bridge_server.CSRF_COOKIE, csrf)
+        with patch.object(core_backend, "new_backend_session", lambda: second), \
+             patch.object(core_backend, "_tg_wait_state",
+                          AsyncMock(return_value=TG_WAIT_CODE)), \
+             patch.object(core_backend, "_tg_state_of", AsyncMock(return_value=TG_WAIT_CODE)), \
+             patch("routers.system._tg_code_length", AsyncMock(return_value=6)):
+            r = client.post("/tg-login/step1",
+                            json={"country": "+86", "phone": "13800000000"},
+                            headers={"X-CSRF-Token": csrf})
+        body = r.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body.get("codeLength"), 6)
+
+
+class TestOtpTemplateDynamic(unittest.TestCase):
+    """前端模板：格数必须由 otpLen 驱动，不得再写死 5。"""
+
+    def setUp(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.html = open(os.path.join(root, "templates", "tg_login.html"),
+                         encoding="utf-8").read()
+
+    def test_box_count_is_dynamic(self):
+        self.assertIn("x-for=\"i in otpLen\"", self.html,
+                      "OTP 格数必须由 otpLen 驱动（写死 5 会吞掉 6 位码的第 6 位）")
+        self.assertNotIn("x-for=\"i in 5\"", self.html,
+                         "不得再出现写死的 5 格循环")
+
+    def test_state_has_otp_len_and_six_slots(self):
+        self.assertIn("otpLen: 6,", self.html, "默认应为 6 格（Telegram 当前常见位数）")
+        self.assertIn("otp: ['', '', '', '', '', '']", self.html,
+                      "otp 数组必须能容纳 6 位")
+
+    def test_auto_submit_uses_dynamic_length(self):
+        self.assertIn("this.otp.join('').length === this.otpLen", self.html,
+                      "自动提交必须按当前格数判断，而非固定 5")
+        self.assertNotIn("this.otp.join('').length === 5", self.html,
+                         "不得残留固定 5 位的自动提交判断")
+
+    def test_manual_length_switch_available(self):
+        self.assertIn("setOtpLen", self.html,
+                      "后端取不到权威位数时，用户必须能手动切换 5/6 位")
+
+    def test_paste_autodetects_length(self):
+        self.assertIn("digits.length === 5 && this.otpLen === 6", self.html,
+                      "粘贴 5 位码时须自动收窄到 5 格（否则末位丢失）")
+        self.assertIn("digits.length === 6 && this.otpLen === 5", self.html,
+                      "粘贴 6 位码时须自动扩到 6 格")
+
+    def test_first_box_accepts_autofill(self):
+        self.assertIn(":maxlength=\"i === 1 ? otpLen : 1\"", self.html,
+                      "首格须放开 maxlength 以承接浏览器 one-time-code 自动填充")
 
 
 if __name__ == "__main__":

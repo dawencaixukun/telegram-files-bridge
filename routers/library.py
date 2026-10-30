@@ -346,20 +346,14 @@ async def library_cloud_rename(request: Request):
         return JSONResponse({"ok": False, "message": f"OpenList 未就绪: {e}"}, status_code=502)
 
     try:
-        resp = await _openlist_client.post(
-            "/api/fs/list",
-            json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
-            headers={"Authorization": token})
-        code, data, msg = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
+        # 翻页拉全：目录超过 500 个文件时，只看第一页会漏掉后面同名文件，
+        # 于是改名变成静默覆盖（OpenList rename 对同名行为不可靠）。
+        code, content, msg = await _openlist_list_all(token, parent_dir)
+        if code in (401, 403):
             token = await _openlist_relogin()
-            resp = await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                headers={"Authorization": token})
-            code, data, msg = _openlist_env(resp)
+            code, content, msg = await _openlist_list_all(token, parent_dir)
         if code == 200:
-            existing = {str(c.get("name") or "") for c in (data.get("content") or [])}
+            existing = {str(c.get("name") or "") for c in content}
             if new_name in existing:
                 return JSONResponse({"ok": False,
                                      "message": f"云端目录已存在同名文件「{new_name}」，请换一个名字"},

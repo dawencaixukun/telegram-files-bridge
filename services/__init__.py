@@ -11,6 +11,8 @@ import importlib
 _SUBMODULES = [
     "services.openlist_service",
     "services.watermark_service",
+    "services.disk_service",
+    "services.throttle_service",
     "services.notification_service",
     "services.backup_service",
     "services.doctor_service",

@@ -209,16 +209,30 @@ async def test_sweep():
         check("取消尊重（不再入队）", await B._auto_archive_sweep() == 0)
 
         # 失败自动重试：attempts=2 → 第 3 次；attempts=3 → 不再重试
+        # 注意 updated_at：真实失败 job 的 updated_at 就是失败时刻，退避窗口从这里算。
+        # 这里把 updated_at 放到退避窗口之外，模拟「已经等过一轮」的失败任务。
         tasks.append(_fake_task("u6", -1001234, lp=local_ok, fname="重试.mp4"))
         B._ARCHIVE_JOBS["jf2"] = {"id": "jf2", "unique_id": "u6", "state": "failed",
-                                  "created_at": time.time(), "auto": True, "auto_attempts": 2}
+                                  "created_at": time.time() - 600,
+                                  "updated_at": time.time() - 600,
+                                  "auto": True, "auto_attempts": 2}
         n6 = await B._auto_archive_sweep()
         j6 = B._archive_latest_raw_of("u6")
         check("失败第 2 次后 → 自动第 3 次", n6 == 1 and j6["auto_attempts"] == 3,
               "n=%s attempts=%s" % (n6, j6 and j6["auto_attempts"]))
         B._ARCHIVE_JOBS["jf3"] = {"id": "jf3", "unique_id": "u6", "state": "failed",
-                                  "created_at": time.time() + 1, "auto": True, "auto_attempts": 3}
+                                  "created_at": time.time() - 599,
+                                  "updated_at": time.time() - 599,
+                                  "auto": True, "auto_attempts": 3}
         check("重试上限 3 次 → 不再入队", await B._auto_archive_sweep() == 0)
+
+        # 退避契约：刚刚失败的任务不能被下一轮 sweep（30s 后）立刻重试，
+        # 否则 _AUTO_ARCHIVE_MAX_ATTEMPTS=3 会在一分钟内烧光，之后只能手动点。
+        tasks.append(_fake_task("u7", -1001234, lp=local_ok, fname="刚失败.mp4"))
+        B._ARCHIVE_JOBS["jf4"] = {"id": "jf4", "unique_id": "u7", "state": "failed",
+                                  "created_at": time.time(), "updated_at": time.time(),
+                                  "auto": True, "auto_attempts": 1, "error": "连接超时"}
+        check("刚失败的 → 退避中不立即重试", await B._auto_archive_sweep() == 0)
     finally:
         B.tasks_all, B._openlist_ready, B._archive_worker = orig
 

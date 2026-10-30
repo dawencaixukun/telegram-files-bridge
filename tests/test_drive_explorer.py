@@ -73,7 +73,9 @@ class TestDriveExplorer(unittest.TestCase):
         ]
         with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=mock_storages)), \
              patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)):
-            resp = self.bridge_client.get("/explorer", cookies=cookies)
+            # 显式 path=/ 请求根页：裸 /explorer 会被「上次浏览位置」
+            # 自动续播（见 test_explorer_view_toggle 的续播用例），根页用例必须指名要根。
+            resp = self.bridge_client.get("/explorer?path=/", cookies=cookies)
             self.assertEqual(resp.status_code, 200)
             html = resp.text
 
@@ -230,7 +232,11 @@ class TestDriveExplorer(unittest.TestCase):
             # 视频卡片元素
             self.assertIn("clip.mp4", html)
             self.assertIn("https://thumb.example.com/clip.jpg", html)
-            self.assertIn("[OneDrive]", html)
+            # 网盘标识浮层已按用户要求整体移除（归属由云端路径首段体现），
+            # 缩略图上不得再出现徽标。
+            self.assertNotIn("cloud-drive-float", html)
+            self.assertNotIn("[OneDrive]", html)
+            self.assertIn("/onedrive/yello/clip.mp4", html)  # 路径仍在卡片上
             self.assertIn("__playCloudVideo", html)
             self.assertIn("cloudVideoModal", html)
             self.assertIn("btnCopyStreamUrl", html)
@@ -391,7 +397,7 @@ class TestDriveExplorer(unittest.TestCase):
 
     def test_preview_server_explorer_support(self):
         """预览服务支持 /explorer 与 /library/browse。"""
-        resp_exp = self.preview_client.get("/explorer")
+        resp_exp = self.preview_client.get("/explorer?path=/")
         self.assertEqual(resp_exp.status_code, 200)
         self.assertIn("浏览", resp_exp.text)
         self.assertIn("OneDrive", resp_exp.text)

@@ -32,7 +32,7 @@ from core.logging import log, LOG_STORE
 from services.openlist_service import (
     _openlist_client, _openlist_upload_client, _openlist_ready,
     _openlist_token, _openlist_relogin, _openlist_env,
-    _openlist_mkdir_tree, _openlist_exists,
+    _openlist_mkdir_tree, _openlist_exists, _openlist_list_all,
     openlist_list_files, openlist_download_to_file
 )
 
@@ -220,14 +220,10 @@ def _rotate_local_backups(dest_dir: str, keep: int = _SESSION_BACKUP_MAX_KEEP) -
 async def _openlist_mount_names(token: str) -> List[str]:
     """列出根目录下的网盘挂载名（顺序即 OpenList 返回顺序，调用方不得依赖其稳定性）。"""
     try:
-        resp = await _openlist_client.post(
-            "/api/fs/list",
-            json={"path": "/", "password": "", "page": 1, "per_page": 100, "refresh": False},
-            headers={"Authorization": token})
-        code, data, _ = _openlist_env(resp)
-        if code == 200 and isinstance(data, dict):
-            return [str(i["name"]) for i in (data.get("content") or [])
-                    if isinstance(i, dict) and i.get("is_dir") and i.get("name")]
+        code, content, _msg = await _openlist_list_all(token, "/")
+        if code == 200:
+            return [str(i["name"]) for i in content
+                    if i.get("is_dir") and i.get("name")]
     except Exception as e:  # noqa: BLE001
         log.debug("列出 OpenList 网盘挂载失败: %s", e)
     return []
@@ -236,14 +232,9 @@ async def _openlist_mount_names(token: str) -> List[str]:
 async def _mount_has_backups(token: str, mount: str) -> bool:
     """该网盘下是否已存在 TG-Backups 目录（用于跨重启稳定复用，而非猜第一个）。"""
     try:
-        resp = await _openlist_client.post(
-            "/api/fs/list",
-            json={"path": f"/{mount}", "password": "", "page": 1, "per_page": 200, "refresh": False},
-            headers={"Authorization": token})
-        code, data, _ = _openlist_env(resp)
-        if code == 200 and isinstance(data, dict):
-            return any(isinstance(i, dict) and i.get("name") == "TG-Backups"
-                       for i in (data.get("content") or []))
+        code, content, _msg = await _openlist_list_all(token, f"/{mount}")
+        if code == 200:
+            return any(i.get("name") == "TG-Backups" for i in content)
     except Exception as e:  # noqa: BLE001
         log.debug("探测网盘 %s 是否已有备份目录失败: %s", mount, e)
     return False
@@ -351,15 +342,9 @@ async def _upload_session_backup_to_openlist(filename: str, enc_bytes: bytes) ->
             return False, "上传完成但云端存在性核验未通过"
 
         try:
-            list_resp = await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": remote_dir, "password": "", "page": 1, "per_page": 100, "refresh": True},
-                headers={"Authorization": token}
-            )
-            l_code, l_data, _ = _openlist_env(list_resp)
-            if l_code == 200 and isinstance(l_data, dict):
-                content = l_data.get("content") or []
-                backup_files = [f for f in content if isinstance(f, dict) and str(f.get("name") or "").startswith("tg-session-")]
+            l_code, content, _l_msg = await _openlist_list_all(token, remote_dir, refresh=True)
+            if l_code == 200:
+                backup_files = [f for f in content if str(f.get("name") or "").startswith("tg-session-")]
                 if len(backup_files) > _SESSION_BACKUP_MAX_KEEP:
                     backup_files.sort(key=lambda x: str(x.get("modified") or ""))
                     to_remove = [f.get("name") for f in backup_files[:len(backup_files) - _SESSION_BACKUP_MAX_KEEP]]

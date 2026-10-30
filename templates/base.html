@@ -169,10 +169,13 @@
                  onclick="closeNavFeatureMenu(); return window.__openExplorerInOpenList(this, event);">
                 <svg><use href="#ic-external"/></svg><span>在 OpenList 中打开当前目录</span>
               </a>
-              <button type="button" class="dd-item" role="menuitem" @click="open = false; openFeatureDomainModal()">
+              <!-- OpenList 对外域名已收敛到「设置 → OpenList 云端存储」的全局字段，
+                   顶栏只做跳转入口，不再自建弹窗（同一配置两处可改 = 之前「这页配了那页没配」）。 -->
+              <a class="dd-item" role="menuitem" href="/settings#openlistPublicBase"
+                 onclick="closeNavFeatureMenu();">
                 <svg><use href="#ic-globe"/></svg>
-                <span x-text="featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase)) : '设置 OpenList 域名'"></span>
-              </button>
+                <span x-text="featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase) + '（去设置修改）') : '设置 OpenList 域名'"></span>
+              </a>
             </div>
           </div>
           {% endif %}
@@ -273,21 +276,13 @@
         toggle: function () { this.open = !this.open; },
       };
     };
-    window.featureOpenlistBase = localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '';
+    window.featureOpenlistBase = {{ (openlist_public_base or '') | tojson }} || localStorage.getItem('openlist_public_base') || '';
     window.featureDisplayDomain = function (url) {
       if (!url) return '';
       try { return new URL(url).host; }
       catch (e) { return url.replace(/^https?:\/\//, '').split('/')[0]; }
     };
-    /* 域名弹窗复用 explorer 内已有的 showDomainModal 弹窗 DOM：通过 Alpine $data 操控主组件 */
-    window.openFeatureDomainModal = function () {
-      var alp = document.querySelector('.explorer-container');
-      if (alp && alp._x_dataStack && alp._x_dataStack[0]) {
-        alp._x_dataStack[0].openDomainModal();
-      } else if (window.__toast) {
-        window.__toast('页面尚未就绪，请稍后再试', 'warning');
-      }
-    };
+    /* 域名入口已改为直达设置页，这里不再需要跨组件的弹窗胶水函数 */
     /* 内联 onclick 关闭功能菜单：Alpine 组件的 open 状态通过 _x_dataStack 取（裸 open 会撞 document.open） */
     window.closeNavFeatureMenu = function () {
       var alp = document.querySelector('.nav-feature-menu');
@@ -296,7 +291,7 @@
   </script>
   {% endif %}
 
-  {% block modals %}{% include "partials/_submit_modal.html" %}{% include "partials/_archive_modal.html" %}{% include "partials/_spotlight_modal.html" %}{% include "partials/_asset_drawer.html" %}{% endblock %}
+  {% block modals %}{% include "partials/_submit_modal.html" %}{% include "partials/_archive_modal.html" %}{% include "partials/_spotlight_modal.html" %}{% include "partials/_asset_drawer.html" %}{% include "partials/_disk_breakdown_modal.html" %}{% endblock %}
 
   {% block js %}{% endblock %}
 

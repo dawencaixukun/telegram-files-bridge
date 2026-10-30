@@ -24,6 +24,14 @@
   --gradient-brand: linear-gradient(135deg, var(--brand-a) 0%, var(--brand-b) 100%);
   --warn: #f59e0b;
 
+  /* ---- Accent / 交互描边 ----
+     explorer.html 的面包屑 hover、胶囊选中、根搜索焦点环、任务横幅描边都用
+     var(--accent)，但这个变量历史上从未定义过：深色主题下靠继承色勉强能看，
+     浅色主题就直接退化成不可控的继承色。这里补上两个主题的正式取值。 */
+  --accent: #a78bfa;
+  --border-glow: rgba(139, 92, 246, 0.55);
+  --border-hover: rgba(255, 255, 255, 0.34);
+
   /* ---- Spacing (4px base) ---- */
   --space-1: 4px;
   --space-2: 8px;
@@ -110,6 +118,16 @@
   --focus-ring: rgba(139, 92, 246, 0.55);
   --scrollbar: rgba(255, 255, 255, 0.18);
   --scrollbar-hover: rgba(255, 255, 255, 0.34);
+
+  /* ---- 缩略图浮层标签（角标/网盘名/时长）----
+     这些标签压在任意缩略图上，底色必须是与主题同向的「遮罩」而不是固定的深色：
+     暗色主题用深遮罩 + 白字可读；浅色主题若继续写死 rgba(15,23,42,.85)，
+     整块标签就是贴在浅色页面上的黑块（用户反馈：白天主题网盘标识黑黑一块）。 */
+  --media-chip-bg: rgba(15, 23, 42, 0.72);
+  --media-chip-bg-hover: rgba(15, 23, 42, 0.86);
+  --media-chip-border: rgba(255, 255, 255, 0.18);
+  --media-chip-text: rgba(255, 255, 255, 0.94);
+  --media-chip-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 /* ---------------- LIGHT THEME ---------------- */
@@ -138,6 +156,11 @@
   --text-2: rgba(20, 22, 40, 0.6);
   --text-3: rgba(20, 22, 40, 0.35);
 
+  /* 浅色主题的强调色必须压深（紫），否则压在白底上几乎看不见 */
+  --accent: #7c3aed;
+  --border-glow: rgba(124, 58, 237, 0.45);
+  --border-hover: rgba(40, 40, 90, 0.34);
+
   --bga-1: rgba(147, 111, 245, 0.5);
   --bga-2: rgba(96, 165, 250, 0.45);
   --bga-3: rgba(103, 232, 249, 0.4);
@@ -154,4 +177,13 @@
   --focus-ring: rgba(139, 92, 246, 0.45);
   --scrollbar: rgba(40, 40, 90, 0.22);
   --scrollbar-hover: rgba(40, 40, 90, 0.40);
+
+  /* 浅色主题的缩略图浮层标签：改为半透明白底 + 深字。
+     不再出现「浅页面上压一块深色矩形」的黑块观感，
+     同时因为仍有底色，压在任何缩略图（亮/暗画面）上都保持对比度。 */
+  --media-chip-bg: rgba(255, 255, 255, 0.86);
+  --media-chip-bg-hover: rgba(255, 255, 255, 0.96);
+  --media-chip-border: rgba(40, 40, 90, 0.16);
+  --media-chip-text: rgba(20, 22, 40, 0.88);
+  --media-chip-shadow: 0 2px 8px rgba(40, 40, 90, 0.16);
 }

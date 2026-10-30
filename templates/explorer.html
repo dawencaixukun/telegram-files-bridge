@@ -19,11 +19,20 @@
 
 .explorer-top-bar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;   /* 左上角左对齐：网盘下拉 → 面包屑 → 视图切换 */
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
 }
+/* 面包屑按内容自然宽度排列（不抢占剩余空间），三件套紧贴在一起；
+   路径过长时才允许收缩并省略，避免把视图切换挤出可视区。 */
+.explorer-top-bar .explorer-breadcrumbs {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 视图切换在左上角行内不需要额外的左外边距（原来在工具条右端时靠 margin-left 拉开） */
+.explorer-top-bar .view-switch { flex: none; }
 
 /* ---- 统一工具条：搜索 + 统计 + 视图切换 + ⋯ 菜单 ----------------------
    所有直接子元素同高（--toolbar-h），圆角/间距统一；窄屏仍按行等距换行。 */
@@ -74,6 +83,50 @@
 }
 .toolbar-stats strong { color: var(--text-1); font-weight: 600; }
 .toolbar-spacer { flex: 1 1 auto; min-width: 0; }
+
+/* 排序控件：与工具条其他元素同高（--toolbar-h），图标+下拉+方向按钮成组 */
+.toolbar-sort {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.toolbar-sort .toolbar-sort-icon { color: var(--text-3); flex: none; }
+/* 自绘下拉而不是原生 <select>（用户反馈：暗夜主题下展开的排序列表是一块
+   黑底/亮底，看不清）。
+   原因与结论：原生 select 的展开面板由浏览器 UA 绘制，option 的背景色只有
+   部分平台认，选中项高亮永远走系统色，color-scheme 也只能照顾一部分浏览器
+   —— 想在所有浏览器上稳定跟随主题，只能自己画。这里直接复用「网盘下拉」
+   那套 .toolbar-menu 面板：底色/描边/悬停全部来自 tokens.css 的主题变量，
+   深浅两套主题自动同步。 */
+.toolbar-sort .toolbar-sort-btn {
+  height: var(--toolbar-h);
+  padding: 0 8px 0 10px;
+  gap: 5px;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.toolbar-sort .toolbar-sort-label { font-size: 12.5px; min-width: 3.4em; text-align: left; }
+.toolbar-sort .toolbar-sort-menu {
+  min-width: 138px;
+  /* 默认与按钮右对齐（按钮在工具条右端）；窄屏按钮可能换行到左边，
+     用下面的媒体查询翻成左对齐，避免面板跑出视口。 */
+  right: 0;
+  left: auto;
+}
+.toolbar-sort .toolbar-sort-item { gap: 6px; }
+.toolbar-sort .toolbar-sort-item.is-active { color: var(--text-1); background: var(--bg-3); }
+/* 选中态的勾恒定占位：用 visibility 而不是 x-show，
+   否则未选中项的文字会整体左移，几行对不齐。 */
+.toolbar-sort .toolbar-sort-check { width: 14px; height: 14px; flex: none; display: inline-flex; }
+.toolbar-sort .toolbar-sort-check.is-hidden { visibility: hidden; }
+.toolbar-sort .toolbar-sort-dir { height: var(--toolbar-h); padding: 0 10px; gap: 4px; }
+@media (max-width: 720px) {
+  /* 窄屏隐藏「升序/降序」文字只留箭头，避免把搜索框挤成一条缝 */
+  .toolbar-sort .toolbar-sort-dir-label { display: none; }
+  .toolbar-sort .toolbar-sort-menu { right: auto; left: 0; }
+}
 
 /* 视图切换：两个等高按钮 */
 .view-switch {
@@ -147,13 +200,19 @@
 .toolbar-menu-item .icon { color: var(--text-3); flex: none; }
 
 @media (max-width: 720px) {
+  /* 工具条现在只剩搜索+统计：窄屏搜索独占一行，统计收起 */
   .explorer-toolbar { gap: 8px; padding: 8px; }
   .toolbar-search { flex: 1 1 100%; max-width: none; margin-bottom: 2px; }
-  /* 窄屏只保留两行：搜索一整行 + 视图切换/网盘下拉，统计文字收起以保持清爽 */
   .toolbar-stats { display: none; }
   .view-switch { margin-left: 0; }
-  /* 兜底：即便网盘下拉按钮不在右端（根目录/极窄屏），也由 JS 在展开时把菜单夹进视口
-     （见 driveExplorer 的 toggleDriveMenu/_clampMenu），这里只做宽度收敛。 */
+  /* 左上角三件套（网盘下拉/面包屑/视图切换）在窄屏按行换行：
+     下拉独占第一行，面包屑第二行滚动，视图切换跟在面包屑后。 */
+  .explorer-top-bar { gap: 6px 8px; }
+  .explorer-top-bar .drive-picker { flex: 0 0 auto; }
+  .explorer-top-bar .explorer-breadcrumbs { flex: 1 1 auto; order: 2; }
+  .explorer-top-bar .view-switch { order: 3; }
+  /* 兜底：面板展开时由 JS 按视口夹取（driveExplorer.toggleDriveMenu/_clampMenu），
+     这里只做宽度收敛。 */
   .toolbar-menu {
     min-width: 0;
     width: min(260px, calc(100vw - 24px));
@@ -259,6 +318,98 @@
   margin: 0;
 }
 .drive-list-head span { font-size: 12px; color: var(--text-3); }
+
+/* ---- 根页工作台：继续浏览 + 常去网盘 chips ----------------------
+   设计取舍（PM 视角）：用户进「浏览」的真实意图 99% 是「回到刚才干活的地方」
+   或「进某个固定的盘」，而不是「从根目录一层层点」。所以根页不再是空搜索框，
+   而是：① 一键回到上次目录的续播卡；② 带统计的常去网盘 chips（按访问次数排序，
+   把后端已经算好却从未渲染的 stats 真正用起来）；③ 跨网盘搜索降为次要入口。 */
+.drive-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.resume-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.14), rgba(168, 85, 247, 0.08));
+  text-decoration: none;
+  color: var(--text-1);
+  transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.resume-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.resume-ico {
+  flex: none;
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--brand-grad);
+  color: #fff;
+}
+.resume-ico svg { width: 20px; height: 20px; }
+.resume-body { flex: 1 1 auto; min-width: 0; }
+.resume-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+.resume-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.resume-go { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--accent); font-weight: 600; }
+.drive-chip-head {
+  font-size: 12px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .08em;
+  margin-bottom: var(--space-2);
+}
+.drive-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: var(--space-3);
+}
+.drive-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  text-decoration: none;
+  color: var(--text-1);
+  min-width: 0;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.drive-chip:hover { border-color: var(--accent); background: var(--hover-bg); }
+.dc-ico { flex: none; color: var(--text-3); display: grid; place-items: center; }
+.dc-ico svg { width: 18px; height: 18px; }
+.drive-chip:hover .dc-ico { color: var(--accent); }
+.dc-body { flex: 1 1 auto; min-width: 0; }
+.dc-name {
+  font-size: 13.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
+}
+.dc-meta {
+  font-size: 11px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: 2px;
+}
+.dc-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); }
+.dc-dot.off { background: var(--err); }
+.dc-visits {
+  flex: none; font-size: 10.5px; color: var(--text-3);
+  background: var(--surface-2); border-radius: 999px; padding: 2px 7px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .drive-chip-grid { grid-template-columns: minmax(0, 1fr); }
+  .resume-card { padding: var(--space-3) var(--space-4); gap: var(--space-3); }
+}
 
 /* 根页面「在全部网盘查询」搜索组件（主视图） */
 .root-search {
@@ -370,6 +521,10 @@
   max-height: min(60vh, 420px);
   overflow: hidden;
   padding: 0;
+  /* 下拉触发器已从左端挪到左上角：默认向左展开会让面板整块跑到屏幕外，
+     这里改成与按钮左边缘对齐向右展开（JS 的 _clampMenu 仍会按视口兜底校正）。 */
+  left: 0;
+  right: auto;
 }
 .drive-dir-list { max-height: 340px; }  /* 列表区可滚动（.arch-dir-list 已有 overflow-y:auto） */
 .drive-dir-list .arch-up-row { color: var(--brand); font-weight: 600; }
@@ -476,25 +631,6 @@
   border-color: #fff;
 }
 
-/* 所属网盘徽标 */
-.cloud-drive-float {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  z-index: 2;
-}
-
 .cloud-path-label {
   font-size: 11px;
   color: var(--text-3);
@@ -523,6 +659,14 @@
   font-size: 11px;
   justify-content: center;
 }
+/* 删除是唯一不可撤销的操作，故意做成窄的图标按钮：
+   既省一行高度，也不至于让它在 7 个按钮里和「下载」抢视线被误点。 */
+.explorer-card-btns .explorer-del-btn {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 4px 8px;
+}
+.thumb-grid.view-list .explorer-card-btns .explorer-del-btn { padding: 3px 9px; }
 
 /* ---- 视图切换：网格视图 / 列表视图（同一份 DOM，纯 CSS 换布局） ---- */
 
@@ -572,7 +716,6 @@
 .thumb-grid.view-list .t-img img,
 .thumb-grid.view-list .t-img .t-badge,
 .thumb-grid.view-list .t-img .t-ext,
-.thumb-grid.view-list .t-img .cloud-drive-float,
 .thumb-grid.view-list .t-video-overlay { display: none; }
 .thumb-grid.view-list .t-img svg { width: 18px; height: 18px; }
 .thumb-grid.view-list .t-body {
@@ -764,6 +907,140 @@
   justify-content: space-between;
   gap: 12px;
 }
+
+/* ---- 批量选择（用户诉求：网盘里也要能多选，然后移动/复制/删除）----
+   勾选框浮在缩略图左上角；.thumb 原本 position:static + overflow:hidden，
+   必须补 relative 才能定位。列表视图改成行内第一列，与表头 checkbox 对齐。 */
+.explorer-container .thumb { position: relative; }
+.cloud-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border-radius: 6px;
+  background: var(--media-chip-bg, rgba(10, 12, 20, 0.55));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  cursor: pointer;
+  opacity: 0.88;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.cloud-check:hover { opacity: 1; }
+.cloud-check .check,
+.list-head .lh-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  text-align: inherit;
+  /* 表头原本是 span，改成 button 后必须显式归位，否则会带上 UA 默认样式 */
+  justify-content: inherit;
+}
+.list-head .lh-sort:hover { color: var(--text-1); }
+.list-head .lh-size.lh-sort { justify-content: flex-end; }
+.list-head .lh-sort-mark { color: var(--brand, #a78bfa); font-weight: 700; }
+.list-head .lh-check .check {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+  position: relative;
+}
+.cloud-check .check:checked,
+.list-head .lh-check .check:checked {
+  background: var(--brand, #7c3aed);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+.cloud-check .check:checked::after,
+.list-head .lh-check .check:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.cloud-check .check:indeterminate,
+.list-head .lh-check .check:indeterminate {
+  background: var(--brand, #7c3aed);
+  border-color: rgba(255, 255, 255, 0.75);
+}
+.cloud-check .check:indeterminate::after,
+.list-head .lh-check .check:indeterminate::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  width: 9px;
+  height: 2px;
+  background: #fff;
+}
+.list-head .lh-check { width: 17px; flex: none; display: flex; align-items: center; }
+
+/* 选中态：整卡描边高亮，用户一眼看清选了哪几个 */
+.explorer-container .thumb.selected {
+  border-color: var(--brand, #7c3aed);
+  box-shadow: 0 0 0 1.5px var(--brand, #7c3aed), var(--glass-shadow);
+}
+
+/* 列表视图：勾选框从浮层变行内第一列 */
+.thumb-grid.view-list .cloud-check {
+  position: static;
+  flex: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 0;
+}
+
+/* 底部浮动批量操作条（与「本地在存」页同款视觉，保持一致） */
+.floating-batch-bar {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 85;
+  pointer-events: auto;
+}
+.batch-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--glass-bg-strong, rgba(20, 24, 38, 0.92));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border-strong, rgba(255, 255, 255, 0.22));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  border-radius: var(--radius-lg, 14px);
+  color: var(--text-1, #f3f4f6);
+}
+.batch-bar-info { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.batch-bar-info strong { color: var(--brand, #a78bfa); font-size: 15px; }
+.batch-bar-actions { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 640px) {
+  .floating-batch-bar { width: calc(100% - 32px); left: 16px; transform: none; bottom: 20px; }
+  .batch-bar-inner { justify-content: space-between; padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+  .batch-bar-actions .btn { padding: 5px 8px; font-size: 12px; }
+}
 </style>
 
 <script>
@@ -772,9 +1049,8 @@ window.driveExplorer = function driveExplorer() {
     q: '{{ q or "" }}',
     currentPath: '{{ current_path or "/" }}',
     isRoot: {{ 'true' if is_root else 'false' }},
-    openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
-    domainInput: '',
-    showDomainModal: false,
+    /* 服务端全局域名优先，localStorage 仅兜底老数据（见设置页 OpenList 卡片）。 */
+    openlistBase: {{ (openlist_public_base or '') | tojson }} || localStorage.getItem('openlist_public_base') || '',
     showDriveMenu: false,
     /* 下拉按钮回显当前网盘名：/onedrive/xxx → OneDrive；根目录留空→显示「全部网盘」 */
     currentDriveLabel: {{ (current_drive_label or '') | tojson }},
@@ -782,8 +1058,31 @@ window.driveExplorer = function driveExplorer() {
     renameData: { path: '', oldName: '', newName: '', loading: false },
     showTransferModal: false,
     transferAction: 'copy',
-    transferData: { path: '', srcDir: '', name: '', targetDir: '', loading: false, progress: 0 },
+    transferData: { path: '', paths: [], names: [], count: 0, srcDir: '', name: '', targetDir: '', loading: false, progress: 0 },
     mountsList: {{ mounts | tojson if mounts else '[]' }},
+    /* 排序状态：字段（name/size/mtime）+ 方向（asc/desc）。
+       持久化到 localStorage —— 用户调成「按修改时间降序」是稳定的使用习惯，
+       每次进目录都要重设一次很烦。 */
+    sortKey: (function () {
+      try {
+        var k = localStorage.getItem('explorer_sort_key');
+        return (k === 'size' || k === 'mtime') ? k : 'name';
+      } catch (e) { return 'name'; }
+    })(),
+    sortDir: (function () {
+      try {
+        return localStorage.getItem('explorer_sort_dir') === 'asc' ? 'asc' : 'desc';
+      } catch (e) { return 'desc'; }
+    })(),
+    /* 排序字段下拉用自绘面板（原生 <select> 的展开列表由浏览器 UA 绘制，
+       暗色主题下无法稳定跟随主题，用户实测是「黑黑一块」）。
+       菜单项文案与顺序都放这里，模板只做 x-for 渲染。 */
+    showSortMenu: false,
+    sortOptions: [
+      { key: 'name', label: '名称' },
+      { key: 'size', label: '大小' },
+      { key: 'mtime', label: '修改时间' }
+    ],
     runningTasks: [],
     /* 视图模式：'grid'（缩略图网格，默认）| 'list'（紧凑列表）。根路径不参与切换。 */
     viewMode: (function () {
@@ -796,14 +1095,145 @@ window.driveExplorer = function driveExplorer() {
     })(),
 
     init: function () {
-      if (!this.domainInput) {
-        this.domainInput = this.openlistBase;
-      }
       this.pollTasks();
       var self = this;
       setInterval(function () {
         self.pollTasks();
       }, 2000);
+      this.__bindScrollMemory();
+      // 首屏就按用户上次的排序偏好重排一次（服务端只按名称排，不认识偏好）
+      this.$nextTick(function () {
+        if (self.sortKey !== 'name' || self.sortDir !== 'asc') self.applySort();
+      });
+      // 排序字段变化时持久化（方向变化在 toggleSortDir 里单独存）
+      this.$watch('sortKey', function (v) {
+        try { localStorage.setItem('explorer_sort_key', v); } catch (e) {}
+      });
+      // 搜索过滤会改卡片的 display，被隐藏的项必须立刻退出选择 ——
+      // 否则用户看着过滤后剩下的几条，却在批量删「看不见的」那些。
+      this.$watch('q', function () {
+        self.$nextTick(function () {
+          if (typeof window.__cloudSelectionAfterFilter === 'function') {
+            window.__cloudSelectionAfterFilter();
+          }
+        });
+      });
+    },
+
+    /* 滚动位置记忆（用户诉求：刷新后还停在原来看到的行）。
+       按目录路径分别存 localStorage：同路径刷新 → 还原；点进新目录 → 该键不存在，
+       自然回到顶部。节流 250ms 写入，避免滚动热路径上频繁同步存储。 */
+    __bindScrollMemory: function () {
+      var key = 'explorer_scroll:' + (this.currentPath || '/');
+      var saved = 0;
+      try { saved = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch (e) {}
+      if (saved > 4) {
+        // 等一帧让 .thumb 的 content-visibility 占位高先稳定，再还原滚动
+        window.requestAnimationFrame(function () {
+          setTimeout(function () { window.scrollTo(0, saved); }, 50);
+        });
+      }
+      var timer = 0;
+      window.addEventListener('scroll', function () {
+        if (timer) return;
+        timer = window.setTimeout(function () {
+          timer = 0;
+          try { localStorage.setItem(key, String(Math.round(window.scrollY || 0))); } catch (e) {}
+        }, 250);
+      }, { passive: true });
+    },
+
+    /* ---------------- 排序 ----------------
+       纯前端重排 DOM：网盘目录动辄几百上千条，为了换排序再打一次 OpenList
+       毫无必要（数据已经在页面里了），而且会丢失勾选状态与滚动位置。
+
+       实现要点：卡片全部是 .thumb-grid 的直接子元素（.list-head 是表头，
+       不参与排序），按目标顺序 appendChild 即可 —— appendChild 会移动节点
+       而不是复制，所以勾选状态、事件绑定、图片都不用重新加载。
+
+       文件夹恒排在文件前面：无论按大小还是时间，把文件夹和文件混排都会让
+       「找目录」这件事变难，主流文件管理器也都是分组优先。 */
+    applySort: function () {
+      var grid = document.querySelector('.thumb-grid');
+      if (!grid) return;
+      var self = this;
+      var key = this.sortKey;
+      var dir = this.sortDir === 'asc' ? 1 : -1;
+
+      var cards = Array.prototype.filter.call(grid.children, function (el) {
+        return el.classList && el.classList.contains('thumb');
+      });
+      if (!cards.length) return;
+
+      var num = function (el, attr) {
+        var v = parseFloat(el.getAttribute(attr) || '0');
+        return isNaN(v) ? 0 : v;
+      };
+
+      cards.sort(function (a, b) {
+        // ① 文件夹分组优先（与排序字段无关）
+        var ad = a.getAttribute('data-is-dir') === '1' ? 0 : 1;
+        var bd = b.getAttribute('data-is-dir') === '1' ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+
+        var r = 0;
+        if (key === 'size') {
+          r = num(a, 'data-size-bytes') - num(b, 'data-size-bytes');
+        } else if (key === 'mtime') {
+          r = num(a, 'data-mtime') - num(b, 'data-mtime');
+        }
+        if (r === 0) {
+          // 名称作为最终 tie-breaker（大小相同/时间相同时顺序必须稳定，
+          // 否则同一批文件每次重新排序都可能换位置，用户会以为数据在变）
+          r = (a.getAttribute('data-sort-name') || '')
+                .localeCompare(b.getAttribute('data-sort-name') || '', 'zh-Hans-CN',
+                               { numeric: true, sensitivity: 'base' });
+        }
+        return r * dir;
+      });
+
+      var head = grid.querySelector('.list-head');
+      // 先摘掉再按序插回：DocumentFragment 一次性插入，避免 N 次重排
+      var frag = document.createDocumentFragment();
+      cards.forEach(function (c) { frag.appendChild(c); });
+      if (head) {
+        grid.insertBefore(frag, head.nextSibling);
+      } else {
+        grid.appendChild(frag);
+      }
+      self.__sortApplied = true;
+    },
+
+    toggleSortDir: function () {
+      this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      try { localStorage.setItem('explorer_sort_dir', this.sortDir); } catch (e) {}
+      this.applySort();
+    },
+
+    /* 当前排序字段的中文名，下拉按钮上直接显示（否则用户只能靠展开才知道排序方式） */
+    get sortLabel() {
+      var key = this.sortKey;
+      for (var i = 0; i < this.sortOptions.length; i++) {
+        if (this.sortOptions[i].key === key) return this.sortOptions[i].label;
+      }
+      return '名称';
+    },
+
+    /* 自绘下拉里选字段：选中即收起面板 */
+    pickSortKey: function (key) {
+      this.showSortMenu = false;
+      this.sortByColumn(key);
+    },
+
+    /* 点表头列：切到该列；再点同一列则翻转方向（文件管理器的通用手感） */
+    sortByColumn: function (key) {
+      if (this.sortKey === key) {
+        this.toggleSortDir();
+        return;
+      }
+      this.sortKey = key;
+      try { localStorage.setItem('explorer_sort_key', key); } catch (e) {}
+      this.applySort();
     },
 
     /* 网格/列表切换：纯前端改 state 并持久化，不刷新、不发请求 */
@@ -864,31 +1294,6 @@ window.driveExplorer = function driveExplorer() {
       });
     },
 
-    displayDomain: function (url) {
-      if (!url) return '';
-      try {
-        var u = new URL(url);
-        return u.host;
-      } catch (e) {
-        return url.replace(/^https?:\/\//, '').split('/')[0];
-      }
-    },
-
-    openDomainModal: function () {
-      this.domainInput = this.openlistBase;
-      this.showDomainModal = true;
-    },
-
-    saveDomain: function () {
-      var v = (this.domainInput || '').trim();
-      if (v && !/^https?:\/\//i.test(v)) {
-        v = 'http://' + v;
-      }
-      this.openlistBase = v;
-      localStorage.setItem('openlist_public_base', v);
-      this.showDomainModal = false;
-      if (window.__toast) window.__toast('OpenList 外部访问域名已保存', 'success');
-    },
 
     openRenameModal: function (path, name) {
       this.renameData = {
@@ -936,24 +1341,89 @@ window.driveExplorer = function driveExplorer() {
       }
     },
 
-    openTransferModal: function (action, path, name) {
+    /* 打开复制/移动弹窗。
+       支持两种入参：
+         - (action, path, name)          —— 单文件：卡片上的「复制」/「移动」按钮
+         - (action, [{path, name}, ...]) —— 批量：底部批量操作条
+       批量时所有项必须在同一目录（浏览器只展示单个目录，勾选天然满足），
+       因此 src_dir 取第一项的父目录，names 直接是多项列表。 */
+    openTransferModal: function (action, pathOrItems, name) {
       this.transferAction = action;
-      var srcDir = path.substring(0, path.lastIndexOf('/')) || '/';
+      var items = [];
+      if (Array.isArray(pathOrItems)) {
+        items = pathOrItems.filter(function (it) { return it && it.path; });
+      } else if (pathOrItems) {
+        items = [{ path: pathOrItems, name: name || '' }];
+      }
+      if (!items.length) {
+        if (window.__toast) window.__toast('没有要操作的文件', 'error');
+        return;
+      }
+      var firstPath = items[0].path;
+      var srcDir = firstPath.substring(0, firstPath.lastIndexOf('/')) || '/';
+
+      // 批量必须同目录：跨目录勾选不存在（单目录浏览），但防御性地校验一次，
+      // 否则会把 A 目录的文件名错当成 B 目录的，删/移错文件。
+      var mixed = items.some(function (it) {
+        var d = it.path.substring(0, it.path.lastIndexOf('/')) || '/';
+        return d !== srcDir;
+      });
+      if (mixed) {
+        if (window.__toast) window.__toast('所选项目不在同一目录，无法批量操作', 'error');
+        return;
+      }
+
       var defTarget = '/';
       if (this.mountsList && this.mountsList.length > 0) {
-        var curMount = '/' + (path.replace(/^\/+/, '').split('/')[0] || '');
+        var curMount = '/' + (firstPath.replace(/^\/+/, '').split('/')[0] || '');
         var other = this.mountsList.find(function(m) { return m !== curMount; });
         defTarget = other || this.mountsList[0];
       }
       this.transferData = {
-        path: path,
+        path: firstPath,
+        paths: items.map(function (it) { return it.path; }),
+        names: items.map(function (it) { return it.name || (it.path.split('/').pop()); }),
+        count: items.length,
         srcDir: srcDir,
-        name: name,
+        name: items.length > 1
+          ? ('已选 ' + items.length + ' 项')
+          : (name || firstPath.split('/').pop()),
         targetDir: defTarget,
         loading: false,
         progress: 0
       };
       this.showTransferModal = true;
+    },
+
+    /* 在网盘上创建目标目录（已存在时 OpenList 报错，这里当作成功提示） */
+    makeTargetDir: async function () {
+      var dst = (this.transferData.targetDir || '').trim();
+      if (!dst) {
+        if (window.__toast) window.__toast('请先填写目标目录', 'warning');
+        return;
+      }
+      if (!dst.startsWith('/')) dst = '/' + dst;
+      this.transferData.loading = true;
+      try {
+        var resp = await fetch('/api/explorer/mkdir', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+          },
+          body: JSON.stringify({ path: dst })
+        });
+        var res = await resp.json();
+        if (resp.ok && res.ok) {
+          if (window.__toast) window.__toast(res.message || '目录已就绪', 'success', dst);
+        } else {
+          if (window.__toast) window.__toast(res.message || '新建目录失败', 'error');
+        }
+      } catch (e) {
+        if (window.__toast) window.__toast('新建目录失败', 'error', '网络错误');
+      } finally {
+        this.transferData.loading = false;
+      }
     },
 
     selectMount: function (m) {
@@ -979,8 +1449,12 @@ window.driveExplorer = function driveExplorer() {
 
       this.transferData.loading = true;
       var cloudPath = this.transferData.path;
+      // 批量时待传的是多个名字；单文件时是单元素列表
+      var names = (this.transferData.names && this.transferData.names.length)
+        ? this.transferData.names
+        : [name];
 
-      // 唤起卡片上的进度条
+      // 唤起卡片上的进度条（批量时只点亮第一项，其余由轮询按名字匹配）
       var bar = document.querySelector('[data-transfer-bar][data-cloud-path="' + cloudPath + '"]');
       if (bar) {
         bar.style.display = 'flex';
@@ -995,12 +1469,17 @@ window.driveExplorer = function driveExplorer() {
             'Content-Type': 'application/json',
             'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
           },
-          body: JSON.stringify({ src_dir: src, dst_dir: dst, names: [name] })
+          body: JSON.stringify({ src_dir: src, dst_dir: dst, names: names })
         });
         var res = await resp.json();
         if (resp.ok && res.ok) {
-          if (window.__toast) window.__toast(isMove ? '移动任务已提交' : '复制任务已提交', 'success', '正在后台执行跨网盘传输');
+          var n = names.length;
+          if (window.__toast) window.__toast(
+            (isMove ? '移动任务已提交' : '复制任务已提交') + (n > 1 ? '（' + n + ' 项）' : ''),
+            'success', '正在后台执行跨网盘传输');
           this.showTransferModal = false;
+          // 批量提交后清空勾选：留着勾选会让用户以为还没执行，重复点会重复传
+          if (typeof window.__cloudClearSelection === 'function') window.__cloudClearSelection();
           this.pollTasks();
         } else {
           if (window.__toast) window.__toast(res.message || '操作失败', 'error');
@@ -1054,7 +1533,9 @@ window.driveExplorer = function driveExplorer() {
 window.__openExplorerInOpenList = function (el, evt) {
   var rawUrl = (el && el.getAttribute('href')) || '';
   var path = (el && el.getAttribute('data-cloud-path')) || '';
-  var customBase = localStorage.getItem('openlist_public_base') || '';
+  /* 用全局域名（服务端优先），不再直接读 localStorage —— 否则设置页改了域名，
+     本页还把旧的 localStorage 值当真理，出现「设置改了但按钮还跳旧地址」。 */
+  var customBase = {{ (openlist_public_base or '') | tojson }} || localStorage.getItem('openlist_public_base') || '';
   if (customBase && path) {
     if (evt && evt.preventDefault) evt.preventDefault();
     var cleanBase = customBase.replace(/\/+$/, '');
@@ -1071,6 +1552,180 @@ window.__refreshExplorerCache = function (path) {
   var p = path || '{{ current_path or "/" }}';
   if (window.__toast) window.__toast('正在向网盘发起穿透刷新…', 'info');
   window.location.href = '/explorer?path=' + encodeURIComponent(p) + '&refresh=1';
+};
+
+/* ==================== 网盘批量选择 ====================
+   用户诉求：浏览页要能多选，然后批量移动 / 复制 / 删除。
+   单选按钮（改名/复制/移动）早已存在，但一次只能操作一个文件 ——
+   勾选多个再批量处理是文件管理器的基本预期。
+
+   设计取舍：
+   * 所有勾选都在**当前目录**内，所以批量时 src_dir 相同，可以直接复用
+     OpenList 的 names 列表语义（一次请求传多个名字），不必循环发请求；
+   * 被搜索框过滤掉（display:none）的卡片不参与批量操作，否则用户看不见
+     却照样被删/被移，这是不可接受的行为 —— 计算选择时主动跳过并取消勾选。 */
+
+function __cloudCheckedBoxes() {
+  var all = document.querySelectorAll('.cloud-check .check');
+  var out = [];
+  Array.prototype.forEach.call(all, function (c) {
+    if (!c.checked) return;
+    var card = c.closest('.thumb');
+    // 被 q 过滤隐藏的卡片不参与：宁可少做，不可默默动用户看不见的文件
+    if (card && card.style.display === 'none') { c.checked = false; return; }
+    out.push(c);
+  });
+  return out;
+}
+
+window.__cloudUpdateSelection = function () {
+  var boxes = __cloudCheckedBoxes();
+  var count = boxes.length;
+  var bar = document.getElementById('cloudBatchBar');
+  var cnt = document.getElementById('cloudSelectedCount');
+  if (cnt) cnt.textContent = count;
+  if (bar) bar.style.display = count > 0 ? '' : 'none';
+
+  // 表头 checkbox 的三态：全选 / 部分选中 / 未选
+  var all = document.querySelectorAll('.cloud-check .check');
+  var visible = 0;
+  Array.prototype.forEach.call(all, function (c) {
+    var card = c.closest('.thumb');
+    if (card && card.style.display === 'none') return;
+    visible++;
+  });
+  var selAll = document.getElementById('cloudSelAll');
+  if (selAll) {
+    selAll.checked = visible > 0 && count === visible;
+    selAll.indeterminate = count > 0 && count < visible;
+  }
+};
+
+window.__cloudCheckChange = function (cb) {
+  var card = cb.closest('.thumb');
+  if (card) card.classList.toggle('selected', !!cb.checked);
+  window.__cloudUpdateSelection();
+};
+
+window.__cloudSelAll = function (source) {
+  var want = !!(source && source.checked);
+  var all = document.querySelectorAll('.cloud-check .check');
+  Array.prototype.forEach.call(all, function (c) {
+    var card = c.closest('.thumb');
+    if (card && card.style.display === 'none') return;   // 隐藏项不参与全选
+    c.checked = want;
+    if (card) card.classList.toggle('selected', want);
+  });
+  window.__cloudUpdateSelection();
+};
+
+window.__cloudClearSelection = function () {
+  var all = document.querySelectorAll('.cloud-check .check');
+  Array.prototype.forEach.call(all, function (c) {
+    c.checked = false;
+    var card = c.closest('.thumb');
+    if (card) card.classList.remove('selected');
+  });
+  window.__cloudUpdateSelection();
+};
+
+function __cloudSelectionItems() {
+  return __cloudCheckedBoxes().map(function (c) {
+    return {
+      path: c.getAttribute('data-cloud-path') || '',
+      name: c.getAttribute('data-cloud-name') || '',
+      isDir: c.getAttribute('data-cloud-dir') === '1'
+    };
+  }).filter(function (it) { return !!it.path; });
+}
+
+function __explorerAlpine() {
+  var alp = document.querySelector('.explorer-container');
+  return (alp && alp._x_dataStack && alp._x_dataStack[0]) || null;
+}
+
+window.__cloudBulkTransfer = function (action) {
+  var items = __cloudSelectionItems();
+  if (!items.length) { window.__toast('请先勾选要操作的项', 'error'); return; }
+  var comp = __explorerAlpine();
+  if (!comp) { window.__toast('页面状态未就绪，请刷新后重试', 'error'); return; }
+  comp.openTransferModal(action, items);
+};
+
+window.__cloudBulkDelete = function () {
+  var items = __cloudSelectionItems();
+  if (!items.length) { window.__toast('请先勾选要删除的项', 'error'); return; }
+  var dirs = items.filter(function (it) { return it.isDir; }).length;
+  var cnt = items.length;
+  var extra = dirs > 0
+    ? '其中 ' + dirs + ' 个是文件夹，会连同里面的全部内容一起删除，且无法恢复。'
+    : '删除后无法恢复。';
+  var ask = window.__uiConfirm ? window.__uiConfirm({
+    title: '删除云端文件',
+    body: '将从网盘永久删除选中的 ' + cnt + ' 项。' + extra,
+    okText: '确认删除',
+    danger: true,
+    meta: [['数量', cnt + ' 项'], ['位置', (items[0].path || '').replace(/\/[^/]*$/, '')]]
+  }) : Promise.resolve(window.confirm('将从网盘永久删除选中的 ' + cnt + ' 项。' + extra));
+  ask.then(function (ok) {
+    if (!ok) return;
+    fetch('/api/explorer/delete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: JSON.stringify({ paths: items.map(function (it) { return it.path; }) })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        window.__toast(d.message || '删除完成', 'success');
+        setTimeout(function () { window.location.reload(); }, 500);
+      } else {
+        // 部分成功也要说清楚删了几个：只说「失败」会让用户不知道重试会不会重复删
+        window.__toast('删除未完全成功', 'error', (d && d.message) || '后端返回错误');
+        if (d && d.deleted) setTimeout(function () { window.location.reload(); }, 1200);
+      }
+    }).catch(function () {
+      window.__toast('删除失败', 'error', '网络错误');
+    });
+  });
+};
+
+/* 过滤条件变化后重算选择（隐藏项要主动退出选择） */
+window.__cloudSelectionAfterFilter = function () {
+  window.__cloudUpdateSelection();
+};
+
+/* 单条删除（卡片上的「删除」按钮） */
+window.__deleteCloudEntry = function (btn) {
+  var path = btn.getAttribute('data-cloud-path') || '';
+  var name = btn.getAttribute('data-filename') || path.split('/').pop();
+  if (!path) { window.__toast('该条目缺少路径，无法删除', 'error'); return; }
+  var ask = window.__uiConfirm ? window.__uiConfirm({
+    title: '删除云端文件',
+    body: '将从网盘永久删除「' + name + '」，无法恢复。',
+    okText: '确认删除',
+    danger: true,
+    meta: [['路径', path]]
+  }) : Promise.resolve(window.confirm('将从网盘永久删除「' + name + '」，无法恢复。'));
+  ask.then(function (ok) {
+    if (!ok) return;
+    fetch('/api/explorer/delete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : ''
+      },
+      body: JSON.stringify({ paths: [path] })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        window.__toast(d.message || '已删除', 'success');
+        setTimeout(function () { window.location.reload(); }, 500);
+      } else {
+        window.__toast('删除失败', 'error', (d && d.message) || '后端返回错误');
+      }
+    }).catch(function () { window.__toast('删除失败', 'error', '网络错误'); });
+  });
 };
 
 /* 原地重命名 */
@@ -1142,67 +1797,14 @@ window.__explorerRootSearch = async function (comp, immediate) {
 
   <!-- 顶部面包屑与操作工具栏 -->
   <div class="explorer-header-wrap">
+    <!-- 顶部左区：网盘下拉 + 面包屑 + 视图切换（小标签）。
+         历史布局：网盘下拉在工具条最右端，面包屑在最左端，同一类「当前在哪/要去哪」
+         的信息被拆到页面两端（用户指出：右边网盘列表要并到左上角「全部网盘」处，
+         小标签也一起过去）。现在统一收在左上角一行：
+           根目录   → 只剩「全部网盘 ⌄」下拉（面包屑此时没有信息量，隐藏避免重复）；
+           子目录   → 下拉在前，其后跟 onedrive / yello 面包屑路径。
+         下拉面板仍是原来的迷你目录浏览器（ArchCrumb + 列表 + 打开当前目录）。 -->
     <div class="explorer-top-bar">
-      <!-- 目录面包屑导航 -->
-      <nav class="explorer-breadcrumbs" aria-label="文件目录导航">
-        {% for b in breadcrumbs %}
-          {% if not loop.first %}
-            <span class="crumb-sep">/</span>
-          {% endif %}
-          <a href="/explorer?path={{ b.path }}"
-             class="crumb-item {% if b.is_last %}active{% endif %}"
-             {% if b.is_last %}aria-current="page"{% endif %}>
-            {% if loop.first %}
-              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
-            {% endif %}
-            {{ b.name }}
-          </a>
-        {% endfor %}
-      </nav>
-    </div>
-
-    <!-- 统一工具条：搜索（可伸缩） + 统计 + 视图切换 + 全部网盘下拉
-         （原 ⋯ 更多菜单已上移到顶部导航栏「功能」按钮） -->
-    <div class="explorer-toolbar">
-      {% if not is_root %}
-      <div class="toolbar-search">
-        <input class="input sm" type="text" x-model="q" placeholder="在当前目录过滤文件名…" aria-label="过滤文件名">
-        <svg class="icon xs toolbar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <use href="#ic-search"/>
-        </svg>
-      </div>
-      <div class="toolbar-stats">
-        <span class="tnum">{{ dirs_count }}</span> 文件夹 ·
-        <span class="tnum">{{ files_count }}</span> 文件 ·
-        <strong class="tnum">{{ total_size_human }}</strong>
-      </div>
-      <div class="toolbar-spacer"></div>
-
-      <!-- 网格视图 / 列表视图切换 -->
-      <div class="view-switch" role="group" aria-label="视图切换">
-        <button type="button" class="btn sm"
-                :class="viewMode === 'grid' ? 'primary' : 'ghost'"
-                :aria-pressed="viewMode === 'grid' ? 'true' : 'false'"
-                @click="setViewMode('grid')"
-                title="网格视图（缩略图）">
-          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-grid"/></svg>
-          网格
-        </button>
-        <button type="button" class="btn sm"
-                :class="viewMode === 'list' ? 'primary' : 'ghost'"
-                :aria-pressed="viewMode === 'list' ? 'true' : 'false'"
-                @click="setViewMode('list')"
-                title="列表视图（紧凑行）">
-          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-list"/></svg>
-          列表
-        </button>
-      </div>
-      {% else %}
-      <div class="toolbar-spacer"></div>
-      {% endif %}
-
-      <!-- 全部网盘：迷你目录浏览器下拉（形态对齐归档弹窗目录选择器）。
-           面板内逐级浏览不跳页，底栏「打开当前目录」才导航 /explorer?path=… -->
       <div class="toolbar-more drive-picker" x-ref="driveWrap" @click.outside="showDriveMenu = false">
         <button type="button" class="btn sm ghost drive-picker-btn"
                 @click="toggleDriveMenu()"
@@ -1232,10 +1834,113 @@ window.__explorerRootSearch = async function (comp, immediate) {
         </div>
       </div>
 
-      <!-- ⋯ 更多菜单（刷新缓存 / OpenList 外跳 / OpenList 域名）已上移到顶部导航栏
-           原提交下载位置（base.html 仅 /explorer 渲染，独立 Alpine 组件 navFeatureMenu），
-           工具条不再保留。 -->
+      {% if not is_root %}
+      <!-- 目录面包屑导航（根目录已由上面的下拉表达，不再重复渲染） -->
+      <nav class="explorer-breadcrumbs" aria-label="文件目录导航">
+        {% for b in breadcrumbs %}
+          {% if not loop.first %}
+            <span class="crumb-sep">/</span>
+          {% endif %}
+          <a href="/explorer?path={{ b.path }}"
+             class="crumb-item {% if b.is_last %}active{% endif %}"
+             {% if b.is_last %}aria-current="page"{% endif %}>
+            {% if loop.first %}
+              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg>
+            {% endif %}
+            {{ b.name }}
+          </a>
+        {% endfor %}
+      </nav>
+
+      <!-- 网格视图 / 列表视图切换（小标签，从工具条右端移到左上角） -->
+      <div class="view-switch" role="group" aria-label="视图切换">
+        <button type="button" class="btn sm"
+                :class="viewMode === 'grid' ? 'primary' : 'ghost'"
+                :aria-pressed="viewMode === 'grid' ? 'true' : 'false'"
+                @click="setViewMode('grid')"
+                title="网格视图（缩略图）">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-grid"/></svg>
+          网格
+        </button>
+        <button type="button" class="btn sm"
+                :class="viewMode === 'list' ? 'primary' : 'ghost'"
+                :aria-pressed="viewMode === 'list' ? 'true' : 'false'"
+                @click="setViewMode('list')"
+                title="列表视图（紧凑行）">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-list"/></svg>
+          列表
+        </button>
+      </div>
+      {% endif %}
     </div>
+
+    <!-- 工具条：只剩搜索与统计。
+         视图切换（网格/列表）与网盘下拉已上移到左上角 .explorer-top-bar，
+         与面包屑同处一行（用户要求：右侧网盘列表并入左上角「全部网盘」，小标签一起过去）。 -->
+    {% if not is_root %}
+    <div class="explorer-toolbar">
+      <div class="toolbar-search">
+        <input class="input sm" type="text" x-model="q" placeholder="在当前目录过滤文件名…" aria-label="过滤文件名">
+        <svg class="icon xs toolbar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <use href="#ic-search"/>
+        </svg>
+      </div>
+      <div class="toolbar-stats">
+        <span class="tnum">{{ dirs_count }}</span> 文件夹 ·
+        <span class="tnum">{{ files_count }}</span> 文件 ·
+        <strong class="tnum">{{ total_size_human }}</strong>
+      </div>
+      <span class="toolbar-spacer"></span>
+      {# 排序控件：名称/大小/修改时间 三选一 + 升降序。
+         用自绘 ·toolbar-menu· 面板而不是原生 <select>：原生展开列表由浏览器 UA
+         绘制，option 底色/选中高亮改不动，暗夜主题下就是一整块看不清的黑底
+         （用户两次反馈）。自绘面板直接吃 tokens.css 的主题变量，深浅主题一致；
+         窄屏用媒体查询把右对齐翻成左对齐，不会跑出视口。 #}
+      <div class="toolbar-sort" role="group" aria-label="排序方式"
+           @click.outside="showSortMenu = false">
+        <svg class="icon xs toolbar-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M3 6h13"/><path d="M3 12h9"/><path d="M3 18h5"/>
+          <path d="M18 9l0 10"/><polyline points="15 16 18 19 21 16"/>
+        </svg>
+        <button type="button" class="btn sm ghost toolbar-sort-btn"
+                @click="showSortMenu = !showSortMenu"
+                :class="showSortMenu ? 'primary' : 'ghost'"
+                :aria-expanded="showSortMenu ? 'true' : 'false'"
+                aria-haspopup="menu" aria-label="排序字段"
+                :title="'当前排序：' + sortLabel">
+          <span class="toolbar-sort-label" x-text="sortLabel"></span>
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
+               :style="showSortMenu ? 'transform:rotate(180deg);transition:transform .15s;' : 'transition:transform .15s;'">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <div class="toolbar-menu toolbar-sort-menu" x-show="showSortMenu" x-cloak
+             role="menu" aria-label="排序方式">
+          <template x-for="opt in sortOptions" :key="opt.key">
+            <button type="button" class="toolbar-menu-item toolbar-sort-item"
+                    :class="{ 'is-active': sortKey === opt.key }"
+                    @click="pickSortKey(opt.key)"
+                    role="menuitem" :aria-current="sortKey === opt.key ? 'true' : 'false'">
+              <span class="toolbar-sort-check" :class="{ 'is-hidden': sortKey !== opt.key }">
+                <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="4 12 10 18 20 6"/></svg>
+              </span>
+              <span x-text="opt.label"></span>
+            </button>
+          </template>
+        </div>
+        <button type="button" class="btn sm ghost toolbar-sort-dir"
+                @click="toggleSortDir()"
+                :title="sortDir === 'asc' ? '当前：升序，点击改为降序' : '当前：降序，点击改为升序'"
+                :aria-label="sortDir === 'asc' ? '切换为降序' : '切换为升序'">
+          <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+               :style="sortDir === 'asc' ? 'transform:rotate(180deg);transition:transform .15s;' : 'transition:transform .15s;'">
+            <line x1="12" y1="4" x2="12" y2="20"/><polyline points="6 14 12 20 18 14"/>
+          </svg>
+          <span x-text="sortDir === 'asc' ? '升序' : '降序'" class="toolbar-sort-dir-label"></span>
+        </button>
+      </div>
+    </div>
+    {% endif %}
 
     <!-- 网盘快速切换胶囊已移除：根目录的搜索组件 + 工具条下拉已是全部入口。 -->
   </div>
@@ -1257,8 +1962,54 @@ window.__explorerRootSearch = async function (comp, immediate) {
 
   <!-- 主视图：根路径「在全部网盘查询」搜索组件 或 目录文件网格 -->
   {% if is_root %}
-    <!-- 根目录：网盘入口只剩「全部网盘」下拉（工具条），主视图改为跨网盘搜索。
-         输入防抖调 GET /api/explorer/search?q=…，点结果跳 /explorer?path=父目录。 -->
+    <!-- 根目录工作台（PM 视角重做，替代原先「只剩一个搜索框」的空页）：
+         ① 续播卡：一键回到上次浏览的目录（位置由服务端记忆，见 routers/explorer.py
+            _resume_target；网盘被移除时自动不显示，避免跳到死链）；
+         ② 常去网盘 chips：按访问次数排序，带一级目录/文件数与体积统计
+            （这些 stats 后端一直在算，此前从未渲染）；
+         ③ 跨网盘搜索降为次要入口，仍走 /api/explorer/search?q=…。 -->
+    <div class="drive-workspace">
+      {% if browse_last_path %}
+      <a class="resume-card" href="/explorer?path={{ browse_last_path | urlencode }}"
+         title="回到上次浏览的位置：{{ browse_last_path }}">
+        <span class="resume-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        </span>
+        <span class="resume-body">
+          <span class="resume-title">继续浏览{% if browse_last_label %} · {{ browse_last_label }}{% endif %}</span>
+          <span class="resume-path">{{ browse_last_path }}</span>
+        </span>
+        <span class="resume-go">继续
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="9 18 15 12 9 6"/></svg>
+        </span>
+      </a>
+      {% endif %}
+
+      {% if drive_chips %}
+      <div>
+        <div class="drive-chip-head">常去网盘 · {{ drive_chips|length }} 个挂载</div>
+        <div class="drive-chip-grid">
+          {% for d in drive_chips %}
+          <a class="drive-chip" href="/explorer?path={{ d.path | urlencode }}"
+             title="{{ d.display_name }}（{{ d.path }}）{% if d.visits %} · 访问 {{ d.visits }} 次{% endif %}">
+            <span class="dc-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-cloud"/></svg>
+            </span>
+            <span class="dc-body">
+              <span class="dc-name">
+                <span class="dc-dot {{ '' if d.online else 'off' }}" title="{{ d.status_label }}" aria-hidden="true"></span>
+                <span style="overflow:hidden;text-overflow:ellipsis;">{{ d.display_name }}</span>
+              </span>
+              <span class="dc-meta" title="{{ d.path }}">{% if d.meta %}{{ d.meta }}{% else %}{{ d.path }}{% endif %}</span>
+            </span>
+            {% if d.visits %}<span class="dc-visits tnum">{{ d.visits }}</span>{% endif %}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+    <!-- 跨网盘搜索：次要入口（找特定文件时才用）。 -->
     <div class="root-search" x-data="{ sQ: '', sLoading: false, sResults: null, sMsg: '', sSeq: 0,
                                         doRootSearch: function (immediate) { return window.__explorerRootSearch(this, immediate); } }">
       <div class="root-search-bar">
@@ -1295,16 +2046,32 @@ window.__explorerRootSearch = async function (comp, immediate) {
       </div>
       {% endif %}
     </div>
+    </div>
 
   {% else %}
     <!-- 子目录：文件夹与文件卡片网格（view-list 时同一份 DOM 变成紧凑列表） -->
     <div class="thumb-grid" :class="viewMode === 'list' ? 'view-list' : ''">
       {% if entries %}
-      <div class="list-head" aria-hidden="true">
+      <div class="list-head">
+        <span class="lh-check">
+          <input type="checkbox" class="check" id="cloudSelAll" aria-label="全选"
+                 onchange="window.__cloudSelAll(this)">
+        </span>
         <span class="lh-icon"></span>
-        <span class="lh-name">名称</span>
-        <span class="lh-size">大小</span>
-        <span class="lh-time">修改时间</span>
+        {# 表头本身就是最自然的排序入口：列表视图下用户会直接去点「大小」。
+           按钮化 + aria-sort 表达当前排序状态（不只用箭头颜色，读屏也要能听出来）。 #}
+        <button type="button" class="lh-name lh-sort" @click="sortByColumn('name')"
+                :aria-sort="sortKey === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'">
+          名称<span class="lh-sort-mark" x-show="sortKey === 'name'" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+        </button>
+        <button type="button" class="lh-size lh-sort" @click="sortByColumn('size')"
+                :aria-sort="sortKey === 'size' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'">
+          大小<span class="lh-sort-mark" x-show="sortKey === 'size'" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+        </button>
+        <button type="button" class="lh-time lh-sort" @click="sortByColumn('mtime')"
+                :aria-sort="sortKey === 'mtime' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'">
+          修改时间<span class="lh-sort-mark" x-show="sortKey === 'mtime'" x-text="sortDir === 'asc' ? '↑' : '↓'"></span>
+        </button>
         <span class="lh-drive">所属网盘</span>
         <span class="lh-actions">操作</span>
       </div>
@@ -1313,12 +2080,27 @@ window.__explorerRootSearch = async function (comp, immediate) {
         {% if f.is_dir %}
           <!-- 文件夹卡片 -->
           <div class="thumb folder-card"
+               data-cloud-card
+               data-cloud-path="{{ f.path }}"
+               data-is-dir="1"
+               data-size-bytes="{{ f.size or 0 }}"
+               data-mtime="{{ f.mtime or 0 }}"
+               data-sort-name="{{ f.name }}"
                onclick="window.location.href='/explorer?path={{ f.path }}'"
                x-show='!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())'>
+            {# 勾选框必须 stopPropagation：卡片本身点击是「进入目录」，
+               不拦的话勾选会直接把用户弹进文件夹。 #}
+            <label class="cloud-check" title="选择 {{ f.name }}" onclick="event.stopPropagation()">
+              <input type="checkbox" class="check"
+                     data-cloud-path="{{ f.path }}"
+                     data-cloud-name="{{ f.name }}"
+                     data-cloud-dir="1"
+                     onchange="window.__cloudCheckChange(this)"
+                     aria-label="选择 {{ f.name }}">
+            </label>
             <div class="t-img">
               <svg class="t-folder-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#ic-folder"/></svg>
               <span class="t-badge"><span class="badge" style="background:rgba(234,179,8,.2);color:#eab308;">文件夹</span></span>
-              <span class="cloud-drive-badge cloud-drive-float">[{{ f.drive_label }}]</span>
             </div>
             <div class="t-body">
               <div class="t-name" title="{{ f.name }}"><svg class="t-folder-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-folder"/></svg><span class="t-fn">{{ f.name }}</span></div>
@@ -1340,6 +2122,14 @@ window.__explorerRootSearch = async function (comp, immediate) {
                      data-cloud-path="{{ f.path }}"
                      class="btn sm ghost"
                      onclick="return window.__openExplorerInOpenList(this, event)">OpenList</a>
+                  <button type="button" class="btn sm danger explorer-del-btn"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          title="从网盘永久删除（含目录内全部内容）"
+                          aria-label="删除 {{ f.name }}"
+                          onclick="window.__deleteCloudEntry(this)">
+                    <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1349,7 +2139,19 @@ window.__explorerRootSearch = async function (comp, immediate) {
           <!-- 文件卡片（视频/图片/其他） -->
           <div class="thumb explorer-card"
                data-cloud-card
+               data-cloud-path="{{ f.path }}"
+               data-is-dir="0"
+               data-size-bytes="{{ f.size or 0 }}"
+               data-mtime="{{ f.mtime or 0 }}"
+               data-sort-name="{{ f.name }}"
                x-show='!q || {{ f.name | tojson }}.toLowerCase().includes(q.toLowerCase())'>
+            <label class="cloud-check" title="选择 {{ f.name }}" onclick="event.stopPropagation()">
+              <input type="checkbox" class="check"
+                     data-cloud-path="{{ f.path }}"
+                     data-cloud-name="{{ f.name }}"
+                     onchange="window.__cloudCheckChange(this)"
+                     aria-label="选择 {{ f.name }}">
+            </label>
             <div class="t-img">
               {% if f.thumb %}
                 <img src="{{ f.thumb }}" alt="{{ f.name }}" loading="lazy" decoding="async">
@@ -1360,8 +2162,6 @@ window.__explorerRootSearch = async function (comp, immediate) {
                 <span class="t-ext">{{ f.ext }}</span>
               {% endif %}
 
-              <!-- 所属网盘徽标 -->
-              <span class="cloud-drive-badge cloud-drive-float">[{{ f.drive_label }}]</span>
 
               <!-- 视频播放遮罩 -->
               {% if f.is_video %}
@@ -1436,6 +2236,17 @@ window.__explorerRootSearch = async function (comp, immediate) {
                           title="跨网盘移动"
                           onclick="window.__moveExplorerFile(this)">移动</button>
 
+                  {# 删除做成图标按钮：网格卡片只有 ~200px 宽，7 个文字按钮会折成两行
+                     把卡片撑得很高。列表视图里文字仍会显示（CSS 解除固定宽度）。 #}
+                  <button type="button" class="btn sm danger explorer-del-btn"
+                          data-cloud-path="{{ f.path }}"
+                          data-filename="{{ f.name }}"
+                          title="从网盘永久删除"
+                          aria-label="删除 {{ f.name }}"
+                          onclick="window.__deleteCloudEntry(this)">
+                    <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  </button>
+
                   <a href="/api/explorer/download?path={{ f.path | urlencode }}" download
                      class="btn sm primary"
                      title="下载此文件直链">下载</a>
@@ -1453,6 +2264,35 @@ window.__explorerRootSearch = async function (comp, immediate) {
         </div>
       {% endfor %}
     </div>
+  {% endif %}
+
+  {% if not is_root %}
+  <!-- 底部浮动批量操作条：勾选任意一项后出现。
+       移动/复制复用已有跨盘弹窗（它们本就支持 names 列表，只是过去一次只传一个名字）；
+       删除走 /api/explorer/delete（按父目录分组批量 fs/remove）。 -->
+  <div id="cloudBatchBar" class="floating-batch-bar" style="display:none;" role="region" aria-label="批量操作条">
+    <div class="batch-bar-inner">
+      <div class="batch-bar-info">
+        <svg class="icon sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--brand);"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>已选中 <strong id="cloudSelectedCount" class="tnum">0</strong> 项</span>
+      </div>
+      <div class="batch-bar-actions">
+        <button type="button" class="btn ghost sm" onclick="window.__cloudBulkTransfer('copy')" title="把选中项复制到另一个目录/网盘">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-copy"/></svg>
+          复制
+        </button>
+        <button type="button" class="btn ghost sm" onclick="window.__cloudBulkTransfer('move')" title="把选中项移动到另一个目录/网盘">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-upload"/></svg>
+          移动
+        </button>
+        <button type="button" class="btn danger sm" onclick="window.__cloudBulkDelete()" title="从网盘永久删除选中项">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          删除
+        </button>
+        <button type="button" class="btn ghost sm" onclick="window.__cloudClearSelection()" title="取消所有勾选">取消</button>
+      </div>
+    </div>
+  </div>
   {% endif %}
 
   <!-- 隐藏模版骨架（供动态操作与全局契约断言） -->
@@ -1503,8 +2343,18 @@ window.__explorerRootSearch = async function (comp, immediate) {
       </div>
       <div style="padding:16px 20px;">
         <div class="field">
-          <label>选中文件</label>
+          <label x-text="transferData.count > 1 ? ('已选 ' + transferData.count + ' 项') : '选中文件'"></label>
           <div style="font-size:13px;color:var(--text-1);font-weight:600;" x-text="transferData.name"></div>
+          {# 批量时列出前几项名字：只显示「已选 N 项」的话，用户没法确认自己勾的是不是想搬的那几个 #}
+          <template x-if="transferData.count > 1">
+            <div style="font-size:11.5px;color:var(--text-2);margin-top:4px;max-height:88px;overflow:auto;line-height:1.7;">
+              <template x-for="(n, i) in transferData.names.slice(0, 12)" :key="i">
+                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" x-text="'· ' + n"></div>
+              </template>
+              <div x-show="transferData.names.length > 12"
+                   x-text="'… 其余 ' + (transferData.names.length - 12) + ' 项'" style="color:var(--text-3);"></div>
+            </div>
+          </template>
           <div style="font-size:11px;color:var(--text-3);font-family:monospace;margin-top:2px;" x-text="'源目录: ' + transferData.srcDir"></div>
         </div>
 
@@ -1519,7 +2369,14 @@ window.__explorerRootSearch = async function (comp, immediate) {
             </template>
           </div>
           <label for="explorerTransferDst" style="margin-top:8px;">目标完整路径</label>
-          <input class="input" id="explorerTransferDst" type="text" x-model="transferData.targetDir" placeholder="如 /wopan 或 /google/backups">
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="input" id="explorerTransferDst" type="text" x-model="transferData.targetDir" placeholder="如 /wopan 或 /google/backups" style="flex:1;">
+            {# 目标目录常常还不存在（想搬到新建的分类目录里）。没有这个按钮，
+               用户只能先去 OpenList 建目录再回来，跨网盘移动基本没法用。 #}
+            <button type="button" class="btn sm ghost" style="flex:none;"
+                    :disabled="transferData.loading"
+                    @click="makeTargetDir()" title="在网盘上创建这个目录（已存在则直接可用）">新建目录</button>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
@@ -1532,30 +2389,6 @@ window.__explorerRootSearch = async function (comp, immediate) {
     </div>
   </div>
 
-  <!-- 自定义 OpenList 外部访问域名设置弹窗 -->
-  <div class="modal-backdrop" :class="{'show': showDomainModal}" x-show="showDomainModal" x-cloak style="display:none;" @click.self="showDomainModal = false">
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:500px;width:92vw;">
-      <div class="modal-head">
-        <h2 style="font-size:16px;">配置 OpenList 外部访问域名</h2>
-        <button type="button" class="icon-btn xs" aria-label="关闭" @click="showDomainModal = false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
-        </button>
-      </div>
-      <div style="padding:16px 20px;">
-        <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;line-height:1.5;">
-          当 TG 项目与 OpenList 部署在云端 VPS 时，本地浏览器无法直接访问内网 <code>127.0.0.1</code>。请在此指定您的公网 IP 或域名，点击列表中所有「OpenList」直达按钮将自动以此地址打开。
-        </p>
-        <div class="field">
-          <label for="explorerDomainInput">OpenList 公网地址</label>
-          <input class="input" id="explorerDomainInput" type="text" x-model="domainInput" placeholder="例如：http://pan.yourdomain.com:5244 或 pan.yourdomain.com">
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button type="button" class="btn ghost sm" @click="showDomainModal = false">取消</button>
-        <button type="button" class="btn primary sm" @click="saveDomain()">保存</button>
-      </div>
-    </div>
-  </div>
 
   <!-- 在线视频播放弹窗 -->
   <div class="modal-backdrop" id="cloudVideoModal" style="display:none;" onclick="if(event.target===this)window.__closeCloudVideo()">

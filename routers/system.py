@@ -181,7 +181,11 @@ async def tg_login_step1(request: Request):
                       {"phoneNumber": full_phone, "settings": None})
         state = await _tg_wait_state(telegram_id, {TG_WAIT_CODE, TG_WAIT_PASSWORD, TG_READY})
         if state == TG_WAIT_CODE:
-            return {"ok": True, "state": "WAIT_CODE", "telegramId": telegram_id}
+            # 把 TDLib 的权威验证码位数一并回传，前端据此渲染正确格数
+            # （5 位/6 位不固定；取不到时前端有 5/6 自适应兜底）。
+            code_length = await _tg_code_length(telegram_id)
+            return {"ok": True, "state": "WAIT_CODE", "telegramId": telegram_id,
+                    "codeLength": code_length}
         if state in (TG_WAIT_PASSWORD, TG_READY):
             # 号码已被记住/直接通过，跳到对应结果
             return {"ok": True, "state": TG_STATE_NAMES.get(state, str(state)),
@@ -266,6 +270,34 @@ async def openlist_status():
     except Exception as e:  # noqa: BLE001
         log.error("OpenList 状态检查失败: %s", e)
         return {"ok": False, "message": "OpenList 状态检查失败"}
+
+
+@router.post("/openlist/public-base")
+async def openlist_public_base_save(request: Request):
+    """设置 OpenList 对外访问域名（全局唯一，供所有页面的「在 OpenList 中打开」使用）。
+
+    历史问题：这个域名原本散落在各个页面的 localStorage（云端归档页 / 网盘浏览页
+    各有自己的弹窗、各存各的 key），于是出现「这个页面配了、那个页面还是内网地址」，
+    而且换浏览器/清缓存就丢。现在收敛成服务端一份全局配置：
+      * 写 _ARCHIVE_CONFIG["publicBaseUrl"]，随归档配置落盘；
+      * 所有渲染点（browse/library_cloud/explorer/base 顶栏）都读同一份；
+      * 前端仍保留 localStorage 作为「同一浏览器内的即时覆盖」，但以服务端为准。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    raw = str((body or {}).get("publicBaseUrl") or "").strip()
+    norm = _norm_public_base(raw)
+    if raw and not norm:
+        return JSONResponse(
+            {"ok": False, "message": "地址格式无效，请填写 http(s)://域名[:端口] 或 域名[:端口]"},
+            status_code=400)
+    _ARCHIVE_CONFIG["publicBaseUrl"] = norm
+    _archive_config_save()
+    log.info("OpenList 全局对外域名已更新: %s", norm or "(已清除，回落到服务器地址)")
+    return JSONResponse({"ok": True, "publicBaseUrl": norm,
+                         "message": f"已保存全局域名：{norm}" if norm else "已清除全局域名"})
 
 
 @router.post("/openlist/login")
@@ -425,6 +457,68 @@ async def _ep_openlist_dirs(path: str = "/"):
 async def _ep_openlist_stream_url(path: str = ""):
     """视频在线播放直链（实现见 services.openlist_service.openlist_stream_url）。"""
     return await openlist_stream_url(path)
+
+@router.get("/openlist/stream")
+async def _ep_openlist_stream(request: Request, path: str = ""):
+    """在线播放代理：把网盘视频字节经 bridge 中转给浏览器，并逐块记账。
+
+    浏览标签在线播放此前直接把 302 直链交给 <video>，流量不经过 bridge，
+    累计下载/上传 KPI 统计不到。改走本代理后：
+      - 网盘 → bridge = 下载流量，bridge → 浏览器 = 上传流量，天然对等；
+      - 记账按「上传下载对等」规则同时计入累计下载与累计上传（_stream_stats_add）；
+      - Range 请求原样透传（拖动进度条不发全量流量，只记实际传输字节）。
+    外部播放器（PotPlayer/VLC）与「复制播放链接」仍用 302 直链，不受影响。
+    """
+    import httpx as _httpx
+    from core.state import _stream_stats_add
+
+    link = await openlist_stream_url(path)
+    url = str((link.get("url") if isinstance(link, dict) else "") or "")
+    if not url:
+        return JSONResponse({"ok": False, "message": "获取视频流地址失败"}, status_code=502)
+
+    headers_up = {}
+    rng = request.headers.get("range")
+    if rng:
+        headers_up["Range"] = rng
+
+    # 一次性客户端：CDN 直链与 OpenList 不同源，必须 follow_redirects（302 → 网盘真实地址）；
+    # trust_env=False 与全局一致（回环/内网请求不吃环境代理）；读超时放宽到 3600s 支持长视频慢速拖动。
+    client = _httpx.AsyncClient(
+        timeout=_httpx.Timeout(connect=15.0, read=3600.0, write=3600.0, pool=15.0),
+        follow_redirects=True, trust_env=False)
+    try:
+        upstream = await client.send(client.build_request("GET", url, headers=headers_up), stream=True)
+    except Exception as e:  # noqa: BLE001
+        await client.aclose()
+        log.warning("在线播放代理上游连接失败: %s", str(e)[:160])
+        return JSONResponse({"ok": False, "message": "上游连接失败"}, status_code=502)
+
+    if upstream.status_code >= 400:
+        await upstream.aclose()
+        return JSONResponse({"ok": False, "message": "上游返回 HTTP %d" % upstream.status_code}, status_code=502)
+
+    out_headers = {}
+    for k in ("content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"):
+        v = upstream.headers.get(k)
+        if v:
+            out_headers[k] = v
+
+    async def _gen():
+        served = 0
+        try:
+            async for chunk in upstream.aiter_raw():
+                served += len(chunk)
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+            if served > 0:
+                _stream_stats_add(served)
+
+    return StreamingResponse(_gen(), status_code=upstream.status_code, headers=out_headers)
+
+
 
 
 @router.get("/api/notify/config")
@@ -753,8 +847,34 @@ async def api_disk_watermark_status(request: Request):
         "lowWatermarkPercent": low,
         "autoClean": auto_clean,
         "waitingTasksCount": len(_WAITING_DISK_TASKS),
-        "waitingTasks": list(_WAITING_DISK_TASKS.values())
+        "waitingTasks": list(_WAITING_DISK_TASKS.values()),
+        # 分区根路径：设置页「查看目录占用明细」以它作为下钻起点。
+        # 直接读 disk_kpi_hint()，避免前端把 app-data 当成「整个分区」。
+        "mountRoot": disk_kpi_hint().get("root") or "/",
     })
+
+
+@router.get("/api/disk/breakdown")
+async def api_disk_breakdown(path: str = "", refresh: int = 0):
+    """目录级磁盘占用明细（下钻）。
+
+    仪表盘 KPI「本地磁盘占用」原先只有一个分区数字，用户看不出这 27 GB
+    被什么占了。这里按目录拆开，path 为空时从数据目录所在分区根开始；
+    前端每点一层就把该层路径带回来继续下钻。
+
+    扫描（根分区 27 万条目实测 2.3 秒）跑在线程里，不阻塞事件循环；
+    结果有 120 秒缓存，?refresh=1 可强制重扫。
+    """
+    try:
+        if refresh:
+            disk_cache_clear()
+        data = await asyncio.to_thread(disk_breakdown, path, 40)
+        if not data.get("ok"):
+            return JSONResponse(data, status_code=404)
+        return JSONResponse(data)
+    except Exception as e:  # noqa: BLE001
+        log.error("磁盘明细读取失败(%s): %s", path, e)
+        return JSONResponse({"ok": False, "message": f"读取失败：{e}"}, status_code=500)
 
 
 @router.post("/api/disk/wake")
@@ -774,5 +894,64 @@ async def api_disk_wake(request: Request):
         })
     except Exception as e:
         log.error("手动唤醒检查失败: %s", e)
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------
+# TG 请求节流（防封号随机节奏 + 每日预算）
+# ---------------------------------------------------------------------
+@router.get("/api/throttle/status")
+async def api_throttle_status(request: Request):
+    """今日预算用量、队列深度、挂起数、下次续跑时间与生效档位。"""
+    return JSONResponse({"ok": True, "status": throttle_status()})
+
+
+@router.get("/api/throttle/config")
+async def api_throttle_config_get():
+    """读取节流配置（含四档预设与覆盖范围标签，供设置页渲染）。"""
+    return JSONResponse({"ok": True, "config": throttle_config_public()})
+
+
+@router.post("/api/throttle/config")
+async def api_throttle_config_post(request: Request):
+    """保存节流配置。切换档位会按预设回填并发/间隔/日预算。"""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "请求体不是合法 JSON"}, status_code=400)
+    ok, msg = throttle_save_config(body if isinstance(body, dict) else {})
+    if not ok:
+        return JSONResponse({"ok": False, "message": msg}, status_code=400)
+    return JSONResponse({"ok": True, "message": msg,
+                         "config": throttle_config_public(),
+                         "status": throttle_status()})
+
+
+@router.post("/api/throttle/wake")
+async def api_throttle_wake(request: Request):
+    """手动放行一批到期排队任务（忽略随机间隔，立即放 1 个）。"""
+    try:
+        released = await throttle_dispatch_pending(force=True)
+        return JSONResponse({
+            "ok": True,
+            "released": released,
+            "status": throttle_status(),
+            "message": (f"已放行 {released} 个任务" if released
+                        else "没有可放行的任务（队列为空或今日预算已用尽）"),
+        })
+    except Exception as e:  # noqa: BLE001
+        log.error("手动放行节流队列失败: %s", e)
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+
+
+@router.post("/api/throttle/queue/clear")
+async def api_throttle_queue_clear(request: Request):
+    """清空节流队列（用户显式放弃排队中的任务）。"""
+    try:
+        removed = throttle_clear()
+        return JSONResponse({"ok": True, "removed": removed,
+                             "message": f"已清空节流队列（{removed} 条）",
+                             "status": throttle_status()})
+    except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
 

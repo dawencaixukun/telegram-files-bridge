@@ -18,7 +18,11 @@
 <div class="grid g-3" style="margin-bottom:var(--space-5);">
   {% for k in (stats.get('kpis') if stats else []) %}
   {% set sub_items = k.get('items') %}
-  <div class="card kpi{% if sub_items %} kpi-dual{% endif %}">
+  {% set _click = k.get('click') %}
+  <div class="card kpi{% if sub_items %} kpi-dual{% endif %}{% if _click %} kpi-clickable{% endif %}"
+       {% if _click == 'disk' %}role="button" tabindex="0" title="点击查看目录级占用明细"
+       onclick="window.__openDiskBreakdown && window.__openDiskBreakdown(this)"
+       onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__openDiskBreakdown&&window.__openDiskBreakdown(this);}"{% endif %}>
     <div class="k-head">
       <span class="k-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#{{ k.icon }}"/></svg></span>
       {{ k.label }}
@@ -39,6 +43,9 @@
     <div class="k-value tnum"{% if k.id %} id="{{ k.id }}"{% endif %}{% if k.value_color %} style="color:{{ k.value_color }};"{% endif %}>{{ k.value }}<small>{{ k.unit }}</small></div>
     <div class="k-foot">
       <span class="delta {{ k.d }}" style="{% if not k.delta %}display:none;{% endif %}">{{ k.delta }}</span>
+      {% if _click == 'disk' %}
+      <span class="kpi-hint" style="font-size:12px;color:var(--text-3);margin-right:auto;">查看明细 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg></span>
+      {% endif %}
       <svg class="spark" width="90" height="30" viewBox="0 0 92 32" fill="none" aria-hidden="true">
         <polyline points="{{ k.points }}" stroke="{{ k.spark }}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>

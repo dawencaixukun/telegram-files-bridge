@@ -547,6 +547,24 @@ async def api_tg_quick_download(request: Request):
             "message": msg,
         })
 
+    # TG 请求随机节流（防封号）：小批量直通；超并发/预算不足时分批放行或挂起次日续跑
+    throttle_meta = {}
+    for rf in (raw_files if isinstance(raw_files, list) else []):
+        if isinstance(rf, dict) and rf.get("fileId") is not None:
+            throttle_meta[str(rf.get("fileId"))] = rf
+    plan = await throttle_plan_submit(payload_files, "api", throttle_meta, "接口直投")
+    if plan is not None:
+        payload_files = plan.get("submit") or []
+        if not payload_files:
+            _tasks_cache_invalidate()
+            return JSONResponse({
+                "ok": False,
+                "code": "THROTTLE_SUSPENDED" if plan.get("suspended") else "THROTTLE_QUEUED",
+                "state": "waiting_throttle",
+                "count": plan.get("queued", 0),
+                "message": plan.get("message"),
+            })
+
     try:
         backend_files = [
             {"telegramId": f["telegramId"], "chatId": f["chatId"], "messageId": f["messageId"], "fileId": f["fileId"]}
@@ -557,14 +575,18 @@ async def api_tg_quick_download(request: Request):
         BACKEND._cache.clear()
 
         log.info("直投下载成功提交 %d 个文件 (auto_archive=%s, dir=%s)", len(payload_files), auto_archive, archive_dir)
-        return JSONResponse({
+        resp = {
             "ok": True,
             "code": "SUCCESS",
             "count": len(payload_files),
             "autoArchive": auto_archive,
             "archiveDir": archive_dir if auto_archive else None,
             "message": f"成功提交 {len(payload_files)} 个文件直投下载任务"
-        })
+        }
+        if plan is not None:
+            resp["queuedCount"] = plan.get("queued", 0)
+            resp["message"] = plan.get("message") or resp["message"]
+        return JSONResponse(resp)
     except Exception as e:
         # 若下载调用触发了 FloodWait，自动捕获挂起
         w_sec = _extract_flood_wait_seconds(e)

@@ -13,6 +13,7 @@ tests/test_browse_manage_modal_layering.py — 管理会话弹窗的层叠与关
 3. 提供点遮罩空白处 / Esc 两条关闭通道；
 4. CSS 里弹窗 z-index 高于侧栏(85)，小屏整屏可滚且头部/底部按钮吸顶吸底。
 """
+import os
 import unittest
 
 import bridge_server
@@ -70,7 +71,7 @@ class BrowseManageModalLayeringTest(unittest.TestCase):
         self.assertIn("window.__browseCloseManage = function", self.html)
 
     def test_css_layering_and_mobile_scroll(self):
-        with open("/root/tg-files/app/static/css/main.css", encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "css", "main.css"), encoding="utf-8") as f:
             css = f.read()
         i = css.find("#browseManageBackdrop {")
         self.assertGreater(i, 0, "缺少 #browseManageBackdrop 的层叠修复样式")

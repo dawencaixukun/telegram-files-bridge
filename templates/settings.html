@@ -117,6 +117,27 @@
         <input id="openlistPassword" class="input" type="password" x-model="form.password" placeholder="••••••••" autocomplete="new-password">
       </div>
     </div>
+    <!-- 全局对外访问域名：所有页面的「在 OpenList 中打开」都用这一个值。
+         历史做法是把域名存在各页面的 localStorage 里，各配各的，导致
+         「这个页面配了、那个页面还是内网地址」，换浏览器就丢。 -->
+    <div class="field" style="margin-top:14px;">
+      <label for="openlistPublicBase">对外访问域名（全局）</label>
+      <div class="row" style="gap:8px;margin-top:6px;align-items:center;">
+        <input id="openlistPublicBase" class="input" type="text" style="flex:1;min-width:220px;"
+               x-model="publicBase" @keydown.enter="savePublicBase()"
+               placeholder="留空=用服务器地址；例如 pan.example.com 或 https://pan.example.com:5244"
+               autocomplete="off" spellcheck="false">
+        <button class="btn primary" style="height:38px;padding:9px 16px;" :disabled="savingBase" @click="savePublicBase()">
+          <span x-show="savingBase" class="spinner"></span>
+          <span x-text="savingBase ? '保存中…' : '保存域名'">保存域名</span>
+        </button>
+        <button class="btn ghost" style="height:38px;padding:9px 16px;" x-show="publicBase" @click="clearPublicBase()">清除</button>
+      </div>
+      <div class="hint" style="margin-top:4px;">
+        VPS 部署时浏览器打不开内网的 <code>127.0.0.1:5244</code>，在这里填公网域名/IP，
+        云端归档、网盘浏览等页面的「OpenList」按钮会统一用它打开。
+      </div>
+    </div>
     <div class="hint" x-show="st.loggedIn" style="margin-top:6px;">
       当前连接：<b x-text="st.baseUrl || 'http://127.0.0.1:5244'"></b> · 账号：<b x-text="st.username"></b>
       <span x-show="st.verified"> · 令牌已经 OpenList API 验证<span x-show="st.loggedAt">（登录于 <span x-text="fmtTime(st.loggedAt)"></span>）</span></span>
@@ -393,6 +414,8 @@
           <span class="hint" style="flex:none;">当前占用率 <b x-text="(cfg.diskUsagePercent || 0) + '%'"></b> · 可用 <b x-text="(cfg.diskFreeGB || 0) + ' GB'"></b>
             <span x-show="(cfg.diskUsagePercent || 0) >= (cfg.diskHighWatermarkPercent || 85)" style="color:var(--err);font-weight:700;">⚠️ 已达熔断线</span>
           </span>
+          <button type="button" class="btn sm ghost" style="flex:none;"
+                  onclick="window.__openDiskBreakdown && window.__openDiskBreakdown(this)">查看目录占用明细</button>
         </div>
       </div>
     </div>
@@ -417,6 +440,117 @@
         <span x-text="sweeping ? '正在扫描…' : '立即扫描归档'">立即扫描归档</span>
       </button>
     </div>
+  </div>
+
+  <!-- TG 请求节流（防封号）：只给用户选一个档位，细节收进「高级设置」 -->
+  <div class="card pad-lg mb-4" x-data="throttleSettingsCard()" x-init="load()">
+    <div class="card-head" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+      <div style="min-width:0;">
+        <h2 class="card-title" style="margin-bottom:2px;">TG 请求节流（防封号）</h2>
+        <div class="hint">按人类节奏随机放行，每日额度用完自动暂停，次日接着跑</div>
+      </div>
+      <span class="pill" style="flex-shrink:0;margin-top:2px;"
+            :class="cfg.enabled ? 'archived' : 'pending'">
+        <span class="p-dot"></span>
+        <span x-text="cfg.enabled ? ('已开启 · ' + profileLabel()) : '已关闭'"></span>
+      </span>
+    </div>
+
+    {# 主开关 + 今日用量：一行说清「开没开 / 今天还能下几个」 #}
+    <div class="row" style="gap:14px;align-items:center;flex-wrap:wrap;margin-top:14px;">
+      <label class="switch-row" style="flex:none;">
+        <span class="switch"><input type="checkbox" x-model="cfg.enabled" @change="save()"><span class="track"></span></span>
+        <span class="switch-label"><b>启用请求节流</b></span>
+      </label>
+      <div style="flex:1;min-width:220px;">
+        <div class="progress blue" style="height:8px;">
+          <span :style="{ width: budgetPct() + '%' }"></span>
+        </div>
+        <div class="row" style="justify-content:space-between;margin-top:6px;">
+          <span class="hint">
+            今日已放行 <b class="tnum" x-text="st.used || 0"></b>
+            / <b class="tnum" x-text="st.budget > 0 ? st.budget : '不限'"></b>
+          </span>
+          <span class="hint" x-show="st.queuedCount > 0" style="color:var(--warn,#f59e0b);font-weight:600;">
+            排队 <b x-text="st.queuedCount"></b> 个
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint" x-show="st.exhausted" style="color:var(--warn,#f59e0b);margin-top:8px;">
+      ⚠️ 今日额度已用完，新任务自动挂起，次日 <span x-text="String(cfg.resumeHour).padStart(2,'0') + ':00'"></span> 自动续跑。
+    </div>
+
+    {# 档位选择：4 选 1，切换即生效（点一下就保存，不用再点保存按钮） #}
+    <div class="set-group" style="margin-top:16px;">
+      <div class="set-group-title">安全档位</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;">
+        <button type="button" class="btn sm" :class="cfg.profile === 'conservative' ? 'primary' : 'ghost'"
+                @click="pickProfile('conservative')" title="并发 1~2、间隔 30~120 秒、日预算 40 个">保守</button>
+        <button type="button" class="btn sm" :class="cfg.profile === 'robust' ? 'primary' : 'ghost'"
+                @click="pickProfile('robust')" title="并发 1~3、间隔 15~60 秒、日预算 80 个">稳健</button>
+        <button type="button" class="btn sm" :class="cfg.profile === 'balanced' ? 'primary' : 'ghost'"
+                @click="pickProfile('balanced')" title="并发 2~4、间隔 6~25 秒、日预算 200 个">平衡</button>
+        <button type="button" class="btn sm" :class="cfg.profile === 'unlimited' ? 'primary' : 'ghost'"
+                @click="pickProfile('unlimited')" title="不限每日总量，只把零间隔改成随机间隔">只加间隔</button>
+      </div>
+      <div class="hint" style="margin-top:8px;">
+        <b x-text="profileLabel()"></b> · <span x-text="profileDesc()"></span>
+      </div>
+      <div class="hint" style="margin-top:4px;">
+        新号或已被警告过的号选「保守」；日常用「平衡」即可。
+      </div>
+    </div>
+
+    {# 高级设置：默认收起，只有想细调的人才展开 #}
+    <details class="set-group" style="margin-top:4px;">
+      <summary class="set-group-title" style="cursor:pointer;user-select:none;">高级设置（通常不用改）</summary>
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="hint" style="flex:none;">并发</span>
+        <input class="input num" type="number" min="1" max="20" style="width:70px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.concurrencyMin">
+        <span class="hint" style="flex:none;">~</span>
+        <input class="input num" type="number" min="1" max="20" style="width:70px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.concurrencyMax">
+        <span class="hint" style="flex:none;">个</span>
+        <span class="hint" style="flex:none;opacity:.6;">|</span>
+        <span class="hint" style="flex:none;">间隔</span>
+        <input class="input num" type="number" min="0" max="3600" step="1" style="width:76px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.intervalMin">
+        <span class="hint" style="flex:none;">~</span>
+        <input class="input num" type="number" min="0" max="3600" step="1" style="width:76px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.intervalMax">
+        <span class="hint" style="flex:none;">秒</span>
+        <span class="hint" style="flex:none;opacity:.6;">|</span>
+        <span class="hint" style="flex:none;">每日额度</span>
+        <input class="input num" type="number" min="0" max="100000" style="width:86px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.dailyBudget">
+        <span class="hint" style="flex:none;">个（0 = 不限）</span>
+      </div>
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="hint" style="flex:none;">次日续跑</span>
+        <input class="input num" type="number" min="0" max="23" style="width:80px;height:34px;padding:4px 8px;flex:none;" x-model.number="cfg.resumeHour">
+        <span class="hint" style="flex:none;">点（额度耗尽后，到点自动恢复排队）</span>
+      </div>
+      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="hint" style="flex:none;">节流范围</span>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;"><input type="checkbox" class="check" x-model="cfg.scope.browse"><span>浏览页</span></label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;"><input type="checkbox" class="check" x-model="cfg.scope.submit"><span>链接提交</span></label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;"><input type="checkbox" class="check" x-model="cfg.scope.api"><span>接口直投</span></label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;"><input type="checkbox" class="check" x-model="cfg.scope.watch"><span>频道监听</span></label>
+        <label class="row" style="gap:6px;cursor:pointer;font-size:13px;"><input type="checkbox" class="check" x-model="cfg.scope.thumb"><span>缩略图补图</span></label>
+      </div>
+      <div class="row" style="gap:10px;margin-top:12px;">
+        <button class="btn primary sm" :disabled="busy" @click="save()">
+          <span x-show="busy" class="spinner"></span>
+          <span x-text="busy ? '保存中…' : '保存高级设置'">保存高级设置</span>
+        </button>
+        <button type="button" class="btn sm ghost" :disabled="busy" @click="wake()" x-show="st.queuedCount > 0"
+                title="忽略随机间隔，立即放行 1 个排队任务">立即放行 1 个</button>
+        <button type="button" class="btn sm danger" :disabled="busy || !st.queuedCount"
+                @click="clearQueue()" x-show="st.queuedCount > 0" title="放弃所有排队中的任务">清空排队</button>
+      </div>
+      <div class="hint" style="margin-top:8px;">
+        取回下载（网盘→本地）走 OpenList 不经过 Telegram，恒不纳入节流。
+        缩略图补图最多占用 <b>40%</b> 额度，避免翻云端归档页面把下载额度吃光。
+      </div>
+    </details>
   </div>
 
   <!-- Telegram 消息通知外发引擎（Bot/收藏夹双通道） -->

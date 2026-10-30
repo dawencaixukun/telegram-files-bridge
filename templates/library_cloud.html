@@ -15,7 +15,6 @@ window.cloudLibrary = function cloudLibrary() {
     drive: '',
     remoteDir: '',
     statusFilter: '',
-    showDomainModal: false,
     /* 手机端筛选区默认折叠：高级筛选（网盘/状态/目录）收进可展开面板，
        只留一行「搜索 + 筛选」——原先 3 个带 label 的下拉竖排占掉半屏。 */
     filtersOpen: false,
@@ -26,9 +25,6 @@ window.cloudLibrary = function cloudLibrary() {
       if (this.remoteDir) n++;
       return n;
     },
-    openlistBase: localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '',
-    domainInput: '',
-    savingDomain: false,
     totalCount: {{ cloud_files|length if cloud_files else 0 }},
     showTransferModal: false,
     transferAction: 'copy',
@@ -44,11 +40,6 @@ window.cloudLibrary = function cloudLibrary() {
     transferProgress: 0,
     mountsList: {{ openlist_mounts | tojson if openlist_mounts else '[]' }},
 
-    init: function () {
-      if (!this.domainInput) {
-        this.domainInput = this.openlistBase;
-      }
-    },
 
     openTransferModal: function (action, data) {
       this.transferAction = action;
@@ -210,10 +201,10 @@ window.cloudLibrary = function cloudLibrary() {
                     window.__toast((pollAction === 'move' ? '移动完成' : '复制完成'), 'success', pollFn);
                   }
 
-                  // 若为移动，局部动态更新卡片上绑定的路径、网盘徽标与 OpenList 跳转地址
+                  // 若为移动，局部动态更新卡片上绑定的路径与 OpenList 跳转地址
+                  //（网盘归属由路径首段体现，卡片不再单独挂徽标）
                   if (pollAction === 'move') {
                     var newCloudPath = (pollDst === '/' ? '' : pollDst) + '/' + pollFn;
-                    var newDrive = pollDst.replace(/^\/+/, '').split('/')[0] || '默认网盘';
                     var mCards = document.querySelectorAll('.cloud-card');
                     for (var mi = 0; mi < mCards.length; mi++) {
                       var mc = mCards[mi];
@@ -224,10 +215,6 @@ window.cloudLibrary = function cloudLibrary() {
                         });
                         var pathSpan = mc.querySelector('.cloud-path span');
                         if (pathSpan) pathSpan.textContent = newCloudPath;
-                        var badge = mc.querySelector('.cloud-drive-badge');
-                        if (badge) {
-                          badge.innerHTML = '<svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg> ' + newDrive;
-                        }
                         var olLink = mc.querySelector('a[data-openlist-url]');
                         if (olLink && window.__cloudOpenListUrl) {
                           var nUrl = window.__cloudOpenListUrl(newCloudPath, '');
@@ -260,69 +247,6 @@ window.cloudLibrary = function cloudLibrary() {
       }
     },
 
-    openDomainModal: function () {
-      this.domainInput = this.openlistBase;
-      this.showDomainModal = true;
-    },
-
-    formatBase: function (raw) {
-      if (!raw) return '';
-      var s = String(raw).trim();
-      if (!s) return '';
-      if (!/^https?:\/\//i.test(s)) {
-        s = 'http://' + s;
-      }
-      return s.replace(/\/+$/, '');
-    },
-
-    displayDomain: function (raw) {
-      if (!raw) return '';
-      try {
-        var u = new URL(this.formatBase(raw));
-        return u.host;
-      } catch (e) {
-        return String(raw).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-      }
-    },
-
-    saveDomain: async function () {
-      var formatted = this.formatBase(this.domainInput);
-      this.openlistBase = formatted;
-      if (formatted) {
-        localStorage.setItem('openlist_public_base', formatted);
-      } else {
-        localStorage.removeItem('openlist_public_base');
-      }
-      this.savingDomain = true;
-      try {
-        var csrfToken = window.__csrfToken ? window.__csrfToken() : '';
-        await fetch('/archive/config', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken
-          },
-          body: JSON.stringify({ publicBaseUrl: formatted })
-        });
-      } catch (e) {
-        console.warn('Sync publicBaseUrl to server failed:', e);
-      } finally {
-        this.savingDomain = false;
-        this.showDomainModal = false;
-      }
-      if (window.__toast) {
-        window.__toast(formatted ? ('OpenList 域名已设置为 ' + formatted) : 'OpenList 域名已清除', 'success');
-      }
-    },
-
-    resetDomain: async function () {
-      this.domainInput = '';
-      await this.saveDomain();
-    },
-
-    /* 注意：openlistBase / openDomainModal / domainInput / saveDomain / showDomainModal
-       仍保留，供顶栏「配置 OpenList 域名」弹窗使用。
-       OpenList 按钮本身不再用 Alpine 绑定（见下方 window.__openCloudInOpenList）。 */
 
     matches: function (el) {
       if (!el || !el.getAttribute) return true;
@@ -481,7 +405,11 @@ window.cloudLibrary = function cloudLibrary() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;          /* 窄卡片时图标行换行，而不是把胶囊挤出卡片 */
+  row-gap: 8px;
+  justify-content: flex-end;
+  max-width: 100%;
+  min-width: 0;
 }
 /* 图标按钮不能被 flex 压扁：父容器 nowrap 时 .icon-btn.xs 会被挤到 21px 宽，
    svg 跟着缩成 7px —— 手机上看起来就是「一排空按钮框、图标看不见」。 */
@@ -500,14 +428,24 @@ window.cloudLibrary = function cloudLibrary() {
   width: 15px;
   height: 15px;
 }
-@media (max-width: 640px) {
-  /* 窄屏：操作区不再挤在卡片右侧一行。
-     历史布局：OpenList+取回 胶囊 → 改名/复制/移动/删除 4 个图标按钮全塞在一行，
-     332px 卡片里塞 181px 胶囊 + 4×30px 图标，图标几乎贴到边缘、点击热区太小。
-     改成两段式：第一行胶囊占满整行（两段均分），第二行 4 个图标按钮等距排开。 */
+/* 操作区两段式布局：判定依据是【卡片自身宽度】，不是视口宽度。
+   历史缺陷（用户截图：云端浏览卡片最左的「取回」被切掉、按钮行跑出卡片）：
+   上一版把断点写成 @media (max-width: 640px)，只按视口判断。桌面宽屏
+   （>640px）时卡片被 grid 压到 193~251px 宽，媒体查询不触发，操作行仍是
+   nowrap + justify-content:flex-end；而 .pill-btns 是 flex:none 的 174px
+   胶囊，加 4×30px 图标 + gap 共需约 324px，于是 flex 行溢出、胶囊被顶到
+   x=-133（负坐标），左端连同「取回」一起被卡片 overflow:hidden 裁掉。
+
+   修法：给 .cloud-card 开容器查询上下文，按卡片宽度收敛。
+     实测卡片宽度：手机整宽 ~312px、桌面 auto-fill 网格 ~193~251px，
+     两类都落在断点内，统一走「胶囊独占一行 + 图标等距排开」。
+   .cloud-actions-cell 默认已 flex-wrap:wrap（见上方），保证任何情况下
+   内容都在卡片内部换行，不会再出现负 x 的溢出。 */
+.cloud-card {
+  container-type: inline-size;
+}
+@container (max-width: 379px) {
   .cloud-actions-cell {
-    flex-wrap: wrap;
-    row-gap: 8px;
     width: 100%;
     justify-content: flex-start;
   }
@@ -519,6 +457,7 @@ window.cloudLibrary = function cloudLibrary() {
   .cloud-actions-cell .pill-btns .btn {
     flex: 1 1 0;
     justify-content: center;
+    min-width: 0;
   }
   .cloud-actions-cell .icon-btn,
   .cloud-actions-cell .icon-btn.xs {
@@ -581,23 +520,18 @@ window.cloudLibrary = function cloudLibrary() {
 .archived-folder .af-chev svg { width: 16px; height: 16px; }
 .archived-folder[open] .af-chev { transform: rotate(180deg); }
 .archived-folder .af-body {
-  padding: 0 8px 8px;
+  padding: 0 var(--space-4) var(--space-4);  /* 与卡片间距同档，浏览页网格无额外 8px 收缩 */
   border-top: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
 }
 .cloud-card-grid {
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--space-4);
-  padding: var(--space-2);
-}
-/* 卡片上的网盘名徽标：绝对定位到缩略图左下角（组头已标网盘名，卡片内是次要信息） */
-.cloud-drive-float {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 2;
-  background: rgba(10, 12, 20, 0.68);
-  color: #fff;
-  border-color: transparent;
+  /* 与浏览页 .browse-main .thumb-grid 同参数（minmax 240 / gap space-5 / 无额外 padding）：
+     历史缺陷（用户可见：云端归档缩略图比浏览页窄且挤、不规整）——
+     这里曾是 minmax(220px) + gap space-4 + padding space-2，
+     卡片比浏览页窄 20px、列间距小一档、外层 af-body 又叠 8px 内边距，
+     三层叠加后同一屏两页观感明显不一致。统一后云端卡片与浏览页完全同宽同距。 */
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-5);
+  padding: 0;
 }
 /* 云端路径：等宽小字，超长省略 */
 .cloud-card .cloud-path {
@@ -620,23 +554,6 @@ window.cloudLibrary = function cloudLibrary() {
 .cloud-actions-cell .btn {
   white-space: nowrap;
 }
-.cloud-drive-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  background: rgba(124, 58, 237, 0.12);
-  color: var(--brand, #a78bfa);
-  border: 1px solid rgba(124, 58, 237, 0.25);
-}
-[data-theme="light"] .cloud-drive-badge {
-  background: rgba(124, 58, 237, 0.08);
-  color: #6d28d9;
-  border-color: rgba(124, 58, 237, 0.2);
-}
 @media (max-width: 768px) {
   .cloud-toolbar-wrap {
     flex-direction: column;
@@ -650,25 +567,15 @@ window.cloudLibrary = function cloudLibrary() {
 
 </style>
 
-<div class="cloud-library" x-data="cloudLibrary()" x-init="init()">
+<div class="cloud-library" x-data="cloudLibrary()">
 <div class="page-header">
   <div>
     <h1>云端归档</h1>
     <p>已归档到云端网盘的文件（查看 TG 历史归档记录与取回）</p>
   </div>
   <div class="row" style="gap:8px;align-items:center;">
-    <!-- 顶栏自定义 OpenList 域名配置按钮：只显示「已配置好」，域名放进 title 提示 -->
-    <button type="button" class="btn sm"
-            :class="openlistBase ? 'primary' : 'ghost'"
-            @click="openDomainModal()"
-            :title="openlistBase ? ('OpenList 外部访问域名：' + displayDomain(openlistBase) + '（点击修改）') : '配置 OpenList 外部公网访问域名/IP与端口'">
-      <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="2" y1="12" x2="22" y2="12"/>
-        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/>
-      </svg>
-      <span x-text="openlistBase ? '已配置好' : '设置 OpenList 域名'"></span>
-    </button>
+    <!-- 域名配置已收敛到「设置 → OpenList 云端存储」的全局字段，
+         这里不再放入口：同一样东西在多处可改，才是之前「这页配了那页没配」的根源。 -->
     <button type="button" class="btn sm danger" onclick="window.__clearMissingCloudFiles()" title="清理云端已不存在的失效记录">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
       清理已失效
@@ -866,10 +773,6 @@ window.cloudLibrary = function cloudLibrary() {
               </span>
               {% endif %}
             </span>
-            <span class="cloud-drive-badge cloud-drive-float">
-              <svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-hdd"/></svg>
-              {{ f.drive or '网盘' }}
-            </span>
             {# 取回中状态胶囊（轮询 JS 控制显隐，与旧表格共用同一 data-ret-pill 契约） #}
             <span class="pill pending" style="display:none;" data-ret-pill data-cloud-path="{{ f.cloud_path }}"><span class="p-dot"></span>取回中</span>
           </div>
@@ -1063,36 +966,6 @@ window.cloudLibrary = function cloudLibrary() {
   </div>
 </div>
 
-<!-- 自定义 OpenList 外部访问域名设置弹窗 -->
-<div class="modal-backdrop" :class="{'show': showDomainModal}" x-show="showDomainModal" x-cloak style="display:none;" @click.self="showDomainModal = false">
-  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px;width:92vw;">
-    <div class="modal-head">
-      <h2 style="font-size:16px;">配置 OpenList 外部访问域名</h2>
-      <button type="button" class="icon-btn xs" aria-label="关闭" @click="showDomainModal = false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg>
-      </button>
-    </div>
-    <div style="padding:16px 20px;">
-      <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;line-height:1.5;">
-        当 TG 项目与 OpenList 部署在云端 VPS 时，本地浏览器无法直接访问内网 <code>127.0.0.1</code>。请在此指定您的公网 IP 或域名，点击列表中所有「OpenList」直达按钮将自动以此地址打开。
-      </p>
-      <div class="field">
-        <label>OpenList 外部访问域名 / IP (端口可选)</label>
-        <input class="input" type="text" x-model="domainInput" placeholder="例如：http://pan.yourdomain.com:5244 或 pan.yourdomain.com">
-        <div class="hint">端口可自定义也可不填（默认自动补齐 http://）。支持：<code>http://IP:端口</code>、<code>https://域名</code>、<code>pan.xxx.com</code></div>
-      </div>
-    </div>
-    <div class="modal-foot" style="justify-content:space-between;">
-      <button type="button" class="btn sm ghost" @click="resetDomain()">清除 / 恢复默认</button>
-      <div class="row" style="gap:8px;">
-        <button type="button" class="btn sm ghost" @click="showDomainModal = false">取消</button>
-        <button type="button" class="btn sm primary" :disabled="savingDomain" @click="saveDomain()">
-          <span x-text="savingDomain ? '保存中…' : '保存域名'">保存域名</span>
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- 复制 / 移动到其他网盘/目录弹窗 -->
 <div class="modal-backdrop" :class="{'show': showTransferModal}" x-show="showTransferModal" x-cloak style="display:none;" @click.self="showTransferModal = false">
@@ -1161,8 +1034,11 @@ window.cloudLibrary = function cloudLibrary() {
    「浏览下载」页一直正常，正因为它用的是静态 data-* + onclick。 #}
 <script>
 (function () {
+  /* 服务端全局值优先（设置页 → OpenList 云端存储 里配置的唯一真相），
+     localStorage 只作兜底：老版本曾把域名存在各页面的 localStorage 里，
+     升级后仍能读出来，但一旦服务端配了就以服务端为准。 */
   window.__CLOUD_OPENLIST_BASE = window.__CLOUD_OPENLIST_BASE ||
-    (localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '');
+    ({{ (openlist_public_base or '') | tojson }} || localStorage.getItem('openlist_public_base') || '');
 
   window.__cloudFormatBase = function (raw) {
     var s = String(raw || '').trim();
@@ -1206,13 +1082,11 @@ window.cloudLibrary = function cloudLibrary() {
     var isInternal = !href || /(^https?:\/\/)?(127\.0\.0\.1|localhost|0\.0\.0\.0)/i.test(href);
     if (isInternal) {
       if (evt) evt.preventDefault();
+      /* 域名配置已收敛到「设置 → OpenList 云端存储」，这里只引导过去，
+         不再弹本页自己的弹窗（那正是「这页配了那页没配」的来源）。 */
       if (window.__toast) {
         window.__toast('无法打开 OpenList', 'info',
-          '当前是内网地址，请先设置 OpenList 外部访问域名/公网 IP');
-      }
-      var root = document.querySelector('.cloud-library');
-      if (root && window.Alpine && window.Alpine.$data) {
-        try { window.Alpine.$data(root).openDomainModal(); } catch (e) {}
+          '当前是内网地址，请到 设置 → OpenList 云端存储 填写对外访问域名');
       }
       return false;
     }

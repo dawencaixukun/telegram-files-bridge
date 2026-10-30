@@ -168,12 +168,15 @@ async def archive_cancel(request: Request):
         return {"ok": False, "message": "任务不存在或已被清理"}
     if job.get("state") not in ("queued", "uploading"):
         return {"ok": True, "job": _archive_public(job)}
-    task = _ARCHIVE_TASKS.get(jid)
-    if task is not None and not task.done():
-        task.cancel()
+    # 必须先打标记再 cancel：worker 的 CancelledError 分支靠它区分
+    # 「用户取消」与「进程退出中断」，后者必须可自动续跑。
+    job["user_cancelled"] = True
     job["state"] = "cancelled"
     job["error"] = "用户已取消"
     job["updated_at"] = time.time()
+    task = _ARCHIVE_TASKS.get(jid)
+    if task is not None and not task.done():
+        task.cancel()
     _archive_save()
     return {"ok": True, "job": _archive_public(job)}
 
@@ -186,11 +189,16 @@ async def api_archive_failed_summary():
     failed_jobs.sort(key=lambda x: float(x.get("updated_at") or x.get("created_at") or 0.0), reverse=True)
 
     categories_count = {
+        "interrupted": 0,
+        "verify_pending": 0,
         "token_expired": 0,
         "storage_full": 0,
         "conflict": 0,
         "timeout": 0,
         "unknown": 0,
+        "source_missing": 0,
+        "remote_changed": 0,
+        "remote_missing": 0,
     }
 
     diagnostics = []
@@ -217,6 +225,9 @@ async def api_archive_failed_summary():
             # 让前端知道这个失败到底能不能重试：永久性错误（本地文件已丢
             # 失等）必须把「重试」按钮置灰，而不是让用户点了又点。
             "retryable": cat_code not in _PERMANENT_ARCHIVE_ERRORS,
+            # 「云端核验未完成」重试时只重新核验、不重新上传（文件其实已传完）。
+            # 前端据此把按钮文案改成「重新核验」，避免用户以为要重传一遍。
+            "retryMode": "verify" if cat_code == "verify_pending" else "upload",
         })
 
     return {
@@ -309,8 +320,14 @@ async def api_archive_retry_failed(request: Request):
                 log.warning("重试前自动刷新 OpenList 凭据失败: %s", e)
 
         retried_ids = []
+        verify_ids = []
         for j, cat_code in candidates:
             jid = str(j.get("id"))
+            # 「云端核验未完成」= 文件其实已经传上去了，只是大小没查到。
+            # 直接重置成 queued 会让 worker 从头覆盖上传几个 GB；改为只重新核验。
+            if cat_code == "verify_pending":
+                verify_ids.append(jid)
+                continue
             j["state"] = "queued"
             j["progress"] = 0
             j["error"] = ""
@@ -319,9 +336,22 @@ async def api_archive_retry_failed(request: Request):
             if force_overwrite and cat_code == "conflict":
                 j["policy"] = "overwrite"
             retried_ids.append(jid)
-            if jid not in _ARCHIVE_TASKS or _ARCHIVE_TASKS[jid].done():
-                task = asyncio.create_task(_archive_worker(j))
-                _ARCHIVE_TASKS[jid] = task
+            _archive_enqueue(j)
+
+        if verify_ids:
+            try:
+                _vtok = await _openlist_token()
+            except Exception as e:  # noqa: BLE001
+                log.warning("重试前取 OpenList 令牌失败（核验类任务跳过）: %s", e)
+                _vtok = ""
+            if _vtok:
+                for _vid in verify_ids:
+                    _vjob = _ARCHIVE_JOBS.get(_vid)
+                    if _vjob is None:
+                        continue
+                    _vjob["retry_count"] = int(_vjob.get("retry_count") or 0) + 1
+                    if await _archive_reverify_job(_vjob, _vtok):
+                        retried_ids.append(_vid)
 
         _archive_save()
         log.info("已成功一键批量重试 %d 个失败归档任务: %s", len(retried_ids), retried_ids)
@@ -331,6 +361,7 @@ async def api_archive_retry_failed(request: Request):
             "message": f"已成功重新调度 {len(retried_ids)} 个失败归档任务",
             "retriedCount": len(retried_ids),
             "retriedJobIds": retried_ids,
+            "verifyOnlyCount": len(verify_ids),
             "skippedCount": 0,
         }
 

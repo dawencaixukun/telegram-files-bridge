@@ -9,9 +9,11 @@ import re
 import time
 import asyncio
 import posixpath
+from datetime import datetime as _dt_cls
 from urllib.parse import quote
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
+import httpx as _httpx
 from fastapi.responses import JSONResponse
 from core.config import OPENLIST_URL, _archive_norm_dir, _fmt_size
 from core.state import (
@@ -23,6 +25,11 @@ _UPLOAD_CHUNK = 4 << 20  # 4MB 分块
 # 历史值 1MB：流式写盘对每个分块做一次 await asyncio.to_thread(fh.write, chunk)，
 # 10GB 文件 = 10240 次线程池往返。放大到 4MB 后降到约 1/4，内存峰值仍只有
 # chunk × 并发数（_RETRIEVE_SEM 限 2）。上传侧读取同一常量，行为一致。
+
+# 删除类接口的专用超时（秒）。OpenList 的 fs/remove 在 OneDrive 上是同步删除，
+# 实测空目录就要 9~16 秒，远超共享客户端默认的 10 秒 —— 线上表现为稳定的
+# ReadTimeout + 空错误消息（「删除失败: 」）。改名/删除都走这个额度。
+_OPENLIST_REMOVE_TIMEOUT = float(os.environ.get("BRIDGE_OPENLIST_REMOVE_TIMEOUT", "180"))
 
 # 内存跨网盘复制/移动传输任务追踪器（供前端进度条轮询与 Telegram Bot 查询）
 _CLOUD_TRANSFER_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -228,26 +235,206 @@ async def _openlist_relocate_after_rename(token: str, remote_path: str,
     return None
 
 
+# ---------------------------------------------------------------------
+# 云端探测的三态语义（ok / missing / unknown）
+# ---------------------------------------------------------------------
+# 历史缺陷（线上实测）：_openlist_stat 把「请求超时/连接抖动」和「文件确实
+# 不存在」都压成同一个 None，调用方无从区分。上传完成后回查云端大小时，
+# OneDrive 侧冷启动/限流会让 /api/fs/get 从常态 0.6~1.0s 飙到 10~12s，
+# 而共享客户端的总超时恰好是 10s —— 请求刚超时、OpenList 在 11s 又返回了
+# 200 并已落盘。于是「文件其实传完了」被写成「上传后云端存在性核验失败」，
+# 53 条告警里 8 条都是这个假失败，用户重试也大概率再次撞上。
+# 现在拆成三态：探测失败(unknown)绝不当成「不存在」，先重试再兜底列目录，
+# 只有明确拿到 missing 才允许走「云端不存在」的分支。
+_OPENLIST_STAT_TIMEOUT = float(os.environ.get("BRIDGE_OPENLIST_STAT_TIMEOUT", "45"))
+_OPENLIST_STAT_ATTEMPTS = int(os.environ.get("BRIDGE_OPENLIST_STAT_ATTEMPTS", "3"))
+_OPENLIST_STAT_BACKOFF = 1.5
+
+STAT_OK = "ok"
+STAT_MISSING = "missing"
+STAT_UNKNOWN = "unknown"
+
+
+async def _openlist_stat_ex(token: str, remote_path: str,
+                            attempts: Optional[int] = None) -> Tuple[str, int, Dict[str, Any]]:
+    """三态探测云端文件：(status, size, raw)，status ∈ ok / missing / unknown。
+
+    * ok      —— 拿到了元数据（size 可能为 0，0 字节残片由调用方判定不完整）
+    * missing —— OpenList 明确回答「不存在」
+    * unknown —— 超时/连接失败/响应不可解析：**结论未知**，调用方不得当成不存在
+
+    只对 unknown 重试：missing 是确定性结论，重试没有意义。
+    """
+    tries = max(1, int(attempts if attempts is not None else _OPENLIST_STAT_ATTEMPTS))
+    last_err = ""
+    for i in range(tries):
+        try:
+            resp = await _openlist_client.post(
+                "/api/fs/get", json={"path": remote_path},
+                headers={"Authorization": token},
+                timeout=httpx.Timeout(_OPENLIST_STAT_TIMEOUT))
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{e.__class__.__name__}: {e}"
+        else:
+            code, data, msg = _openlist_env(resp)
+            if code == 200 and isinstance(data, dict):
+                try:
+                    size = int(data.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                return STAT_OK, size, data
+            if code in (401, 403):
+                # 鉴权失效是确定性结论，交给调用方重登，不要在这里空转重试。
+                return STAT_UNKNOWN, 0, {"auth": True, "message": msg or f"HTTP {code}"}
+            if code in (404, 500) and not msg:
+                last_err = f"业务码 {code}"
+            elif code != 200 and "not" in str(msg).lower():
+                # OpenList 明确回答不存在（各驱动文案不一，统一按关键字识别）
+                return STAT_MISSING, 0, {"message": msg}
+            else:
+                last_err = msg or f"业务码 {code}"
+        if i < tries - 1:
+            await asyncio.sleep(_OPENLIST_STAT_BACKOFF * (i + 1))
+    return STAT_UNKNOWN, 0, {"message": last_err or "探测失败"}
+
+
+async def _openlist_locate_via_list(token: str, remote_path: str) -> Tuple[str, int]:
+    """兜底：用父目录 /api/fs/list 反查文件大小，绕开单文件 fs/get 的慢路径。
+
+    OneDrive 驱动对单个文件做 fs/get 时会走一次远端元数据拉取（实测 10s+），
+    而列目录经常命中 OpenList 自己的缓存（实测 1ms~1s）。核验失败时用它二次
+    确认，能救回绝大部分「其实已经传完」的假失败。
+    """
+    raw = str(remote_path or "").strip().replace("\\", "/").lstrip("/")
+    if not raw:
+        return STAT_UNKNOWN, 0
+    parent = posixpath.dirname(posixpath.normpath("/" + raw))
+    name = posixpath.basename(posixpath.normpath("/" + raw))
+    if not parent or not name:
+        return STAT_UNKNOWN, 0
+    try:
+        # 必须翻页拉全：单页上限 500，目录一旦超过 500 个文件，落到第二页的
+        # 文件会被误判成「不存在」——核验时就会把一个已传完的文件判成失败。
+        code, content, _msg = await _openlist_list_all(
+            token, parent, timeout=_OPENLIST_STAT_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        log.debug("核验兜底列目录失败 %s: %s", parent, e)
+        return STAT_UNKNOWN, 0
+    if code != 200:
+        return STAT_UNKNOWN, 0
+    for c in content:
+        if not isinstance(c, dict) or c.get("is_dir"):
+            continue
+        if str(c.get("name") or "") == name:
+            try:
+                return STAT_OK, int(c.get("size") or 0)
+            except (TypeError, ValueError):
+                return STAT_OK, 0
+    return STAT_MISSING, 0
+
+
+async def _openlist_verify_size(token: str, remote_path: str,
+                                attempts: Optional[int] = None) -> Tuple[str, int]:
+    """上传后核验云端真实大小：(status, size)。unknown 表示「确实没查成」。
+
+    顺序：fs/get 三态重试 → 失败则父目录 fs/list 兜底 → 仍失败才返回 unknown。
+    **unknown 不等于 0 字节**：调用方必须把「查不到」和「查到了但大小不符」
+    分开处理，绝不能因为一次超时就派发「覆盖上传」重传几个 GB。
+    """
+    status, size, raw = await _openlist_stat_ex(token, remote_path, attempts=attempts)
+    if status != STAT_UNKNOWN:
+        return status, size
+    if raw.get("auth"):
+        raise _OpenListAuthErr()
+    status2, size2 = await _openlist_locate_via_list(token, remote_path)
+    if status2 != STAT_UNKNOWN:
+        log.info("云端核验 fs/get 超时，已用目录列表兜底确认: %s（%s，%d 字节）",
+                 remote_path, status2, size2)
+        return status2, size2
+    return STAT_UNKNOWN, 0
+
+
+# OpenList /api/fs/list 单页硬上限 500（实测：per_page=500 返回 500/总数 635；
+# per_page=600 返回 600；per_page=0 表示不分页）。历史缺陷：所有调用点都写死
+# "page": 1, "per_page": 500 且只看第一页，于是当一个目录里的文件数超过 500 时，
+# 第 501 个之后的文件在程序眼里"不存在"——云端归档页把 80 条已成功归档的记录
+# 误判成「云端失效（已被删除或移动）」，用户点「重新取回」也会失败。
+# 统一走 _openlist_list_all，按 total 翻页把 content 拉全。
+_OPENLIST_LIST_PAGE_SIZE = 500
+_OPENLIST_LIST_MAX_PAGES = 200
+
+
+async def _openlist_list_all(token: str, path: str, per_page: int = _OPENLIST_LIST_PAGE_SIZE,
+                             refresh: bool = False,
+                             timeout: Optional[float] = None) -> Tuple[int, List[Dict[str, Any]], str]:
+    """按页拉取目录下的全部条目，返回 (code, content, message)。
+
+    OpenList 的 per_page 上限是 500，且响应里带 total —— 只要 content 还没拉满
+    total 就继续翻页。任何一页失败都返回该页的错误码，调用方按「列目录失败」
+    处理，绝不允许把"只拉到第一页"当成"目录里就这么多文件"（那会把真实存在
+    的文件误判为不存在）。per_page<=0 视为不分页（OpenList 原生语义）。
+    """
+    if per_page <= 0:
+        per_page = 0
+    page_size = per_page or 1000
+    all_items: List[Dict[str, Any]] = []
+    kw: Dict[str, Any] = {}
+    if timeout is not None:
+        kw["timeout"] = httpx.Timeout(timeout)
+    page = 1
+    total = -1
+    while page <= _OPENLIST_LIST_MAX_PAGES:
+        resp = await _openlist_client.post(
+            "/api/fs/list",
+            json={"path": path, "password": "", "page": page, "per_page": per_page,
+                  "refresh": bool(refresh)},
+            headers={"Authorization": token}, **kw)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            return 401, [], msg or "OpenList 令牌失效"
+        if code != 200 or not isinstance(data, dict):
+            return code, [], msg or f"OpenList 返回业务码 {code}"
+        content = [c for c in (data.get("content") or []) if isinstance(c, dict)]
+        try:
+            total = int(data.get("total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        all_items.extend(content)
+        # 没有 total 或已经拉齐，或本页不足一页（说明到底了）就收工
+        if not content or total <= 0 or len(all_items) >= total:
+            break
+        if 0 < len(content) < page_size:
+            break
+        page += 1
+    # 翻页期间目录可能被并发改动（上传/删除），同一文件可能出现在两页里；
+    # 按 (名字, 是否目录) 去重，保持首次出现顺序。
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for it in all_items:
+        key = (str(it.get("name") or ""), bool(it.get("is_dir")))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+    return 200, deduped, ""
+
+
 async def _openlist_stat(token: str, remote_path: str) -> Optional[Dict[str, Any]]:
-    """探测远端文件元数据（含 size）。不存在或探测失败返回 None。
+    """探测远端文件元数据（含 size）。**明确不存在**或探测最终失败返回 None。
 
     与 _openlist_exists 的区别：必须拿到 **size**。历史事故：上传被取消后
     OneDrive 会留下 0 字节残片，只判「存在与否」会把它当成已归档，
     接着按 deleteLocal 删掉本地文件 —— 本地没了、云端是空壳，真实数据丢失。
+
+    需要区分「不存在」和「探测失败」的调用方请直接用 _openlist_stat_ex；
+    本函数只为兼容既有调用点保留（内部已带重试与兜底）。
     """
-    try:
-        resp = await _openlist_client.post(
-            "/api/fs/get", json={"path": remote_path}, headers={"Authorization": token})
-    except Exception:  # noqa: BLE001
-        return None
-    code, data, _ = _openlist_env(resp)
-    if code != 200 or not isinstance(data, dict):
-        return None
-    try:
-        size = int(data.get("size") or 0)
-    except (TypeError, ValueError):
-        size = 0
-    return {"size": size, "raw": data}
+    status, size, raw = await _openlist_stat_ex(token, remote_path)
+    if status == STAT_OK:
+        return {"size": size, "raw": raw}
+    if status == STAT_UNKNOWN and raw.get("auth"):
+        raise _OpenListAuthErr()
+    return None
 
 
 async def _openlist_exists(token: str, remote_path: str) -> bool:
@@ -332,23 +519,15 @@ async def openlist_dirs(path: str = "/") -> Dict[str, Any]:
     except RuntimeError as e:
         return {"ok": False, "message": str(e)}
     try:
-        async def _list_once(tok: str):
-            return await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": d, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                headers={"Authorization": tok})
-
-        resp = await _list_once(token)
-        code, data, msg = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
+        code, content, msg = await _openlist_list_all(token, d)
+        if code in (401, 403):
             token = await _openlist_relogin()
-            resp = await _list_once(token)
-            code, data, msg = _openlist_env(resp)
+            code, content, msg = await _openlist_list_all(token, d)
         if code != 200:
             return {"ok": False, "message": msg or f"OpenList 返回业务码 {code}"}
         base = "" if d == "/" else d
         dirs = []
-        for c in (data.get("content") or []):
+        for c in content:
             if c.get("is_dir"):
                 name = str(c.get("name") or "")
                 if name:
@@ -446,23 +625,15 @@ async def openlist_list_files(path: str = "/") -> Dict[str, Any]:
     except RuntimeError as e:
         return {"ok": False, "files": [], "message": str(e)}
     try:
-        async def _list_once(tok: str):
-            return await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": d, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                headers={"Authorization": tok})
-
-        resp = await _list_once(token)
-        code, data, msg = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
+        code, content, msg = await _openlist_list_all(token, d)
+        if code in (401, 403):
             token = await _openlist_relogin()
-            resp = await _list_once(token)
-            code, data, msg = _openlist_env(resp)
+            code, content, msg = await _openlist_list_all(token, d)
         if code != 200:
             return {"ok": False, "files": [], "message": msg or f"OpenList 返回业务码 {code}"}
         base = "" if d == "/" else d
         files = []
-        for c in (data.get("content") or []):
+        for c in content:
             if not isinstance(c, dict) or c.get("is_dir"):
                 continue
             name = str(c.get("name") or "")
@@ -589,6 +760,45 @@ async def openlist_storages() -> List[Dict[str, Any]]:
     return storages
 
 
+def _openlist_mtime_epoch(raw: str) -> float:
+    """OpenList 的 modified/created 字符串 → epoch 秒（排序用）。
+
+    实测 OpenList 可能返回这些形态，必须都吃得住，解析不出来就返回 0：
+      "2026-08-20T15:30:12+08:00"   RFC3339 带时区
+      "2026-08-20T15:30:12Z"        UTC
+      "2026-08-20 15:30:12"         裸本地时间
+      "2026-08-20"                  只有日期
+      "" / "0001-01-01T00:00:00Z"   未提供（Go 零值）
+
+    为什么不在前端排：字符串比较在缺秒/缺时间时会给出错误顺序，
+    而时区不归一时 UTC 与本地时间混排同样错乱。统一在服务端转成
+    数值下发，前端只比大小。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return 0.0
+    # Go 的零值时间代表「未提供」，当成 0 而不是 1970 之前的一个真实时刻
+    if s.startswith("0001-01-01"):
+        return 0.0
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    # fromisoformat 覆盖 "2026-08-20T15:30:12+08:00" / "2026-08-20 15:30:12"
+    # / "2026-08-20T15:30" / "2026-08-20" 全部形态（3.11+ 连 "Z" 都直接认，
+    # 上面那步替换是给 3.10 及更早兜底）。
+    try:
+        return float(_dt_cls.fromisoformat(s).timestamp())
+    except Exception:  # noqa: BLE001
+        pass
+    # 非 ISO 的兜底：只有年-月-日的带斜杠写法等
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+        try:
+            return float(time.mktime(time.strptime(s, fmt)))
+        except ValueError:
+            continue
+    log.debug("无法解析的修改时间，按 0 排序: %r", raw)
+    return 0.0
+
+
 async def openlist_fs_list_all(path: str = "/", refresh: bool = False) -> Dict[str, Any]:
     norm_path = posixpath.normpath("/" + str(path or "").strip().replace("\\", "/").lstrip("/"))
     if not norm_path or norm_path == ".":
@@ -683,13 +893,19 @@ async def openlist_fs_list_all(path: str = "/", refresh: bool = False) -> Dict[s
             item_drive = top_drive or (name if norm_path == "/" else "")
             item_drive_label = top_drive_label or get_driver_label(item_drive)
 
+            # 修改时间同时给出「人看的字符串」和「机器排序用的 epoch 秒」。
+            # 前端按大小/时间排序必须用数值：直接比较 "2026-08-20 15:30" 这种
+            # 字符串在缺秒、缺时间（OpenList 有时只给日期）时排序结果是错的，
+            # 而解析失败时统一退化为 0（排到最后）也比乱序好。
+            _raw_modified = str(item.get("modified") or item.get("created") or "")
             entry = {
                 "name": name,
                 "path": item_path,
                 "is_dir": is_dir,
                 "size": size,
                 "size_human": "—" if is_dir else _fmt_size(size),
-                "modified": str(item.get("modified") or item.get("created") or "")[:19].replace("T", " "),
+                "modified": _raw_modified[:19].replace("T", " "),
+                "mtime": _openlist_mtime_epoch(_raw_modified),
                 "thumb": item_thumb,
                 "type": item_type,
                 "is_video": is_video,
@@ -1155,6 +1371,74 @@ async def _openlist_fs_move(src_dir: str, dst_dir: str, names: List[str]) -> Dic
 
 openlist_fs_copy = _openlist_fs_copy
 openlist_fs_move = _openlist_fs_move
+
+
+async def _openlist_fs_remove(dir_path: str, names: List[str]) -> Dict[str, Any]:
+    """调用 OpenList /api/fs/remove 批量删除同一目录下的多个文件/目录。
+
+    OpenList 规范：POST /api/fs/remove {"dir": "...", "names": ["..."]}。
+    一次请求删多个名字 —— 逐个发请求在「勾选 50 个文件」时会打到反代限流，
+    而且失败一半时用户根本不知道哪几个没删掉。
+
+    返回 {"ok", "code", "message", "deleted": [...], "failed": [...]}，
+    逐项成败都要能报出来：批量删除不能只说「成功」而不说删了几个。
+    """
+    d_dir = posixpath.normpath("/" + str(dir_path or "").strip().replace("\\", "/").lstrip("/"))
+    clean_names = [posixpath.basename(str(n).strip()) for n in (names or []) if str(n).strip()]
+    clean_names = [n for n in clean_names if n and n not in (".", "..")]
+    if not clean_names:
+        return {"ok": False, "code": 400, "message": "缺少要删除的文件名"}
+    try:
+        token = await _openlist_token()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "code": 502, "message": f"OpenList 未就绪: {e}"}
+
+    async def _remove_once(tok: str):
+        # 必须显式放宽超时：_openlist_client 默认只有 10 秒，而 OneDrive 侧的
+        # fs/remove 是**同步**执行（要真的把文件从云盘删掉），实测单个空目录
+        # 就要 9~16 秒，删几十个文件更久。用默认超时会稳定抛 ReadTimeout，
+        # 异常 message 还是空字符串 → 用户只看到「删除失败: 」一个冒号。
+        return await _openlist_client.post(
+            "/api/fs/remove",
+            json={"dir": d_dir, "names": clean_names},
+            headers={"Authorization": tok},
+            timeout=_OPENLIST_REMOVE_TIMEOUT,
+        )
+
+    try:
+        resp = await _remove_once(token)
+        code, data, msg = _openlist_env(resp)
+        if resp.status_code == 401 or code in (401, 403):
+            token = await _openlist_relogin()
+            resp = await _remove_once(token)
+            code, data, msg = _openlist_env(resp)
+        # 「不存在」不算失败：用户可能刚在别处删过，报错只会制造噪音
+        missing = ("not found" in (msg or "").lower()
+                   or "no such file" in (msg or "").lower()
+                   or "object not found" in (msg or "").lower())
+        if resp.status_code != 200 or (code != 200 and not missing):
+            return {"ok": False, "code": code,
+                    "message": msg or f"OpenList 返回业务码 {code}",
+                    "deleted": [], "failed": list(clean_names)}
+        return {"ok": True, "code": 200 if code == 200 else code,
+                "message": msg or f"已删除 {len(clean_names)} 项",
+                "deleted": list(clean_names), "failed": []}
+    except Exception as e:  # noqa: BLE001
+        log.error("OpenList fs/remove 异常 (%s, %s): %s", d_dir, clean_names, e)
+        # httpx 的超时异常 str() 是空的，直接 f"删除失败: {e}" 会变成
+        # 「删除失败: 」—— 用户完全看不出发生了什么。这里显式区分。
+        if isinstance(e, _httpx.TimeoutException):
+            return {"ok": False, "code": 504,
+                    "message": (f"删除请求超时（{int(_OPENLIST_REMOVE_TIMEOUT)} 秒）："
+                                f"云盘侧仍在处理，请刷新页面确认结果，"
+                                f"不要立即重复删除"),
+                    "deleted": [], "failed": list(clean_names)}
+        return {"ok": False, "code": 500,
+                "message": f"删除失败：{type(e).__name__}: {e}",
+                "deleted": [], "failed": list(clean_names)}
+
+
+openlist_fs_remove = _openlist_fs_remove
 
 
 async def openlist_download_to_file(remote_path: str, local_path: str, max_bytes: int = 0) -> Tuple[bool, str]:

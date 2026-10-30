@@ -733,6 +733,40 @@ async def _tg_state_of(telegram_id: Any) -> Optional[int]:
     return None
 
 
+async def _tg_code_length(telegram_id: Any) -> Optional[int]:
+    """读取 TDLib authorizationStateWaitCode.code_info.code_length（验证码权威位数）。
+
+    Telegram 登录验证码长度不固定：常见 6 位，部分账号/地区仍发 5 位。
+    TDLib 在 WAIT_CODE 状态里带 codeInfo.codeLength，这是唯一权威来源。
+    Java 后端序列化字段名不确定，camelCase / snake_case 两种都兼容；
+    取不到（旧后端不序列化 codeInfo）时返回 None，前端退回 5/6 自适应。
+    """
+    if telegram_id is None:
+        return None
+    try:
+        rows = await BACKEND.list_telegrams_raw(authorized="false")
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("id")) != str(telegram_id):
+            continue
+        state = row.get("lastAuthorizationState")
+        if not isinstance(state, dict):
+            return None
+        info = state.get("codeInfo") or state.get("code_info") or {}
+        if not isinstance(info, dict):
+            return None
+        raw = info.get("codeLength", info.get("code_length"))
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return n if 4 <= n <= 8 else None
+    return None
+
+
 async def _tg_wait_state(telegram_id: Any, accept: set, seconds: float = 12.0) -> Optional[int]:
     """轮询直到状态进入 accept 集合或终态(CLOSED/CLOSING)，超时返回 None。"""
     deadline = time.monotonic() + seconds

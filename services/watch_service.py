@@ -31,6 +31,7 @@ from core.state import (
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
+from services.throttle_service import throttle_plan_submit
 from core.config import (
     TG_WAIT_PHONE, TG_WAIT_CODE, TG_WAIT_PASSWORD, TG_WAIT_OTHER_DEVICE,
     _CUSTOM_FILE_NOTES, _is_meaningless_filename, _sanitize_note_filename
@@ -181,6 +182,17 @@ async def _enqueue_new(rule: Dict[str, Any], files: List[Dict[str, Any]]) -> int
         log.warning("监听命中 %d 个新文件，因%s熔断已挂起等待恢复（rule=%s）",
                     len(payload), reason, rule.get("id"))
         return 0
+
+    # TG 请求随机节流：监听一次可能命中多条新消息，同样不能零间隔整批倒进后端。
+    # 小批量（≤并发上限）直通，超出的进节流队列按随机间隔放行。
+    plan = await throttle_plan_submit(payload, "watch", {}, "频道监听")
+    if plan is not None:
+        payload = plan.get("submit") or []
+        if not payload:
+            _tasks_cache_invalidate()
+            log.info("监听命中文件已进入节流队列（rule=%s, %s）",
+                     rule.get("id"), plan.get("message"))
+            return 0
 
     try:
         await BACKEND.start_download_multiple({"files": payload})
@@ -647,7 +659,9 @@ def parse_chat_history_notes(messages: List[Dict[str, Any]]) -> Dict[str, Dict[s
 
 async def _auto_rename_archived_job(job: Dict[str, Any], new_stem: str) -> bool:
     """当已归档上云的视频收到新备注时，自动调用 OpenList /api/fs/rename 同步重命名云端文件。"""
-    from services.openlist_service import _openlist_token, _openlist_relogin, _openlist_env
+    from services.openlist_service import (
+        _openlist_token, _openlist_relogin, _openlist_env, _openlist_list_all,
+    )
     from core.state import _openlist_client
 
     old_path = str(job.get("remote_path") or "").strip().replace("\\", "/")
@@ -681,22 +695,13 @@ async def _auto_rename_archived_job(job: Dict[str, Any], new_stem: str) -> bool:
 
     # 检查同目录下是否已有同名文件，若冲突则自动追加 (2), (3)...
     try:
-        resp = await _openlist_client.post(
-            "/api/fs/list",
-            json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
-            headers={"Authorization": token},
-        )
-        code, data, _ = _openlist_env(resp)
-        if resp.status_code == 401 or code in (401, 403):
+        # 翻页拉全：单页上限 500，目录更大时只看第一页会漏判重名 -> 覆盖已有文件。
+        code, content, _msg = await _openlist_list_all(token, parent_dir)
+        if code in (401, 403):
             token = await _openlist_relogin()
-            resp = await _openlist_client.post(
-                "/api/fs/list",
-                json={"path": parent_dir, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                headers={"Authorization": token},
-            )
-            code, data, _ = _openlist_env(resp)
+            code, content, _msg = await _openlist_list_all(token, parent_dir)
         if code == 200:
-            existing = {str(c.get("name") or "") for c in (data.get("content") or [])}
+            existing = {str(c.get("name") or "") for c in content}
             idx = 2
             while target_name in existing and target_name != old_name:
                 target_name = f"{clean_stem} ({idx}){ext}"

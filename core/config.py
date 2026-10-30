@@ -9,6 +9,7 @@ import re
 import time
 import posixpath
 import secrets
+from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional, Set
 
 # ---------------------------------------------------------------------
@@ -457,6 +458,48 @@ def _archive_norm_dir(p: str) -> Optional[str]:
             return None
         parts.append(seg)
     return "/" + "/".join(parts)
+
+
+def _norm_public_base(raw: str) -> str:
+    """归一化 OpenList 对外访问域名（全局唯一，所有页面的「在 OpenList 中打开」共用）。
+
+    接受 `pan.example.com` / `pan.example.com:5244` / `https://pan.example.com`，
+    统一补成带 scheme 且无尾斜杠的形式；空串表示「清除，回落到服务器地址」。
+    非法输入返回空串，由调用方决定是报错还是当作清除。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if "://" in s:
+        # 已带 scheme：只接受 http/https。其余（ftp://、file://、javascript: 等）
+        # 一律拒绝。若在这里无脑补 http://，ftp://pan.example.com 会变成
+        # http://ftp//pan.example.com —— host 被吃成 "ftp"，看似通过校验，
+        # 实际指向一个不存在的地址。
+        if not re.match(r"^https?://", s, re.I):
+            return ""
+    else:
+        s = "http://" + s
+    try:
+        parts = urlsplit(s)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return ""
+    # 只允许 http(s) + host[:port][/base]，拒绝 userinfo / query / fragment：
+    # 这个值会拼进前端跳转 URL，带 userinfo 或 query 太容易被用来伪造跳转。
+    if parts.username or parts.password or parts.query or parts.fragment:
+        return ""
+    host = parts.hostname
+    if not re.match(r"^[A-Za-z0-9._\-]+$", host or ""):
+        return ""
+    netloc = host
+    try:
+        if parts.port:
+            netloc = f"{host}:{int(parts.port)}"
+    except ValueError:
+        return ""
+    base_path = (parts.path or "").rstrip("/")
+    return f"{parts.scheme.lower()}://{netloc}{base_path}"
 
 
 def _archive_join(remote_dir: str, filename: str) -> str:

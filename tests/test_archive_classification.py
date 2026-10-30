@@ -288,10 +288,17 @@ class TestArchiveClassification(unittest.TestCase):
             tempfile.mkdtemp(prefix="tg_spark_iso_"), ".hist.json")
         orig_speed_hist = list(_SPEED_HISTORY)
         _SPEED_HISTORY.clear()
+        # 「云端归档累计」已改为以归档引擎日志为真实口径（见 _dashboard_stats）。
+        # 这里必须隔离 _ARCHIVE_JOBS，否则 VPS 上真实加载的 300+ 条 done 记录
+        # 会混进来，让本用例断言的 "1" 变成 312+1。
+        orig_jobs = dict(core_state._ARCHIVE_JOBS)
+        core_state._ARCHIVE_JOBS.clear()
         try:
             stats = _aio.run(_dashboard_stats(tasks, disk))
         finally:
             _ts._DISK_HISTORY_FILE = orig_hist
+            core_state._ARCHIVE_JOBS.clear()
+            core_state._ARCHIVE_JOBS.update(orig_jobs)
             _SPEED_HISTORY.clear()
             _SPEED_HISTORY.extend(orig_speed_hist)
 

@@ -20,12 +20,14 @@ from core.config import (
 )
 from core.state import (
     _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS, _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save, _archive_config_save, _archive_sem, _archive_registry_lookup, _archive_public, _archive_state_of, _archive_latest_raw_of,
-    _archive_path_owners, _archive_upload_lock,
+    _archive_path_owners, _archive_upload_lock, _ARCHIVE_CONCURRENCY,
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
 from services.openlist_service import (
-    _openlist_token, _openlist_relogin, _openlist_mkdir_tree, _openlist_put_once, _openlist_ready, _openlist_direct_url, _openlist_client, _openlist_env, _OpenListAuthErr, _openlist_stat
+    _openlist_token, _openlist_relogin, _openlist_mkdir_tree, _openlist_put_once, _openlist_ready, _openlist_direct_url, _openlist_client, _openlist_env, _OpenListAuthErr, _openlist_stat,
+    _openlist_stat_ex, _openlist_verify_size, _openlist_list_all,
+    STAT_OK, STAT_MISSING, STAT_UNKNOWN,
 )
 from services.notification_service import notify_archive_success, notify_archive_failed
 from services.bot_command_service import remember_archive_error as _remember_archive_error
@@ -97,6 +99,22 @@ from services.watermark_service import _delete_local_file_by_job
 
 
 async def _archive_worker(job: Dict[str, Any]) -> None:
+    """归档单个任务。并发受 _archive_sem 限制（见 core/state.py 的说明）。
+
+    关键：**拿到信号量之前不得改状态**。旧实现虽然把 state='uploading' 写在
+    信号量内部，但 _archive_enqueue 会给每个排队文件立刻 create_task，
+    而前端读到的「归档中」等于已入队数量（实测单轮入队 35 个），
+    用户观感就是「并发过头、一堆卡在归档中」，而真实并发一直是 2。
+    现在排队中保持 queued（前端显示「排队中」），真正拿到并发额度才转
+    uploading，状态与实际资源占用严格一致。
+    """
+    if job.get("state") in ("done", "cancelled"):
+        return
+    # 排队阶段显式标记，供前端区分「已入队等待」与「正在上传」
+    if str(job.get("state") or "") in ("", "queued"):
+        job["state"] = "queued"
+        job.setdefault("error", "")
+        _archive_save()
     async with _archive_sem:
         if job.get("state") in ("done", "cancelled"):
             return
@@ -115,10 +133,13 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
                 # 本地已被删除时不能一律报失败：先核对云端是否已存在完整副本。
                 # 典型场景：同一文件被重复入队，前一个任务已归档并删本地，
                 # 后到的任务就会误报「本地文件不存在」并长期挂在失败列表里。
+                #
+                # 但「探测失败」不能被当成「云端没有」——那会把一个其实已归档的
+                # 文件判成永久性 source_missing（前端置灰不可重试），死记录再也
+                # 出不来。三态里只有明确 missing/0 字节才允许走失败分支。
                 expected = int(job.get("size_bytes") or 0)
-                stat = await _openlist_stat(token, job["remote_path"])
-                cloud_size = int((stat or {}).get("size") or 0)
-                if stat is not None and cloud_size > 0 and (not expected or cloud_size == expected):
+                st_code, cloud_size, _raw = await _openlist_stat_ex(token, job["remote_path"])
+                if st_code == STAT_OK and cloud_size > 0 and (not expected or cloud_size == expected):
                     job["state"] = "done"
                     job["progress"] = 100
                     job["archived_at"] = time.time()
@@ -130,15 +151,27 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
                     log.info("本地文件已被删除，但云端已存在完整副本，判定为已归档: %s（%d 字节）",
                              job["remote_path"], cloud_size)
                     return
+                if st_code == STAT_UNKNOWN:
+                    raise RuntimeError(
+                        "本地文件不存在，且云端状态未能确认（OpenList 探测超时），稍后重试可自动判定")
                 raise RuntimeError(
-                    "本地文件不存在或已被移动，且云端没有完整副本（云端 %s 字节）" % (cloud_size if stat is not None else "缺失"))
+                    "本地文件不存在或已被移动，且云端没有完整副本（云端 %s 字节）"
+                    % (cloud_size if st_code == STAT_OK else "缺失"))
             size = await asyncio.to_thread(os.path.getsize, lp)
             if size <= 0:
                 raise RuntimeError("本地文件为空（0 字节），无法归档")
             job["size_bytes"] = size
 
             if job.get("policy") == "skip":
-                remote_stat = await _openlist_stat(token, job["remote_path"])
+                skip_code, skip_size, _skip_raw = await _openlist_stat_ex(token, job["remote_path"])
+                remote_stat = {"size": skip_size} if skip_code == STAT_OK else None
+                if skip_code == STAT_UNKNOWN:
+                    # 查不清就按「云端可能有同名文件」处理会静默覆盖用户已有文件；
+                    # 按「不存在」处理会白传一遍。宁可走覆盖上传（幂等、只花带宽），
+                    # 但必须在日志里说清为什么没走 skip。
+                    log.warning("跳过策略：云端同名文件状态未能确认（探测超时），改为覆盖上传: %s",
+                                job["remote_path"])
+                    job["policy"] = "overwrite"
                 if remote_stat is not None:
                     remote_size = int(remote_stat.get("size") or 0)
                     # 关键红线：只有云端文件**大小与本地一致且非 0** 才允许跳过并删本地。
@@ -176,16 +209,52 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
                 except _OpenListAuthErr:
                     token = await _openlist_relogin()
                     await _openlist_put_once(token, job)
+                except FileNotFoundError:
+                    # 竞态：同一文件被重复入队，拿到锁时另一路已归档成功并按
+                    # deleteLocal 删掉了本地文件（实测线上 1 例）。这不是失败，
+                    # 重新核对云端：完整就判 done，否则才如实报源文件已丢失。
+                    verify_code2, verify_size2 = await _openlist_verify_size(token, job["remote_path"])
+                    if verify_code2 == STAT_OK and verify_size2 == size:
+                        job["state"] = "done"
+                        job["progress"] = 100
+                        job["archived_at"] = time.time()
+                        job["updated_at"] = job["archived_at"]
+                        job["error"] = ""
+                        job["remote_size"] = verify_size2
+                        job["local_deleted"] = True
+                        _archive_save()
+                        log.info("上传时本地文件已被并行任务清理，但云端副本完整，判定已归档: %s（%d 字节）",
+                                 job["remote_path"], verify_size2)
+                        return
+                    raise RuntimeError("本地文件在归档过程中被删除，且云端没有完整副本，请重新下载后再归档")
 
                 # 上传返回 200 不等于落盘完整：必须回查云端真实大小再判成功。
                 # 只有确认 size 与本地一致，才允许写 done 并按 deleteLocal 删本地文件。
-                verify = await _openlist_stat(token, job["remote_path"])
-                if verify is None:
-                    raise RuntimeError("上传后云端存在性核验失败，未确认归档完成")
-                verify_size = int(verify.get("size") or 0)
-                if verify_size != size:
+                #
+                # 三态闭环（线上实测痛点）：fs/get 单文件探测在 OneDrive 侧会飙到
+                # 10~12s，旧逻辑一次超时就直接判「核验失败」，53 条告警里 8 条是
+                # 「文件其实已传完」的假失败。现在：重试 → 目录列表兜底 → 仍查不清
+                # 时才报错，且报的是「无法确认」而不是「不存在」，绝不当成 0 字节
+                # 去触发整文件重传；也确实存疑时延后由下一轮 sweep 复查。
+                verify_code, verify_size = await _openlist_verify_size(token, job["remote_path"])
+                if verify_code == STAT_OK and verify_size != size:
+                    # 拿到了确定的大小且不一致 → 这才是真的没传完整，重新上传
                     raise RuntimeError(
                         f"上传后云端大小核验不一致（云端 {verify_size} 字节 / 本地 {size} 字节），判定归档未完成")
+                if verify_code != STAT_OK:
+                    # 结论未知：不删本地、不判失败，交给自动归档下一轮复查。
+                    # 判 failed 会让用户看到一条无从下手的告警，且源文件若被清理
+                    # 就再也救不回来 —— 保持可重试状态才是安全侧。
+                    job["state"] = "unverified"
+                    job["error"] = ""
+                    job["verify_pending"] = True
+                    job["verify_attempts"] = int(job.get("verify_attempts") or 0) + 1
+                    job["updated_at"] = time.time()
+                    _archive_save()
+                    log.warning(
+                        "上传完成但云端大小暂时无法确认（第 %d 次）：%s，已延后复查，本地文件保留",
+                        job["verify_attempts"], job["remote_path"])
+                    return
 
             job["state"] = "done"
             job["progress"] = 100
@@ -198,11 +267,28 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
             if job.get("delete_local"):
                 await _delete_local_file_by_job(job)
         except asyncio.CancelledError:
-            job["state"] = "cancelled"
-            job["error"] = "用户已取消"
+            # 取消有两种来源，必须区分开：
+            #   1) 用户点「取消」→ routers/archive.py 会先把 job 置 cancelled 再
+            #      task.cancel()，这里看到的状态已经是 cancelled，保持原样即可。
+            #   2) **进程退出** → bridge_server 的 shutdown 对所有 in-flight 任务
+            #      调 task.cancel()，此时 job 还是 uploading/queued。旧代码一律写
+            #      「用户已取消」，于是每次重启都凭空产生一批「用户已取消」记录，
+            #      而文件其实还躺在本地、从未归档 —— 实测线上 5 个「本地在存」的
+            #      文件就是这样被标记的（09:16:05 两条、03:10:24 两条…同一秒成对
+            #      出现，正好等于并发槽位，明显是批量取消而非人工点击）。
+            #      这类必须可自动重试，不能伪装成用户的决定。
+            if str(job.get("state") or "") in ("cancelled",) or job.get("user_cancelled"):
+                job["error"] = job.get("error") or "用户已取消"
+                job["user_cancelled"] = True
+                log.info("归档已取消: %s", job["filename"])
+            else:
+                job["state"] = "queued"
+                job["resume_pending"] = True
+                job["error"] = "上传被中断（bridge 重启），可重试"
+                job["interrupted_by_restart"] = True
+                log.info("归档被进程退出中断，已标记为待续跑: %s", job["filename"])
             job["updated_at"] = time.time()
             _archive_save()
-            log.info("归档已取消: %s", job["filename"])
         except RuntimeError as e:
             job["state"] = "failed"
             job["error"] = str(e)
@@ -256,14 +342,12 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
                         remote_names[d] = c_names
                         remote_files_by_dir[d] = c_files
                         continue
-                resp = await _openlist_client.post(
-                    "/api/fs/list",
-                    json={"path": d, "password": "", "page": 1, "per_page": 500, "refresh": False},
-                    headers={"Authorization": token})
-                code, data, _ = _openlist_env(resp)
+                # 必须翻页拉全（单页上限 500）：目录超过 500 个文件时，第一页
+                # 之后真实存在的文件会被判成「云端失效」——线上实测 635 个文件
+                # 的目录里，452 条归档记录有 80 条被误报为已删除/已移动。
+                code, content, _msg = await _openlist_list_all(token, d)
                 if code != 200:
                     continue
-                content = data.get("content") or []
                 c_names = {str(c.get("name") or "") for c in content}
                 c_files = [
                     c for c in content if isinstance(c, dict) and not c.get("is_dir")
@@ -473,6 +557,13 @@ def _classify_archive_error(raw_err: str) -> Tuple[str, str, str]:
     返回值 (code, label, 建议动作)。
     """
     err = str(raw_err or "").strip()
+    # 0) 新增：这两类此前全部落进 unknown，前端只显示「❓ 未知异常」，
+    #    用户完全看不到发生了什么（线上 53 条告警全是这两种文案）。
+    #    它们都是**可重试的临时状态**，必须单独成类并给出可执行建议。
+    if re.search(r"上传被中断|bridge 重启导致上传中断|重启导致上传中断", err, re.I):
+        return "interrupted", "⏸️ 上传被中断", "服务重启打断了归档，点击重试即可从断点重新入队"
+    if re.search(r"核验失败|云端大小.{0,6}无法确认|状态未能确认|存在性核验", err, re.I):
+        return "verify_pending", "🔎 云端核验未完成", "文件已上传但云端大小暂时查不到（OpenList 探测超时），稍后重试或等待自动复查"
     # 1) 永久性：本地源文件不存在，重试一万次也不会变好。
     #    历史缺陷：这类错误落到 unknown 且被前端当作可重试，用户每点一次
     #    「重试」就再跑一遍注定失败的归档（文件已删/已移动，重试无意义）。
@@ -498,6 +589,43 @@ def _classify_archive_error(raw_err: str) -> Tuple[str, str, str]:
 
 # 永久性失败分类：重试不会改变结果，必须禁止无限重试（否则形成死循环）。
 _PERMANENT_ARCHIVE_ERRORS = frozenset({"source_missing", "remote_changed", "remote_missing"})
+
+
+# 自动重试退避档位（秒）：第 1/2/3 次失败后分别等待这么久再自动重试。
+# 旧的 sweep 没有任何退避，失败任务在下一轮（30s 后）就被立刻重新入队，
+# _AUTO_ARCHIVE_MAX_ATTEMPTS=3 的额度在一两分钟内烧光，之后只能手动点重试。
+_AUTO_RETRY_BACKOFF = (30.0, 120.0, 480.0)
+
+
+def _archive_sweep_batch_limit() -> int:
+    """单轮自动归档最多入队多少个（可配 BRIDGE_ARCHIVE_SWEEP_BATCH）。
+
+    默认取「并发额度 × 4」：留出足够的排队深度让上传协程永远不空转，
+    又不至于把几百个任务堆在队列里。实测线上单轮峰值入队 35 个，
+    排队深度远超并发额度，用户看到的就是「一堆归档中、进度不动」。
+    """
+    default = max(4, _ARCHIVE_CONCURRENCY * 4)
+    try:
+        return max(1, int(os.environ.get("BRIDGE_ARCHIVE_SWEEP_BATCH", str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _archive_retry_due(job: Dict[str, Any], attempts: int) -> bool:
+    """该失败任务现在是否已过退避窗口、可以自动重试。
+
+    attempts 是已经失败的次数。第 1 次失败等 30s，第 2 次等 2min，第 3 次等 8min。
+    没有 updated_at 的历史记录直接放行（不让老数据永远卡住）。
+    """
+    try:
+        last = float(job.get("updated_at") or job.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return True
+    if last <= 0:
+        return True
+    idx = max(0, min(int(attempts or 1) - 1, len(_AUTO_RETRY_BACKOFF) - 1))
+    delay = _AUTO_RETRY_BACKOFF[idx]
+    return (time.time() - last) >= delay
 
 
 def _is_retryable_archive_error(raw_err: str) -> bool:
@@ -767,7 +895,10 @@ async def _auto_archive_sweep_impl() -> int:
         attempts = 0
         if latest is not None:
             st = str(latest.get("state") or "")
-            if st in ("queued", "uploading", "done", "cancelled"):
+            # unverified：上传已成功、只差云端大小确认。绝不能在这里重新入队——
+            # worker 第一步就是覆盖上传，会把几个 GB 白传一遍。它由
+            # _archive_resume_pending 的核验-only 复查路径负责推进。
+            if st in ("queued", "uploading", "done", "cancelled", "unverified"):
                 continue
             attempts = int(latest.get("auto_attempts") or 0)
             # 永久性失败（本地源文件已丢失等）不再自动重试：重扫一轮也注定再失败一次，
@@ -775,6 +906,12 @@ async def _auto_archive_sweep_impl() -> int:
             if not _is_retryable_archive_error(str(latest.get("error") or "")):
                 continue
             if attempts >= _AUTO_ARCHIVE_MAX_ATTEMPTS:
+                continue
+            # 指数退避：旧实现没有退避，30s 一轮的 sweep 会立刻把失败任务重新入队，
+            # 三次尝试在一两分钟内烧完（实测 4 条「云端核验未完成」就是这样被反复
+            # 重传、又反复撞上 OpenList 探测慢窗口），最后只能由用户手动点重试。
+            # 现在每次失败后的等待时间是 30s → 2min → 8min，给云端和网盘一个冷却期。
+            if not _archive_retry_due(latest, attempts):
                 continue
         lp = _resolve_host_local_path(t.get("local_path"))
         if not lp or not os.path.exists(lp):
@@ -825,7 +962,16 @@ async def _auto_archive_sweep_impl() -> int:
             "rule_id": rule_id,
         }
         _ARCHIVE_JOBS[job["id"]] = job
-        _ARCHIVE_TASKS[job["id"]] = asyncio.create_task(_archive_worker(job))
+        _archive_enqueue(job)
+        # 单轮 sweep 的入队上限：sweep 会把「所有已下载待归档」一次性入队
+        # （实测单轮 35 个），虽然 _archive_sem 限住了真实并发，但几百个
+        # job 同时排队会让状态面板长期显示几十个「归档中」，也让失败重试
+        # 与人工操作挤在同一个队列里。这里按并发额度的倍数截断，余下的
+        # 下一轮 sweep（30s 后）自动接着入队 —— 不丢任务，只是摊开。
+        if enqueued + 1 >= _archive_sweep_batch_limit():
+            log.info("自动归档：本轮已达入队上限 %d 个，余下任务下一轮继续",
+                     _archive_sweep_batch_limit())
+            break
         if rule_id and rule_id not in ("default", "quick") and rule is not None:
             _sub_bump(rule.get("id"), "enqueued")
         elif rule_id == "quick":
@@ -855,6 +1001,260 @@ async def _auto_archive_sweep_impl() -> int:
     return enqueued
 
 
+def _archive_enqueue(job: Dict[str, Any]) -> None:
+    """把一个 job 交给 worker（幂等：已在跑就不重复起 task）。"""
+    jid = str(job.get("id") or "")
+    if not jid:
+        return
+    t = _ARCHIVE_TASKS.get(jid)
+    if t is not None and not t.done():
+        return
+    _ARCHIVE_TASKS[jid] = asyncio.create_task(_archive_worker(job))
+
+
+_VERIFY_MAX_ATTEMPTS = 5
+
+
+async def _archive_reverify_job(job: Dict[str, Any], token: str) -> bool:
+    """只做核验、不重传：unverified 任务的复查路径。
+
+    为什么不能直接把 unverified 改回 queued 再丢给 worker —— worker 的第一步是
+    「本地文件存在 → 覆盖上传」，那会把几个 GB 重新传一遍，而文件大概率早就
+    上传成功了，仅仅是因为 fs/get 超时没查着。所以这里单独做一次核验：
+      大小一致 → done（并按 deleteLocal 清理本地）
+      大小不符 → failed（这一次是真的没传完整，可以重传）
+      仍查不清 → 保持 unverified，等下一轮，超过上限才判失败
+    """
+    expected = int(job.get("size_bytes") or 0)
+    try:
+        code, size = await _openlist_verify_size(token, str(job.get("remote_path") or ""))
+    except _OpenListAuthErr:
+        return False
+    except Exception as e:  # noqa: BLE001
+        log.debug("待核验任务复查异常: %s", e)
+        return False
+
+    now = time.time()
+    if code == STAT_OK and expected > 0 and size == expected:
+        job["state"] = "done"
+        job["progress"] = 100
+        job["error"] = ""
+        job["archived_at"] = now
+        job["updated_at"] = now
+        job["remote_size"] = size
+        job.pop("verify_pending", None)
+        log.info("待核验任务复查通过，判定已归档: %s（已核验 %d 字节）",
+                 job["remote_path"], size)
+        _archive_save()
+        notify_archive_success(job)
+        if job.get("delete_local"):
+            await _delete_local_file_by_job(job)
+        return True
+
+    if code == STAT_OK:
+        # 拿到了确定的大小且不符：真的没传完整，交给重传路径
+        job["state"] = "failed"
+        job["error"] = (
+            "上传后云端大小核验不一致（云端 %d 字节 / 本地 %d 字节），判定归档未完成"
+            % (size, expected))
+        job["updated_at"] = now
+        job.pop("verify_pending", None)
+        _archive_save()
+        log.warning("待核验任务复查发现大小不符: %s（云端 %d / 本地 %d）",
+                    job["remote_path"], size, expected)
+        notify_archive_failed(job)
+        return False
+
+    attempts = int(job.get("verify_attempts") or 0)
+    if attempts >= _VERIFY_MAX_ATTEMPTS:
+        job["state"] = "failed"
+        job["error"] = (
+            "上传已完成，但云端大小连续 %d 次无法确认（OpenList 探测超时），"
+            "本地文件已保留，可稍后重试" % attempts)
+        job["updated_at"] = now
+        job.pop("verify_pending", None)
+        _archive_save()
+        log.warning("待核验任务超过复查上限，判为失败（本地文件保留）: %s", job["remote_path"])
+        notify_archive_failed(job)
+    return False
+
+
+def _archive_heal_restart_cancelled() -> int:
+    """把「进程退出被误标成用户已取消」的历史记录改回待归档。
+
+    旧代码在 worker 的 CancelledError 分支里不区分来源，一律写
+    state=cancelled / error=「用户已取消」。实测线上 30 条里有 9 组的
+    updated_at 精确相同（同一秒成对出现，等于并发槽位数），那是 shutdown
+    批量 cancel，不是人手点出来的。这些文件还躺在本地、云端没有副本。
+
+    判定（必须同时满足，避免误改真正被用户取消的）：
+      * state=cancelled 且没有 user_cancelled 标记（旧记录都没有）；
+      * error 恰好是「用户已取消」（重启中断写的也是这条，靠下一条区分）；
+      * 同一 uid 没有任何 done 记录（真归档过的不动）；
+      * 本地文件仍然存在（文件没了就没法重传，改状态只会制造假待办）。
+    """
+    done_uids = {
+        str(j.get("unique_id") or "")
+        for j in _ARCHIVE_JOBS.values()
+        if str(j.get("state") or "") == "done" and j.get("unique_id")
+    }
+    healed = 0
+    for job in _ARCHIVE_JOBS.values():
+        if str(job.get("state") or "") != "cancelled":
+            continue
+        if job.get("user_cancelled") or job.get("superseded_by_done"):
+            continue
+        if str(job.get("error") or "") != "用户已取消":
+            continue
+        uid = str(job.get("unique_id") or "")
+        if uid and uid in done_uids:
+            continue
+        lp = _resolve_host_local_path(str(job.get("local_path") or ""))
+        if not lp or not os.path.exists(lp):
+            continue
+        job["state"] = "queued"
+        job["resume_pending"] = True
+        job["interrupted_by_restart"] = True
+        job["error"] = "上传被中断（bridge 重启），可重试"
+        job["updated_at"] = time.time()
+        healed += 1
+    if healed:
+        _archive_save()
+        log.info("归档取消收敛：%d 条「用户已取消」实为进程退出中断，已重新排队", healed)
+    return healed
+
+
+async def _archive_resume_pending() -> int:
+    """启动后续跑 + 待核验复查（由 startup 与后台巡检周期调用）。
+
+      1. resume_pending 的 queued 任务 → 重新入队。它们从未开始上传，
+         重启时判 failed 只会给用户制造一条「什么都没发生」的告警。
+      2. unverified 任务 → 走核验-only 复查（不重传，见 _archive_reverify_job）。
+    """
+    resumed = 0
+    reverified = 0
+    token = None
+    # 先把僵尸失败收敛掉（同文件后来已 done），再谈续跑/复查：
+    # 否则重启后「45 条告警」会原样留着，用户以为修复没生效。
+    try:
+        _archive_supersede_stale_failures()
+    except Exception as e:  # noqa: BLE001
+        log.debug("僵尸失败收敛跳过: %s", e)
+    # 修正历史误标：旧代码在进程退出时也写「用户已取消」，这些文件其实还在
+    # 本地、从未归档。清掉用户取消语义并排回队列，让自动归档重新接手。
+    try:
+        _archive_heal_restart_cancelled()
+    except Exception as e:  # noqa: BLE001
+        log.debug("重启误标取消收敛跳过: %s", e)
+    for job in list(_ARCHIVE_JOBS.values()):
+        st = str(job.get("state") or "")
+        if job.get("resume_pending") and st == "queued":
+            job.pop("resume_pending", None)
+            job["updated_at"] = time.time()
+            _archive_enqueue(job)
+            resumed += 1
+            continue
+        if st == "unverified":
+            jid = str(job.get("id") or "")
+            running = _ARCHIVE_TASKS.get(jid)
+            if running is not None and not running.done():
+                continue
+            if token is None:
+                try:
+                    token = await _openlist_token()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("待核验复查跳过（OpenList 不可用）: %s", e)
+                    break
+            if await _archive_reverify_job(job, token):
+                reverified += 1
+    if resumed:
+        _archive_save()
+        log.info("归档续跑：%d 条排队任务重新入队", resumed)
+    return resumed + reverified
+
+
+def _archive_supersede_stale_failures() -> int:
+    """收敛僵尸失败记录：同一文件后来已归档成功时，旧失败记录不再是「异常」。
+
+    线上实测：45 条「上传中断」里有 41 条，其对应 unique_id 早已有另一条
+    state=done 的记录（重试后成功），但失败记录本身仍留在列表里，于是告警
+    中心永远显示几十条红色条目，用户点重试只会再跑一遍已完成的归档。
+    这里把它们标成 superseded_cancelled（终态、不再是 failed），保留记录本身
+    以便追溯，只是不再计入告警。
+    """
+    done_uids = {
+        str(j.get("unique_id") or "")
+        for j in _ARCHIVE_JOBS.values()
+        if str(j.get("state") or "") == "done" and j.get("unique_id")
+    }
+    if not done_uids:
+        return 0
+    n = 0
+    now = time.time()
+    for j in _ARCHIVE_JOBS.values():
+        if str(j.get("state") or "") != "failed":
+            continue
+        uid = str(j.get("unique_id") or "")
+        if not uid or uid not in done_uids:
+            continue
+        j["state"] = "cancelled"
+        j["error"] = ""
+        j["superseded_by_done"] = True
+        j["updated_at"] = now
+        n += 1
+    if n:
+        _archive_save()
+        log.info("归档告警收敛：%d 条失败记录的同一文件已归档成功，已标记为已被取代", n)
+    return n
+
+
+async def _archive_heal_false_failures() -> int:
+    """复核历史假失败：云端大小与本地一致时直接改判 done。
+
+    背景（线上实测）：旧版核验只发一次 fs/get，超时即判「上传后云端存在性
+    核验失败」。事后逐条核对，这些文件的云端大小与本地字节数完全一致 ——
+    数据其实早就归档成功了，只是告警一直挂着。这里在启动后与后续巡检里
+    自动纠正，用户不需要手动点重试。
+    """
+    candidates = [
+        j for j in _ARCHIVE_JOBS.values()
+        if str(j.get("state") or "") == "failed"
+        and "核验失败" in str(j.get("error") or "")
+    ]
+    if not candidates:
+        return 0
+    try:
+        token = await _openlist_token()
+    except Exception as e:  # noqa: BLE001
+        log.debug("复核假失败跳过（OpenList 不可用）: %s", e)
+        return 0
+    healed = 0
+    for job in candidates:
+        expected = int(job.get("size_bytes") or 0)
+        if expected <= 0:
+            continue
+        try:
+            code, size = await _openlist_verify_size(token, str(job.get("remote_path") or ""))
+        except _OpenListAuthErr:
+            break
+        except Exception as e:  # noqa: BLE001
+            log.debug("复核假失败探测异常: %s", e)
+            continue
+        if code == STAT_OK and size == expected:
+            job["state"] = "done"
+            job["progress"] = 100
+            job["error"] = ""
+            job["archived_at"] = job.get("archived_at") or time.time()
+            job["updated_at"] = time.time()
+            job["remote_size"] = size
+            job["healed_from_false_failure"] = True
+            healed += 1
+    if healed:
+        _archive_save()
+        log.info("归档告警自愈：%d 条「核验失败」实为云端已完整，已自动改判为已归档", healed)
+    return healed
+
+
 async def _auto_archive_loop() -> None:
     """后台周期扫描（启动时由 _startup 挂起，进程生命周期内常驻）。"""
     from services.subscription_service import _AUTO_ARCHIVE_FIRST_DELAY, _AUTO_ARCHIVE_INTERVAL
@@ -866,6 +1266,17 @@ async def _auto_archive_loop() -> None:
                 n = await _auto_archive_sweep()
                 if n:
                     log.info("自动归档：本轮新入队 %d 个文件", n)
+                # 复核历史假失败（核验超时被误判的那批）：云端其实完整就直接转 done。
+                # 没有候选时内部是零成本早退，所以每轮都调是安全的。
+                try:
+                    await _archive_heal_false_failures()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("归档假失败复核跳过: %s", e)
+                # 「待核验」任务的周期复查（只核验、不重传，见 _archive_reverify_job）
+                try:
+                    await _archive_resume_pending()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("待核验复查跳过: %s", e)
                 await _disk_guard_check()
                 await _check_and_wake_waiting_disk_tasks()
                 # 过期取回残片清理（失败保留的 .part 供断点续传，但不能永久堆积）

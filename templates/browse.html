@@ -769,7 +769,7 @@
      重拼路径；既没有域名、地址又是内网的，引导去云端页设置域名，
      而不是甩一个必定打不开的链接给用户。 */
   window.__BROWSE_OPENLIST_BASE = window.__BROWSE_OPENLIST_BASE ||
-    (localStorage.getItem('openlist_public_base') || {{ (openlist_public_base or '') | tojson }} || '');
+    ({{ (openlist_public_base or '') | tojson }} || localStorage.getItem('openlist_public_base') || '');
   window.__browseFormatBase = function (raw) {
     var s = String(raw || '').trim();
     if (!s) return '';
@@ -813,11 +813,18 @@
       body: JSON.stringify({ files: files, force: !!force })
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (d && d.ok) {
-        window.__toast(okMsg, 'success', '已加入下载队列');
+        window.__toast(okMsg, 'success', d.message || '已加入下载队列');
         // 历史缺陷（恶性循环）：提交成功后曾调 __browseReload() 强制
         // cursor=0 重拉第一页并 innerHTML 替换整个网格 —— 用户点一次
         // 下载就跳回第一页、无限滚动哨兵被换掉，后面的文件必须一页页
         // 重新滚。现改为原地更新已提交的卡片状态，网格与滚动位置不动。
+        window.__browseMarkSubmitted(files);
+      } else if (d && (d.code === 'THROTTLE_SUSPENDED' || d.code === 'THROTTLE_QUEUED')) {
+        // 节流受理：任务没丢，已进入随机节奏队列（预算耗尽时挂起、次日自动续跑）。
+        // 不能用「提交失败」文案 —— 用户会以为文件被丢了而重复点击，
+        // 结果同一批文件在队列里重复入队。
+        window.__toast(d.code === 'THROTTLE_SUSPENDED' ? '已挂起排队' : '已进入节流队列',
+                       'info', d.message || '按随机节奏放行，可在任务队列查看');
         window.__browseMarkSubmitted(files);
       } else if (d && d.code === 'DUPLICATE_ASSET') {
         window.__showDedupInterceptDrawer(d, files);

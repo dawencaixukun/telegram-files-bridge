@@ -1819,6 +1819,49 @@
       st: { loading: true, loggedIn: false, username: '', baseUrl: 'http://127.0.0.1:5244', verified: false, loggedAt: 0, message: '' },
       form: { baseUrl: 'http://127.0.0.1:5244', username: '', password: '' },
       busy: false,
+      /* 全局对外访问域名（服务端 _ARCHIVE_CONFIG.publicBaseUrl 为唯一真相）。
+         不再散落在各页面 localStorage —— 那样每页各配一份，换浏览器就丢。 */
+      publicBase: '',
+      savingBase: false,
+      loadPublicBase: function () {
+        var self = this;
+        fetch('/archive/config', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            self.publicBase = (d && d.config && d.config.publicBaseUrl) || '';
+          })
+          .catch(function () {});
+      },
+      savePublicBase: function () {
+        if (this.savingBase) return;
+        var self = this;
+        this.savingBase = true;
+        fetch('/openlist/public-base', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify({ publicBaseUrl: this.publicBase || '' })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          if (d && d.ok) {
+            self.publicBase = d.publicBaseUrl || '';
+            /* 同浏览器里各页面读的 localStorage 覆盖也同步，避免旧值继续生效 */
+            try {
+              if (d.publicBaseUrl) localStorage.setItem('openlist_public_base', d.publicBaseUrl);
+              else localStorage.removeItem('openlist_public_base');
+            } catch (e) {}
+            if (window.__toast) window.__toast(d.message || '已保存', 'success');
+          } else if (window.__toast) {
+            window.__toast('保存失败', 'error', (d && d.message) || '后端返回错误');
+          }
+          self.savingBase = false;
+        }).catch(function () {
+          self.savingBase = false;
+          if (window.__toast) window.__toast('保存失败', 'error', '网络错误');
+        });
+      },
+      clearPublicBase: function () {
+        this.publicBase = '';
+        this.savePublicBase();
+      },
       fmtTime: function (ts) {
         if (!ts) return '';
         var d = new Date(ts * 1000);
@@ -1843,6 +1886,7 @@
             self.st.message = d.message || '';
             self.form.baseUrl = self.st.baseUrl;
             if (self.st.loggedIn) self.form.username = self.st.username;
+            self.loadPublicBase();
           })
           .catch(function () { self.st.loading = false; self.st.message = '网络错误'; });
       },
@@ -1898,6 +1942,171 @@
           self.busy = false;
           window.__toast('退出失败', 'error', '网络错误');
         });
+      }
+    };
+  };
+
+  /* ---------------- 任务页「TG 节流」状态条 ----------------
+     只在节流开启且当天有活动（用过额度或队列非空）时显示：平时把
+     「独立于用户的系统节奏」永久挂在页头是噪音，用户只想在它真正
+     影响自己时看到它。 */
+  window.throttleStatusBar = function throttleStatusBar() {
+    return {
+      st: { used: 0, budget: 0, thumbUsed: 0, queuedCount: 0, suspendedCount: 0, enabled: true, profile: '' },
+      label: '',
+      init: function () {
+        var self = this;
+        fetch('/api/throttle/status', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d || !d.ok || !d.status) return;
+            self.st = d.status;
+            var names = { conservative: '保守档', robust: '稳健档', balanced: '平衡档', unlimited: '只加随机间隔' };
+            self.label = names[d.status.profile] || d.status.profile || '';
+            var active = d.status.enabled &&
+              ((d.status.used || 0) > 0 || (d.status.queuedCount || 0) > 0);
+            var bar = document.getElementById('throttleBar');
+            if (bar && active) bar.style.display = '';
+          })
+          .catch(function () {});
+      }
+    };
+  };
+
+  /* ---------------- TG 请求节流设置卡片 ----------------
+     与 archiveSettingsCard 同构（load/save + toast）。前端只负责收集表单，
+     所有范围钳制（并发 1~20、间隔 0~3600、预算 ≥0、钟点 0~23）都在服务端做，
+     避免「前端校验被绕过」与「两处阈值漂移」。 */
+  window.throttleSettingsCard = function throttleSettingsCard() {
+    return {
+      cfg: {
+        enabled: true, profile: 'balanced',
+        // 覆盖范围标签与开关先给默认值：x-for 依赖它们，若等接口回来才渲染，
+        // 接口慢/失败时设置页会缺一整组开关（用户以为功能没做出来）。
+        scope: { browse: true, submit: true, api: true, watch: true, thumb: true },
+        scopeLabels: {
+          browse: '浏览页勾选下载',
+          submit: '链接提交 / 一键直投',
+          api: '接口直投（/api/tg/quick-download）',
+          watch: '频道监听自动入队',
+          thumb: '缩略图补图（GetMessage）'
+        },
+        profiles: {
+          conservative: { label: '保守档', desc: '并发 1~2、间隔 30~120 秒、日预算 40 个', concurrencyMin: 1, concurrencyMax: 2, intervalMin: 30, intervalMax: 120, dailyBudget: 40 },
+          robust: { label: '稳健档', desc: '并发 1~3、间隔 15~60 秒、日预算 80 个', concurrencyMin: 1, concurrencyMax: 3, intervalMin: 15, intervalMax: 60, dailyBudget: 80 },
+          balanced: { label: '平衡档', desc: '并发 2~4、间隔 6~25 秒、日预算 200 个', concurrencyMin: 2, concurrencyMax: 4, intervalMin: 6, intervalMax: 25, dailyBudget: 200 },
+          unlimited: { label: '只加随机间隔', desc: '不限制每日总量，只把零间隔改成随机间隔', concurrencyMin: 2, concurrencyMax: 4, intervalMin: 6, intervalMax: 25, dailyBudget: 0 }
+        },
+        concurrencyMin: 2, concurrencyMax: 4, intervalMin: 6, intervalMax: 25,
+        dailyBudget: 200, resumeHour: 0
+      },
+      st: { used: 0, budget: 200, thumbUsed: 0, queuedCount: 0, suspendedCount: 0, exhausted: false },
+      busy: false,
+      profileLabel: function () {
+        var p = this.cfg.profiles && this.cfg.profiles[this.cfg.profile];
+        return p ? p.label : this.cfg.profile;
+      },
+      profileDesc: function () {
+        var p = this.cfg.profiles && this.cfg.profiles[this.cfg.profile];
+        return p ? p.desc : '';
+      },
+      /* 点档位即生效：设置页只保留「选一个档位」这一个决定，
+         不必再去点保存（用户明确要求简约）。回填参数后立即提交。 */
+      pickProfile: function (name) {
+        if (!name || this.cfg.profile === name) return;
+        this.cfg.profile = name;
+        this.applyProfile();
+        this.save();
+      },
+      budgetPct: function () {
+        var total = Number(this.st.budget) || 0;
+        if (total <= 0) return 0;
+        return Math.max(0, Math.min(100, Math.round((Number(this.st.used) || 0) / total * 100)));
+      },
+      load: function () {
+        var self = this;
+        fetch('/api/throttle/config', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (d && d.ok && d.config) self.cfg = d.config; })
+          .catch(function () {});
+        fetch('/api/throttle/status', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (d && d.ok && d.status) self.st = d.status; })
+          .catch(function () {});
+      },
+      applyProfile: function () {
+        var p = this.cfg.profiles && this.cfg.profiles[this.cfg.profile];
+        if (!p) return;
+        this.cfg.concurrencyMin = p.concurrencyMin;
+        this.cfg.concurrencyMax = p.concurrencyMax;
+        this.cfg.intervalMin = p.intervalMin;
+        this.cfg.intervalMax = p.intervalMax;
+        this.cfg.dailyBudget = p.dailyBudget;
+      },
+      save: function () {
+        var self = this;
+        this.busy = true;
+        fetch('/api/throttle/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: JSON.stringify({
+            enabled: this.cfg.enabled,
+            profile: this.cfg.profile,
+            scope: this.cfg.scope,
+            concurrencyMin: this.cfg.concurrencyMin,
+            concurrencyMax: this.cfg.concurrencyMax,
+            intervalMin: this.cfg.intervalMin,
+            intervalMax: this.cfg.intervalMax,
+            dailyBudget: this.cfg.dailyBudget,
+            resumeHour: this.cfg.resumeHour
+          })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          self.busy = false;
+          if (d && d.ok) {
+            if (d.config) self.cfg = d.config;
+            if (d.status) self.st = d.status;
+            window.__toast('节流设置已保存', 'success', d.message || '');
+          } else {
+            window.__toast('保存失败', 'error', (d && d.message) || '后端返回错误');
+          }
+        }).catch(function () {
+          self.busy = false;
+          window.__toast('保存失败', 'error', '网络错误');
+        });
+      },
+      wake: function () {
+        var self = this;
+        this.busy = true;
+        fetch('/api/throttle/wake', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: '{}'
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          self.busy = false;
+          if (d && d.ok) {
+            if (d.status) self.st = d.status;
+            window.__toast('已手动放行', 'success', d.message || '');
+          } else {
+            window.__toast('放行失败', 'error', (d && d.message) || '');
+          }
+        }).catch(function () { self.busy = false; window.__toast('放行失败', 'error', '网络错误'); });
+      },
+      clearQueue: function () {
+        var self = this;
+        self.busy = true;
+        fetch('/api/throttle/queue/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrfToken ? window.__csrfToken() : '' },
+          body: '{}'
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          self.busy = false;
+          if (d && d.ok) {
+            if (d.status) self.st = d.status;
+            window.__toast('已清空节流队列', 'success', d.message || '');
+          } else {
+            window.__toast('清空失败', 'error', (d && d.message) || '');
+          }
+        }).catch(function () { self.busy = false; window.__toast('清空失败', 'error', '网络错误'); });
       }
     };
   };
@@ -2164,6 +2373,21 @@
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
     curStreamUrl = '';
+    if (video) video.dataset.usingFallback = '';
+    /* 代理流失败回退直链（每次打开弹窗只回退一次，直链也失败时不循环） */
+    if (video && !video.dataset.fallbackHooked) {
+      video.dataset.fallbackHooked = '1';
+      video.addEventListener('error', function () {
+        var direct = video.dataset.directUrl || '';
+        var viaProxy = video.src && video.src.indexOf('/openlist/stream') !== -1;
+        if (direct && viaProxy && video.dataset.usingFallback !== '1') {
+          video.dataset.usingFallback = '1';
+          if (window.__toast) window.__toast('代理流失败，已回退直链播放（本次流量不计入统计）', 'info');
+          video.src = direct;
+          video.play().catch(function () {});
+        }
+      });
+    }
 
     fetch('/openlist/stream-url?path=' + encodeURIComponent(cloudPath))
       .then(function (r) { return r.json(); })
@@ -2172,7 +2396,14 @@
         if (d && d.ok && d.url) {
           curStreamUrl = d.url;
           if (video) {
-            video.src = d.url;
+            /* 在线播放走 bridge 代理流（/openlist/stream）：流量经过 bridge 才能计入
+               累计下载/上传 KPI（网盘→bridge=下载，bridge→浏览器=上传，对等记账）。
+               直链 302 d.url 仍保留给「复制播放链接」与 PotPlayer/VLC 外部播放器。
+               代理失败时由 video error 事件回退直链，播放可用性优先于统计。 */
+            var proxyUrl = '/openlist/stream?path=' + encodeURIComponent(cloudPath);
+            video.dataset.directUrl = d.url;
+            video.dataset.proxyUrl = proxyUrl;
+            video.src = proxyUrl;
             video.style.display = 'block';
             video.play().catch(function () {});
           }
@@ -3208,6 +3439,8 @@
     return {
       total: 0,
       categories: {
+        interrupted: 0,
+        verify_pending: 0,
         token_expired: 0,
         storage_full: 0,
         conflict: 0,
@@ -3280,6 +3513,13 @@
       },
       retryOne: function (id) {
         var self = this;
+        // 核验类失败只是「云端大小没查到」，重试时后端只重新核验、不重传，
+        // 所以文案必须说清是「重新核验」，否则用户以为又要传一遍几个 GB。
+        var job = null;
+        for (var i = 0; i < this.failedJobs.length; i++) {
+          if (this.failedJobs[i].id === id) { job = this.failedJobs[i]; break; }
+        }
+        var verifyOnly = !!(job && job.retryMode === 'verify');
         fetch('/api/archive/retry-failed', {
           method: 'POST',
           headers: {
@@ -3291,10 +3531,13 @@
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if (d && d.ok) {
-              window.__toast('任务已重新排队', 'success', '已重新调度该任务');
+              window.__toast(verifyOnly ? '已重新核验' : '任务已重新排队', 'success',
+                verifyOnly ? '已向云端核对文件大小，通过即自动转「已归档」' : '已重新调度该任务');
               self.load();
             } else {
-              window.__toast('重试失败', 'error', (d && d.message) || '无法重新调度');
+              window.__toast(verifyOnly ? '核验失败' : '重试失败', 'error',
+                (d && d.message) || '无法重新调度');
+              self.load();
             }
           })
           .catch(function () {});
@@ -3357,6 +3600,160 @@
           });
       }
     };
+  };
+
+  /* ---------------- 本地磁盘占用「目录级明细」下钻 ----------------
+     仪表盘 KPI 只有一个分区数字（27 GB），用户看不出它被什么占了。
+     这里把占用按目录拆开，可以一层层点进去；数据来自
+     GET /api/disk/breakdown?path=...（服务端 st_blocks 口径 + 120s 缓存）。
+     目录行可点、文件行不可点 —— 点文件没有「下一层」，必须明确区分，
+     否则用户点了没反应会以为坏了。 */
+  var _diskState = { path: '', parent: '', loading: false };
+
+  function _diskFmt(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB';
+    if (n < 1024 * 1024 * 1024 * 1024) return (n / 1073741824).toFixed(2) + ' GB';
+    return (n / 1099511627776).toFixed(2) + ' TB';
+  }
+
+  function _diskRenderSummary(d) {
+    var el = document.getElementById('diskSummary');
+    if (!el) return;
+    var parts = [];
+    parts.push('<span>本层合计 <b style="color:var(--text-1);">' + _diskFmt(d.total) + '</b></span>');
+    if (d.used) {
+      parts.push('<span>分区已用 <b style="color:var(--text-1);">' + _diskFmt(d.used) + '</b> / ' + _diskFmt(d.fsTotal) + '</span>');
+    }
+    if (d.selfBytes > 0) {
+      /* 「自身占用」不是错误：扫描被截断或存在不可读目录时，这部分字节
+         确实存在但归不到具体子项，必须显式说出来而不是悄悄丢掉。 */
+      parts.push('<span title="本层文件里不属于任何已列出子目录的部分">其它散落文件 <b style="color:var(--text-1);">' + _diskFmt(d.selfBytes) + '</b></span>');
+    }
+    parts.push('<span style="opacity:.65;">扫描于 ' + (d.scannedAt || '') + (d.cached ? '（缓存 ' + (d.ageSeconds || 0) + 's）' : '（' + (d.elapsedMs || 0) + 'ms）') + '</span>');
+    el.innerHTML = parts.join('');
+  }
+
+  function _diskRenderRows(d) {
+    var box = document.getElementById('diskRows');
+    if (!box) return;
+    var rows = d.entries || [];
+    if (!rows.length) {
+      box.innerHTML = '<div style="padding:var(--space-4);color:var(--text-3);font-size:13px;">这个目录下没有可统计的文件</div>';
+      return;
+    }
+    var maxPct = 0;
+    rows.forEach(function (r) { if ((r.pct || 0) > maxPct) maxPct = r.pct; });
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+    rows.forEach(function (r) {
+      var barW = maxPct > 0 ? Math.max(1, Math.round((r.pct || 0) / maxPct * 100)) : 0;
+      var clickable = !!r.dir;
+      html += '<tr' + (clickable ? ' class="disk-row" style="cursor:pointer;" onclick="window.__diskEnter(this)" data-path="' + window.__escHtml(r.path || '') + '"' : ' style="cursor:default;"') + '>'
+        + '<td style="padding:7px 12px;white-space:nowrap;">' + (r.dir ? '📁' : '📄') + '</td>'
+        + '<td style="padding:7px 4px;word-break:break-all;">'
+        +   '<span' + (clickable ? ' style="color:var(--brand);font-weight:600;"' : '') + '>' + window.__escHtml(r.name || '') + '</span>'
+        +   (r.note ? '<div style="font-size:11px;color:var(--text-3);">' + window.__escHtml(r.note) + '</div>' : '')
+        + '</td>'
+        + '<td style="padding:7px 8px;width:26%;">'
+        +   '<div style="height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;">'
+        +     '<div style="height:100%;width:' + barW + '%;background:' + (r.dir ? '#8b5cf6' : '#64748b') + ';"></div>'
+        +   '</div>'
+        + '</td>'
+        + '<td style="padding:7px 12px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;"><b>' + _diskFmt(r.bytes) + '</b></td>'
+        + '<td style="padding:7px 12px;text-align:right;white-space:nowrap;color:var(--text-3);font-variant-numeric:tabular-nums;">' + (r.pct || 0) + '%</td>'
+        + '</tr>';
+    });
+    if (d.truncated > 0) {
+      html += '<tr><td colspan="5" style="padding:8px 12px;color:var(--text-3);font-size:12px;">另有 ' + d.truncated + ' 项较小的条目未列出</td></tr>';
+    }
+    html += '</table>';
+    box.innerHTML = html;
+  }
+
+  function _diskRenderWarn(d) {
+    var el = document.getElementById('diskWarn');
+    if (!el) return;
+    var msgs = [];
+    if (d.partial) {
+      msgs.push('⚠️ 扫描超时被截断，下面的数字是<strong>下限</strong>而非全量。点「刷新」可重试。');
+    }
+    if (d.skipped > 0) {
+      msgs.push('有 ' + d.skipped + ' 个条目因权限或跨设备被跳过，未计入合计。');
+    }
+    if (d.residualBytes > 64 * 1024 * 1024 && d.isMountRoot) {
+      msgs.push('分区已用比本层合计多 ' + _diskFmt(d.residualBytes) + '，通常是文件系统保留块或已删除但仍被进程占用的文件（重启对应进程后释放）。');
+    }
+    if (!msgs.length) { el.style.display = 'none'; return; }
+    el.innerHTML = msgs.join('<br>');
+    el.style.display = '';
+  }
+
+  window.__diskLoad = function (path, refresh) {
+    if (_diskState.loading) return;
+    _diskState.loading = true;
+    var box = document.getElementById('diskRows');
+    if (box) box.innerHTML = '<div style="padding:var(--space-4);color:var(--text-3);font-size:13px;">正在扫描目录…</div>';
+    var url = '/api/disk/breakdown?path=' + encodeURIComponent(path || '') + (refresh ? '&refresh=1' : '');
+    fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        _diskState.loading = false;
+        if (!d || !d.ok) {
+          if (box) box.innerHTML = '<div style="padding:var(--space-4);color:var(--err);font-size:13px;">' + window.__escHtml((d && d.message) || '读取失败') + '</div>';
+          return;
+        }
+        _diskState.path = d.path || '/';
+        _diskState.parent = d.parent || '';
+        var chip = document.getElementById('diskPathChip');
+        if (chip) chip.textContent = _diskState.path;
+        var up = document.getElementById('diskUpBtn');
+        if (up) up.style.display = _diskState.parent ? '' : 'none';
+        _diskRenderSummary(d);
+        _diskRenderWarn(d);
+        _diskRenderRows(d);
+      })
+      .catch(function () {
+        _diskState.loading = false;
+        if (box) box.innerHTML = '<div style="padding:var(--space-4);color:var(--err);font-size:13px;">网络错误，无法读取目录占用</div>';
+      });
+  };
+
+  window.__diskEnter = function (row) {
+    var p = row && row.getAttribute ? row.getAttribute('data-path') : '';
+    if (p) window.__diskLoad(p, false);
+  };
+  window.__diskUp = function () {
+    if (_diskState.parent) window.__diskLoad(_diskState.parent, false);
+  };
+  window.__diskRefresh = function () {
+    window.__diskLoad(_diskState.path || '', true);
+  };
+
+  window.__openDiskBreakdown = function (btn) {
+    var start = (btn && btn.getAttribute && btn.getAttribute('data-disk-path')) || '';
+    var b = document.getElementById('diskBreakdownBackdrop');
+    if (!b) return;
+    b.classList.add('show');
+    document.body.style.overflow = 'hidden';
+    if (!start) {
+      /* 起点必须是「整个分区」，不能是 app-data —— 用户关心的是 27 GB
+         都去哪了，只给他看 app-data 会答非所问。所以先问一次挂载点。 */
+      fetch('/api/disk/watermark/status', { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { return (d && d.mountRoot) || '/'; })
+        .catch(function () { return '/'; })
+        .then(function (root) { window.__diskLoad(root, false); });
+    } else {
+      window.__diskLoad(start, false);
+    }
+  };
+
+  window.__closeDiskBreakdown = function () {
+    var b = document.getElementById('diskBreakdownBackdrop');
+    if (b) b.classList.remove('show');
+    document.body.style.overflow = '';
   };
 
   /* ---------------- 页面加载兜底与 htmx 事件联动 ---------------- */

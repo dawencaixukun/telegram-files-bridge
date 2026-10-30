@@ -13,10 +13,20 @@ html {
 }
 html,
 body {
-  height: 100%;
   max-width: 100%;
   overflow-x: hidden;
   overflow-x: clip;
+}
+html {
+  /* 页面滚动统一收敛到根视口：body 不再 height:100%（历史缺陷：
+     body 被 overflow-x 计算成 overflow-y:auto 的滚动容器，滚动视口在
+     html/body 间漂移，sticky 顶栏/侧栏的吸顶参照随之漂移，长页下滑
+     时导航整体滚出屏幕）。html 保持默认文档流滚动，sticky 参照稳定。 */
+  height: auto;
+}
+body {
+  height: auto;
+  min-height: 100vh;
 }
 body {
   margin: 0;
@@ -27,7 +37,12 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-size: 15px;
-  overflow-x: hidden;
+  /* 必须是 clip 而不是 hidden：hidden 会把 body 计算成 overflow-y:auto 的
+     滚动容器（哪怕实际滚的是 html），sticky 顶栏/侧栏的吸顶参照就会锁定在
+     这个「从不滚动的 body 滚动视口」上 —— 用户实测长页下滑时整条侧栏/顶栏
+     跟着内容滚出屏幕，就是这条 + height:100% 组合的锅。clip 不产生滚动
+     容器，横向裁剪效果相同，sticky 参照回归视口。 */
+  overflow-x: clip;
 }
 img,
 svg {
@@ -105,10 +120,22 @@ textarea {
 }
 
 /* ---------- Sidebar ---------- */
+/* 侧栏固定定位（不再 sticky）：
+   历史缺陷（用户可见：云端归档等长页下滑后左侧导航跟着上窜直至看不见）：
+   html/body 同时设了 height:100% + overflow-x:hidden/clip —— overflow-x 非
+   visible 会把 body 计算成 overflow-y:auto 的滚动容器，滚动视口又随浏览器/
+   缩放/数据量在 html 与 body 之间漂移；sticky 的吸顶参照「最近滚动祖先」，
+   一旦参照漂移（长页 + 真实数据场景），整条侧栏会随内容一起滚出屏幕。
+   fixed 定位不依赖任何滚动容器参照，彻底消灭这一类问题；左列宽度仍由
+   .shell 的 grid-template-columns 预留，主栏位置不受影响。
+   移动端（≤767px）本来就是 fixed 抽屉，语义一致。 */
 .sidebar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  height: 100vh;
+  left: 0;
+  bottom: 0;
+  height: auto;
+  width: var(--sidebar-w);
   display: flex;
   flex-direction: column;
   background: var(--glass-bg);
@@ -307,6 +334,9 @@ body.drawer-open .scrim {
 
 /* ---------- Main column ---------- */
 .main {
+  /* 侧栏是 fixed（脱离网格流），主栏必须显式落第二列，否则会被自动放置进
+     侧栏预留的第一列（实测 .main 被压成 240px 宽）。 */
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -685,6 +715,14 @@ body.drawer-open .scrim {
 .delta.down { color: var(--err); background: rgba(248, 113, 113, 0.14); }
 .delta.flat { color: var(--text-2); background: var(--glass-bg-strong); }
 .kpi .spark { flex-shrink: 0; }
+/* 可点 KPI 卡（当前只有「本地磁盘占用」）：必须给出可点的视觉与键盘可达性，
+   否则用户不知道这个数字还能点进去看目录明细。 */
+.kpi-clickable { cursor: pointer; transition: border-color 0.16s ease, transform 0.16s ease; }
+.kpi-clickable:hover { border-color: var(--brand-b); transform: translateY(-1px); }
+.kpi-clickable:focus-visible { outline: 2px solid var(--brand-b); outline-offset: 2px; }
+.kpi-clickable .kpi-hint { display: inline-flex; align-items: center; gap: 2px; }
+.kpi-clickable:hover .kpi-hint { color: var(--brand-b); }
+.kpi-clickable .kpi-hint svg { transform: rotate(-90deg); }
 .kpi-dual .k-dual-grid {
   flex: 1;
   display: grid;
@@ -905,6 +943,12 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
 }
 .textarea { min-height: 120px; resize: vertical; line-height: 1.6; font-family: var(--font-mono); font-size: 13px; }
 .select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-2) 50%), linear-gradient(135deg, var(--text-2) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
+/* 原生下拉面板的配色：只能靠 option 的背景/文字色 + color-scheme 控制。
+   历史坑：只给 select 本身设色、不给 option 设色 —— 展开的列表项继承透明底，
+   悬停时用系统高亮色，暗色主题下整块发白发亮。
+   注意：这些 option 规则在部分浏览器（含 Chrome/Windows）只对未选中项生效，
+   选中项的高亮仍由 UA 决定且不受控 —— 所以凡是「必须稳定跟主题」的下拉，
+   一律用自绘面板（见 explorer.html 的 .toolbar-sort），不要用原生 select。 */
 .select option, .select optgroup {
   background-color: #1a162b;
   color: #f1f5f9;
@@ -913,6 +957,14 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   background-color: #ffffff;
   color: #0f172a;
 }
+
+/* 原生下拉/滚动条的 UA 配色跟随主题：
+   <meta name="color-scheme" content="dark light"> 是声明「两个都支持」，
+   浏览器据此对 <select> 展开面板、滚动条等 UA 部件使用浅色默认值，
+   不会因为 data-theme 切换而改变 —— 暗色主题下就会看到白底列表。
+   这里按主题显式覆盖，浅色主题继承 meta 的 light 即可。 */
+[data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
 
 .input.num { font-variant-numeric: tabular-nums; }
 .input[type="password"] { letter-spacing: 0.1em; }
@@ -1041,7 +1093,13 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 .otp-box:focus { outline: none; border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-ring); }
-.otp-note { text-align: center; font-size: 12px; color: var(--text-3); margin-top: var(--space-3); }
+.otp-note { text-align: center; font-size: 12px; color: var(--text-3); margin-top: var(--space-3); line-height: 1.7; }
+.otp-len-switch {
+  border: 0; background: none; padding: 0 2px; margin: 0; cursor: pointer;
+  font: inherit; color: var(--brand, #a78bfa); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.otp-len-switch:hover { color: var(--brand-b, #22d3ee); }
 
 /* ---------- TG 登录向导：国家选择控件 ----------
    注意：这些状态样式必须走 CSS 类，不能用 Alpine 的 :style 写在这些元素上 ——
@@ -1462,7 +1520,7 @@ a:focus-visible, button:focus-visible {
 /* collapsed icon-only sidebar (768–1199) */
 @media (min-width: 768px) and (max-width: 1199px) {
   .shell { grid-template-columns: var(--sidebar-w-collapsed) 1fr; }
-  .sidebar { padding: var(--space-4) var(--space-2); }
+  .sidebar { padding: var(--space-4) var(--space-2); width: var(--sidebar-w-collapsed); }
   .sidebar .brand { justify-content: center; padding: var(--space-2) 0 var(--space-4); }
   .sidebar .brand .name, .sidebar .brand .ver, .nav-group .group-label,
   .nav-item > span, .nav-item .chev, .session-status .label, .foot .logout span {
@@ -1480,6 +1538,7 @@ a:focus-visible, button:focus-visible {
 @media (max-width: 767px) {
   :root { --sidebar-w: 260px; }
   .shell { grid-template-columns: minmax(0, 1fr); max-width: 100%; }
+  .main { grid-column: 1; }   /* 单列布局：主栏回第一列（桌面端侧栏 fixed 占位规则不适用） */
   .main, .content { min-width: 0; max-width: 100%; overflow-x: clip; }
   .sidebar {
     position: fixed;
@@ -1540,8 +1599,19 @@ a:focus-visible, button:focus-visible {
   .kpi-dual .k-value { font-size: 22px; }
   .topbar .user-btn .uname { display: none; }
   .user-btn { padding: 3px; }
-  .otp-box { width: 46px; height: 56px; font-size: 22px; }
-  .otp-row { gap: var(--space-2); }
+  /* 窄屏格数弹性等分：固定 40px×6 在 360px 屏上会把卡片撑破
+     （实测第 6 格被裁、提示文字整行溢出）。改成 flex 等分容器宽度，
+     5 格 / 6 格都自动适配，永不溢出。 */
+  .otp-row { gap: 6px; flex-wrap: nowrap; max-width: 100%; }
+  .otp-box {
+    width: auto;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 44px;
+    height: 52px;
+    font-size: 20px;
+    padding: 0;
+  }
   .toast-stack { left: var(--space-3); right: var(--space-3); bottom: var(--space-3); max-width: calc(100vw - 24px); overflow: hidden; }
   .toast { min-width: 0; max-width: 100%; }
 }
@@ -1935,6 +2005,25 @@ html.theme-anim *::after {
   background: var(--brand-grad, #8b5cf6);
   flex: none;
 }
+/* 设置页「高级设置」折叠区：summary 复用分组标题的视觉层级，
+   但要抵消 .set-group-title::before 的标识条（summary 前后的竖条会顶出去），
+   并把默认的三角箭头换成右侧开合提示。 */
+details.set-group > summary.set-group-title {
+  list-style: none;
+  margin-bottom: 0;
+}
+details.set-group > summary.set-group-title::-webkit-details-marker { display: none; }
+details.set-group > summary.set-group-title::before { display: none; }
+details.set-group > summary.set-group-title::after {
+  content: "展开";
+  margin-left: auto;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: .02em;
+  color: var(--text-3);
+}
+details.set-group[open] > summary.set-group-title::after { content: "收起"; }
+details.set-group[open] > summary.set-group-title { margin-bottom: var(--space-4); }
 .switch-row {
   display: flex;
   align-items: flex-start;
@@ -2091,14 +2180,17 @@ html.theme-anim *::after {
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
+/* 时长角标也是压在缩略图上的浮层标签：与网盘标识共用 --media-chip-* 令牌，
+   浅色主题下不再是一块深色矩形（用户反馈的「白天主题黑黑一块」同源问题）。 */
 .browse-card .dur-badge {
   position: absolute;
   right: 8px;
   bottom: 8px;
-  background: rgba(10, 12, 20, 0.68);
-  color: #fff;
+  background: var(--media-chip-bg, rgba(10, 12, 20, 0.68));
+  color: var(--media-chip-text, #fff);
+  border: 1px solid var(--media-chip-border, transparent);
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 1px 7px;
   border-radius: 6px;
   z-index: 2;
 }

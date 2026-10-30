@@ -12,6 +12,7 @@ tests/test_explorer_view_toggle.py — /explorer「网格视图 / 列表视图�
 7. 顶栏 OpenList 域名按钮只显示「已配置好」，裸域名只进 title
 8. 文件夹卡片不再使用大图缩略图区（无 42px 内联 svg、改用 t-folder-inline 小图标）
 """
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -100,7 +101,7 @@ class TestExplorerViewToggle(unittest.TestCase):
     def _get_root_page(self):
         with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=MOCK_STORAGES)), \
              patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)):
-            resp = self.client.get("/explorer", cookies=self.cookies)
+            resp = self.client.get("/explorer?path=/", cookies=self.cookies)
         self.assertEqual(resp.status_code, 200)
         return resp.text
 
@@ -145,8 +146,8 @@ class TestExplorerViewToggle(unittest.TestCase):
     # 2b. 统一工具条：搜索 + 视图切换 + 网盘下拉（⋯ 已上移导航栏）
     # -------------------------------------------------------------
     def test_toolbar_is_single_row_with_more_menu(self):
-        """工具条平铺搜索/统计/视图切换/网盘下拉；⋯ 菜单三项已上移导航栏「功能」，
-        工具条里不再有 .toolbar-more-btn。"""
+        """搜索/统计留在工具条；网盘下拉与视图切换已上移到左上角 .explorer-top-bar。
+        ⋯ 菜单三项仍在导航栏「功能」，工具条里没有 .toolbar-more-btn。"""
         html = self._get_subfolder_page()
         self.assertIn('class="explorer-toolbar"', html)
         self.assertIn('class="toolbar-search"', html)
@@ -154,6 +155,17 @@ class TestExplorerViewToggle(unittest.TestCase):
         self.assertIn('class="toolbar-menu drive-menu"', html)
         self.assertIn('x-show="showDriveMenu"', html)
         self.assertIn('@click.outside="showDriveMenu = false"', html)
+        # 网盘下拉与视图切换都落在左上角顶栏内，不再出现在工具条里
+        top_start = html.index('class="explorer-top-bar"')
+        top_end = html.index('class="explorer-toolbar"')
+        top_html = html[top_start:top_end]
+        self.assertIn('drive-picker', top_html)
+        self.assertIn('class="view-switch"', top_html)
+        toolbar_start = html.index('class="explorer-toolbar"')
+        toolbar_end = html.index('<!-- 进行中后台跨盘传输横幅通知 -->')
+        toolbar_html = html[toolbar_start:toolbar_end]
+        self.assertNotIn('drive-picker', toolbar_html)
+        self.assertNotIn('class="view-switch"', toolbar_html)
         # ⋯ 菜单已整体移除
         self.assertNotIn('x-show="showMoreMenu"', html)
         self.assertNotIn("showMoreMenu", html)
@@ -208,7 +220,19 @@ class TestExplorerViewToggle(unittest.TestCase):
         """表头 名称/大小/修改时间/所属网盘/操作 + 行内类型图标与播放按钮。"""
         html = self._get_subfolder_page()
         self.assertIn('class="list-head"', html)
-        for label in ("名称", "大小", "修改时间", "所属网盘", "操作"):
+        # 名称/大小/修改时间已改为可点排序的表头按钮（见 test_explorer_sort.py），
+        # 其余两列仍是普通文本列。断言用「列名 + 其后的排序标记」而不是把
+        # 换行/缩进写进匹配串 —— 模板排版一改就会误报。
+        # 只在表头区块里找，否则会先命中工具条排序下拉里的 <option>大小</option>。
+        # 匹配前把换行/缩进压平，模板排版调整不会误报。
+        head_start = html.index('class="list-head"')
+        head_flat = " ".join(html[head_start:head_start + 1600].split())
+        for label in ("名称", "大小", "修改时间"):
+            self.assertIn(label, head_flat)
+            after = head_flat.split(label, 1)[1][:160]
+            self.assertIn('class="lh-sort-mark"', after,
+                          f"表头列 {label} 应为可点排序按钮")
+        for label in ("所属网盘", "操作"):
             self.assertIn(f">{label}</span>", html)
         # 行内大小 / 时间 / 网盘标签
         self.assertIn('class="tnum t-size"', html)
@@ -283,7 +307,7 @@ class TestExplorerViewToggle(unittest.TestCase):
         with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=drives)), \
              patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)), \
              patch("routers.explorer._attach_drive_stats", new=AsyncMock(return_value=None)):
-            html = self.client.get("/explorer", cookies=self.cookies).text
+            html = self.client.get("/explorer?path=/", cookies=self.cookies).text
         self.assertIn('x-show="showDriveMenu"', html)
         self.assertIn('toolbar-menu drive-menu', html)
         # 迷你目录浏览器骨架与数据源
@@ -310,7 +334,7 @@ class TestExplorerViewToggle(unittest.TestCase):
         with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=storages)), \
              patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)), \
              patch("routers.explorer._attach_drive_stats", new=AsyncMock(return_value=None)):
-            resp = self.client.get("/explorer", cookies=self.cookies)
+            resp = self.client.get("/explorer?path=/", cookies=self.cookies)
         self.assertEqual(resp.status_code, 200)
         html = resp.text
         self.assertIn('class="root-search"', html)
@@ -361,7 +385,10 @@ class TestExplorerViewToggle(unittest.TestCase):
         """域名入口只在顶栏「功能」菜单里出现，文案为「OpenList 域名：<host>」，
         工具条不再有任何菜单按钮（⋯ 已上移）。"""
         html = self._get_subfolder_page()
-        self.assertIn("featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase)) : '设置 OpenList 域名'", html)
+        self.assertIn("featureOpenlistBase ? ('OpenList 域名：' + featureDisplayDomain(featureOpenlistBase) + '（去设置修改）') : '设置 OpenList 域名'", html)
+        # 域名配置已收敛到设置页：各页面不得再自建域名弹窗（那是「这页配了那页没配」的根源）
+        self.assertNotIn("openDomainModal", html, "浏览页不应再有自己的域名弹窗")
+        self.assertIn('href="/settings#openlistPublicBase"', html, "顶栏域名入口应直达设置页")
         # 旧的「已配置好」大按钮文案已移除
         self.assertNotIn("openlistBase ? '已配置好' : '设置域名'", html)
         self.assertNotIn("'OpenList: ' + displayDomain(openlistBase)", html)
@@ -394,6 +421,117 @@ class TestExplorerViewToggle(unittest.TestCase):
         self.assertNotIn('style="width:42px;height:42px;"', html)
         # 媒体卡片仍然保留真实缩略图
         self.assertIn('https://thumb.example.com/clip.jpg', html)
+
+
+class TestBrowseMemory(unittest.TestCase):
+    """网盘浏览位置记忆（用户诉求：刷新/重进标签还回到上次点的文件夹）。
+
+    双层记忆：
+    - 服务端 .browse_memory.json：裸 /explorer（侧栏链接、新标签页、换浏览器）
+      302 续播到上次目录；网盘被移除后不续播（防死链）；显式 ?path= 永不重定向。
+    - 客户端 localStorage（explorer_scroll:<path>）：刷新后滚动位置还原。
+    """
+
+    def setUp(self):
+        self.client = TestClient(bridge_server.app)
+        self.cookies = {PORTAL_COOKIE: _make_portal_token()}
+        import core.state as cs
+        self.cs = cs
+        self._saved = dict(cs._BROWSE_MEMORY)
+
+    def tearDown(self):
+        self.cs._BROWSE_MEMORY.clear()
+        self.cs._BROWSE_MEMORY.update(self._saved)
+
+    def _mock_root(self, mounts=("/onedrive", "/wopan")):
+        from unittest.mock import AsyncMock, patch
+        storages = [{"mount_path": m, "name": m.strip("/"), "driver": "X",
+                     "display_name": m.strip("/").title(), "status": "work",
+                     "status_label": "正常在线", "remark": "", "capacity_str": "就绪",
+                     "openlist_url": "http://x" + m} for m in mounts]
+        return patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=storages)), \
+               patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)), \
+               patch("services.openlist_service.openlist_mounts", new=AsyncMock(return_value={"ok": True, "mounts": list(mounts)})), \
+               patch("routers.explorer._attach_drive_stats", new=AsyncMock(return_value=None))
+
+    def test_bare_explorer_resumes_last_path(self):
+        import core.state as cs
+        cs._BROWSE_MEMORY["last_path"] = "/onedrive/yello"
+        p1, p2, p3, p4 = self._mock_root()
+        with p1, p2, p3, p4:
+            r = self.client.get("/explorer", cookies=self.cookies, follow_redirects=False)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("path=/onedrive/yello", r.headers.get("location", ""))
+
+    def test_explicit_root_never_redirects(self):
+        """根页入口（?path=/）必须永远能回到「全部网盘」，不被续播劫持。"""
+        import core.state as cs
+        cs._BROWSE_MEMORY["last_path"] = "/onedrive/yello"
+        p1, p2, p3, p4 = self._mock_root()
+        with p1, p2, p3, p4:
+            r = self.client.get("/explorer?path=/", cookies=self.cookies, follow_redirects=False)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('class="drive-workspace"', r.text)
+
+    def test_dead_drive_not_resumed(self):
+        """上次目录所属网盘已被移除 → 不续播（防 302 进错误页），正常落根。"""
+        import core.state as cs
+        cs._BROWSE_MEMORY["last_path"] = "/removed-drive/sub"
+        p1, p2, p3, p4 = self._mock_root(("/onedrive", "/wopan"))
+        with p1, p2, p3, p4:
+            r = self.client.get("/explorer", cookies=self.cookies, follow_redirects=False)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('class="drive-workspace"', r.text)
+
+    def test_visit_recorded_and_chips_rendered(self):
+        """成功列目录 → 记忆写入；根页渲染续播卡与常去网盘 chips（含 stats）。"""
+        import core.state as cs
+        cs._BROWSE_MEMORY.update({"last_path": "", "recent": {}})
+        from unittest.mock import AsyncMock, patch
+        storages = [{"mount_path": "/onedrive", "name": "onedrive", "driver": "X",
+                     "display_name": "OneDrive", "status": "work", "status_label": "正常在线",
+                     "remark": "", "capacity_str": "就绪", "openlist_url": "http://x",
+                     "stats": {"dirs": 2, "files": 14, "size": "18.4 GB"}}]
+        list_ok = {"ok": True, "path": "/onedrive/yello", "parent_path": "/onedrive",
+                   "breadcrumbs": [], "entries": [], "dirs_count": 0, "files_count": 0,
+                   "total_size_human": "—", "write": True, "message": ""}
+        with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=storages)), \
+             patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)), \
+             patch("services.openlist_service.openlist_mounts", new=AsyncMock(return_value={"ok": True, "mounts": ["/onedrive"]})), \
+             patch("services.openlist_service.openlist_fs_list_all", new=AsyncMock(return_value=list_ok)):
+            r1 = self.client.get("/explorer?path=/onedrive/yello", cookies=self.cookies)
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(cs._BROWSE_MEMORY["last_path"], "/onedrive/yello")
+        self.assertGreaterEqual(cs._BROWSE_MEMORY["recent"].get("/onedrive", 0), 1)
+        # 根页：续播卡 + chips（stats 真正渲染，此前算了就扔）
+        with patch("services.openlist_service.openlist_storages", new=AsyncMock(return_value=storages)), \
+             patch("services.openlist_service._openlist_ready", new=AsyncMock(return_value=True)), \
+             patch("services.openlist_service.openlist_mounts", new=AsyncMock(return_value={"ok": True, "mounts": ["/onedrive"]})), \
+             patch("routers.explorer._attach_drive_stats", new=AsyncMock(return_value=None)):
+            r2 = self.client.get("/explorer?path=/", cookies=self.cookies)
+        html = r2.text
+        self.assertIn('class="resume-card"', html)
+        self.assertIn("/onedrive/yello", html)
+        self.assertIn('class="drive-chip"', html)
+        self.assertIn("18.4 GB", html)
+
+    def test_scroll_memory_wired(self):
+        """滚动位置记忆：按目录路径分键存 localStorage，加载时还原。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(root, "templates", "explorer.html"), encoding="utf-8").read()
+        self.assertIn("explorer_scroll:", src)
+        self.assertIn("__bindScrollMemory", src)
+
+    def test_memory_persist_roundtrip(self):
+        """.browse_memory.json 落盘 + 重启恢复。"""
+        import core.state as cs
+        cs._BROWSE_MEMORY.update({"last_path": "/google/a", "recent": {"/google": 3}})
+        cs._browse_memory_save()
+        cs._BROWSE_MEMORY.clear()
+        cs._BROWSE_MEMORY.update({"last_path": "", "updated_at": 0.0, "recent": {}})
+        cs._browse_memory_load()
+        self.assertEqual(cs._BROWSE_MEMORY["last_path"], "/google/a")
+        self.assertEqual(cs._BROWSE_MEMORY["recent"]["/google"], 3)
 
 
 if __name__ == "__main__":

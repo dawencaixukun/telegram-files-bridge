@@ -11,6 +11,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Set
 from core.backend import telegram_api_call
 from core.logging import log
+from services.throttle_service import throttle_thumb_allow as _throttle_thumb_allow
 
 _THUMB_HEAL_TTL = 300.0
 _THUMB_HEAL_MAX_BYTES = 10 * 1024 * 1024
@@ -44,6 +45,11 @@ async def _heal_thumbnail(unique_id: str, chat_id: Any = None, message_id: Any =
     """补下载缩略图，返回可用于 /file 端点的当前 uniqueId；失败返回 None。"""
     if time.monotonic() - _thumb_heal_failed.get(unique_id, 0.0) < _THUMB_HEAL_TTL:
         return None
+    # TG 请求随机节流：补图是第二大 TG 请求源（云端归档翻页每卡片一次 GetMessage）。
+    # 计入同一份日预算，预算不足时直接放弃补图 → 调用方落占位图，次日再补。
+    # 放在 inflight 标记之前判定：被节流拒绝的请求不该留下"处理中"痕迹。
+    if not _throttle_thumb_allow():
+        return None
     async with _thumb_heal_lock:
         if unique_id in _thumb_heal_inflight:
             return None
@@ -70,7 +76,16 @@ async def _heal_thumbnail(unique_id: str, chat_id: Any = None, message_id: Any =
                                  if n["uniqueId"] and 0 < int(n["size"] or 0) <= _THUMB_HEAL_MAX_BYTES]
                         if sized:
                             thumbs = [n for n in sized if n["uniqueId"].startswith("AQAD")]
-                            target = min(thumbs or sized, key=lambda n: int(n["size"]))
+                            # 历史缺陷（用户可见：云端归档缩略图比浏览页模糊）：
+                            # min() 永远挑【最小】的可下载节点 —— TG 照片消息带
+                            # 多档尺寸（i/m/j…），补图结果恒为最小档，卡片上
+                            # 一拉伸就糊。同一 /preview 端点在浏览页不糊，正因为
+                            # 浏览页视频只有单档缩略图、图片又被全站屏蔽。
+                            # 改为：优先 AQAD 缩略图、同档内挑最大；无 AQAD 时
+                            # （照片多档尺寸全是 AgAC）也在全部候选里挑最大，
+                            # 上限 _THUMB_HEAL_MAX_BYTES 不变。视频消息 sized 里
+                            # 只有缩略图（主文件远超 10MB 上限被过滤），行为不变。
+                            target = max(thumbs or sized, key=lambda n: int(n["size"]))
                 except Exception as e:  # noqa: BLE001
                     log.info("thumb heal: GetMessage 失败: %s", str(e)[:120])
             if target is None:

@@ -361,13 +361,37 @@ async def browse_download(request: Request):
         guard["skippedDuplicates"] = skipped_dup
         return JSONResponse(guard)
 
+    # TG 请求随机节流（防封号）：小批量直通；超并发/预算不足时分批放行或挂起次日续跑
+    meta_by_file = {}
+    for f in raw if isinstance(raw, list) else []:
+        if isinstance(f, dict) and f.get("fileId") is not None:
+            meta_by_file[str(f.get("fileId"))] = f
+    plan = await throttle_plan_submit(payload_files, "browse", meta_by_file, "浏览页下载")
+    if plan is not None:
+        payload_files = plan.get("submit") or []
+        if not payload_files:
+            _tasks_cache_invalidate()
+            return JSONResponse({
+                "ok": False,
+                "code": "THROTTLE_SUSPENDED" if plan.get("suspended") else "THROTTLE_QUEUED",
+                "state": "waiting_throttle",
+                "count": plan.get("queued", 0),
+                "message": plan.get("message"),
+                "skippedDuplicates": skipped_dup,
+            })
+
     try:
         await BACKEND.start_download_multiple({"files": payload_files})
         _tasks_cache_invalidate()  # 任务页/角标立即可见新任务
         # 关键：/files 在 BackendClient._cached 还有独立 TTL 缓存，不清的话
         # 任务重建拿到的是提交前的旧数据 —— 新任务既进不了任务列表，也触发不了告警
         BACKEND._cache.clear()
-        return JSONResponse({"ok": True, "count": len(payload_files), "skippedDuplicates": skipped_dup})
+        extra = {}
+        if plan is not None:
+            # 分批下发：告知用户总量与排队数（前端 toast 用 message）
+            extra = {"message": plan.get("message"), "queuedCount": plan.get("queued", 0)}
+        return JSONResponse({"ok": True, "count": len(payload_files),
+                             "skippedDuplicates": skipped_dup, **extra})
     except Exception as e:  # noqa: BLE001
         log.error("browse 批量下载失败: %s", e)
         return JSONResponse({"ok": False, "message": _tg_err_public(e)})

@@ -188,6 +188,11 @@ async def task_cancel(request: Request):
             _tasks_cache_invalidate()
             return {"ok": True, "message": "已从磁盘挂起队列中取消该任务"}
 
+    # 节流队列中的任务同样支持出队取消（含"预算耗尽挂起待次日"的那些）
+    hit = throttle_cancel(task_id=unique_id, unique_id=unique_id)
+    if hit is not None:
+        return {"ok": True, "message": "已从节流队列中取消该任务"}
+
     # 若该任务正在归档上传/排队，同步取消归档上传任务
     arch_cancelled = False
     for jid, j in list(_ARCHIVE_JOBS.items()):

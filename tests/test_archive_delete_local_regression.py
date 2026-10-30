@@ -21,6 +21,22 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 import bridge_server
+from services.openlist_service import STAT_OK, STAT_MISSING, STAT_UNKNOWN
+
+
+def _probe_patches(code, size):
+    """把云端探测的两个接缝一次性换掉：三态探测 + 上传后核验。
+
+    归档 worker 现在用的是三态探测（_openlist_stat_ex / _openlist_verify_size），
+    旧的 _openlist_stat 只是兼容包装 —— 只 patch 老接缝不会再影响判定逻辑，
+    所以测试必须打到新接缝上，否则断言的是过期行为。
+    """
+    return [
+        patch("bridge_server._openlist_stat_ex",
+              new=AsyncMock(return_value=(code, size, {}))),
+        patch("bridge_server._openlist_verify_size",
+              new=AsyncMock(return_value=(code, size))),
+    ]
 
 
 class TestArchiveDeleteLocalRegression(unittest.TestCase):
@@ -148,15 +164,13 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         }
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def fake_stat(tok, path):
-            # 模拟云端已落盘且大小与本地一致（新校验要求上传后回查真实 size）
-            return {"size": 2048, "raw": {"size": 2048}}
-
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+            # 模拟云端已落盘且大小与本地一致（上传后必须回查真实 size 才允许删本地）
+            p1, p2 = _probe_patches(STAT_OK, 2048)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
                  patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
                  patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=fake_stat), \
                  patch.object(bridge_server.BACKEND, "remove_file", new=AsyncMock(return_value={"ok": True})):
                 await bridge_server._archive_worker(job)
 
@@ -194,14 +208,12 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         }
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def fake_stat2(tok, path):
-            return {"size": 64, "raw": {"size": 64}}
-
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+            p1, p2 = _probe_patches(STAT_OK, 64)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
                  patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
                  patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=fake_stat2), \
                  patch.object(bridge_server.BACKEND, "remove_file", new=AsyncMock(return_value={"ok": True})):
                 await bridge_server._archive_worker(job)
 
@@ -261,31 +273,26 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         job = self._mkjob(2048, policy="skip")
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def stat_zero(tok, path):
-            return {"size": 0, "raw": {"size": 0}}
-
-        async def stat_ok(tok, path):
-            return {"size": 2048, "raw": {"size": 2048}}
-
-        async def run(policy, stat_fn):
+        async def run(policy, cloud_size):
             j = self._mkjob(2048, policy=policy)
             bridge_server._ARCHIVE_JOBS[j["id"]] = j
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+            p1, p2 = _probe_patches(STAT_OK, cloud_size)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
                  patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
                  patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=stat_fn), \
                  patch.object(bridge_server.BACKEND, "remove_file", new=AsyncMock(return_value={"ok": True})):
                 await bridge_server._archive_worker(j)
             return j
 
         # 1) 云端 0 字节：不得被当成已完成，且本地文件必须原样保留
-        j1 = asyncio.run(run("skip", stat_zero))
+        j1 = asyncio.run(run("skip", 0))
         self.assertNotEqual(j1["state"], "done", "0 字节云端残片绝不能被判为归档成功")
         self.assertTrue(os.path.exists(self.media), "误判成功会删掉本地文件，此处必须保留")
         self.assertFalse(j1.get("local_deleted"))
 
         # 2) 云端大小与本地一致：正常跳过并允许删本地
-        j2 = asyncio.run(run("skip", stat_ok))
+        j2 = asyncio.run(run("skip", 2048))
         self.assertEqual(j2["state"], "done")
         self.assertFalse(os.path.exists(self.media), "确认云端完整时才允许删本地")
 
@@ -296,14 +303,12 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         job = self._mkjob(2048, policy="overwrite")
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def stat_short(tok, path):
-            return {"size": 10, "raw": {"size": 10}}
-
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+            p1, p2 = _probe_patches(STAT_OK, 10)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
                  patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
-                 patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=stat_short):
+                 patch("bridge_server._openlist_put_once", new=AsyncMock()):
                 await bridge_server._archive_worker(job)
 
         asyncio.run(run_worker())
@@ -317,14 +322,12 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         job = self._mkjob(2048, policy="overwrite")
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def stat_ok(tok, path):
-            return {"size": 2048, "raw": {"size": 2048}}
-
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+            p1, p2 = _probe_patches(STAT_OK, 2048)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
                  patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
-                 patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=stat_ok):
+                 patch("bridge_server._openlist_put_once", new=AsyncMock()):
                 await bridge_server._archive_worker(job)
 
         asyncio.run(run_worker())
@@ -337,13 +340,11 @@ class TestArchiveDeleteLocalRegression(unittest.TestCase):
         job = self._mkjob(2048, policy="overwrite")
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
 
-        async def stat_none(tok, path):
-            return None
-
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
-                 patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=stat_none):
+            p1, p2 = _probe_patches(STAT_MISSING, 0)
+            with p1, p2, \
+                 patch("bridge_server._openlist_token", new=AsyncMock(return_value="tk")), \
+                 patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()):
                 await bridge_server._archive_worker(job)
 
         asyncio.run(run_worker())

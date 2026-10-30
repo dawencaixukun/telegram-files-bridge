@@ -131,6 +131,15 @@ async def _startup():
     _bot_command_task = asyncio.create_task(bot_command_loop())
     # 频道监听：按订阅规则上的 watch 开关盯住会话，新消息自动入队下载
     _watch_task = asyncio.create_task(watch_loop())
+    # TG 请求节流调度：按随机节奏放行 .throttle_queue.json 里的排队任务。
+    # 与 FloodWait 同理——模块导入期没有事件循环，_ensure_loop() 被静默跳过；
+    # 若进程在"预算耗尽挂起"状态下重启，必须在这里补启动，否则队列永不续跑。
+    throttle_startup()
+
+    # 归档续跑：重启时仍在排队的任务原样保留（不再一律判失败），
+    # 拿到事件循环后在这里重新入队；「待核验」的任务同样在这一步重新核验。
+    # 与 throttle_startup 同理 —— 模块导入期没有事件循环，create_task 会失败。
+    asyncio.create_task(_archive_resume_pending())
 
 
 @app.on_event("shutdown")
@@ -173,6 +182,8 @@ async def _shutdown():
         except asyncio.CancelledError:
             pass
 
+    throttle_shutdown()
+
     await BACKEND.close()
     for t in list(_ARCHIVE_TASKS.values()):
         t.cancel()
@@ -197,6 +208,7 @@ import routers.system as _r_system
 import routers.api as _r_api
 import services.openlist_service as _s_openlist
 import services.watermark_service as _s_watermark
+import services.throttle_service as _s_throttle
 import services.notification_service as _s_notification
 import services.backup_service as _s_backup
 import services.doctor_service as _s_doctor
@@ -217,7 +229,7 @@ import core.templates as _c_templates
 _ALL_DEPENDENT_MODULES = [
     _r_auth, _r_dashboard, _r_tasks, _r_browse, _r_library,
     _r_archive, _r_subscriptions, _r_system, _r_api,
-    _s_openlist, _s_watermark, _s_notification, _s_backup,
+    _s_openlist, _s_watermark, _s_throttle, _s_notification, _s_backup,
     _s_doctor, _s_retrieve, _s_archive, _s_subscription,
     _s_media, _s_task, _s_browse, _s_bot_command,
     _c_config, _c_state, _c_logging, _c_auth, _c_backend, _c_templates

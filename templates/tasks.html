@@ -18,6 +18,30 @@
   </div>
 </div>
 
+<!-- TG 请求节流状态条：用户最需要知道「今天还能下几个 / 被挂起的什么时候跑」，
+     每次都去设置页翻太远。数据源与设置页同一接口（/api/throttle/status）。 -->
+<div class="card" id="throttleBar" style="margin-bottom:var(--space-4);display:none;"
+     x-data="throttleStatusBar()" x-init="init()">
+  <div class="row" style="gap:14px;align-items:center;flex-wrap:wrap;">
+    <span class="pill" style="background:rgba(99,102,241,.16);color:#818cf8;border-color:rgba(99,102,241,.32);">
+      <span class="p-dot" style="background:#818cf8;"></span><span x-text="'TG 节流 · ' + label"></span>
+    </span>
+    <span class="hint">
+      今日已放行 <b class="tnum" x-text="st.used"></b>
+      / <b class="tnum" x-text="st.budget > 0 ? st.budget : '不限'"></b>
+      <span x-show="st.thumbUsed > 0"> · 缩略图 <b x-text="st.thumbUsed"></b></span>
+    </span>
+    <span class="hint" x-show="st.queuedCount > 0">
+      排队 <b x-text="st.queuedCount"></b> 个
+      <span x-show="st.suspendedCount > 0" style="color:var(--warn,#f59e0b);font-weight:600;">
+        · 挂起 <span x-text="st.suspendedCount"></span> 个待次日自动续跑
+      </span>
+    </span>
+    <span style="flex:1;"></span>
+    <a class="btn sm ghost" href="/settings" style="height:30px;padding:4px 12px;">调整节奏</a>
+  </div>
+</div>
+
 <!-- Filter bar -->
 <div class="card" style="margin-bottom:var(--space-5);">
   <form class="row" hx-get="/partials/tasks" hx-target="#tasksTable" hx-swap="outerHTML" hx-trigger="change, submit" style="gap:var(--space-3);">

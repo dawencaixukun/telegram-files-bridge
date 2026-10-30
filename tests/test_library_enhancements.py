@@ -293,18 +293,18 @@ class TestLibraryEnhancements(unittest.TestCase):
             "archived_at": 0.0,
         }
         bridge_server._ARCHIVE_JOBS[job["id"]] = job
-
-        async def fake_stat3(tok, path):
-            # 新校验要求上传后回查云端真实大小；这里模拟已完整落盘
-            return {"size": 1024, "raw": {"size": 1024}}
+        import services.archive_service as _arch_mod
 
         async def run_worker():
-            with patch("bridge_server._openlist_token", new=AsyncMock(return_value="fake-tok")), \
-                 patch("bridge_server._openlist_mkdir_tree", new=AsyncMock()), \
-                 patch("bridge_server._openlist_put_once", new=AsyncMock()), \
-                 patch("bridge_server._openlist_stat", new=fake_stat3), \
+            # _archive_worker 已迁至 services/archive_service（VPS 重构后），
+            # 回查大小走 _openlist_stat_ex / _openlist_verify_size 三态语义
+            with patch.object(_arch_mod, "_openlist_token", new=AsyncMock(return_value="fake-tok")), \
+                 patch.object(_arch_mod, "_openlist_mkdir_tree", new=AsyncMock()), \
+                 patch.object(_arch_mod, "_openlist_put_once", new=AsyncMock(return_value=(200, 1024))), \
+                 patch.object(_arch_mod, "_openlist_stat_ex", new=AsyncMock(return_value=("ok", 1024, {"size": 1024}))), \
+                 patch.object(_arch_mod, "_openlist_verify_size", new=AsyncMock(return_value=("ok", 1024))), \
                  patch.object(bridge_server.BACKEND, "remove_file", new=AsyncMock(return_value={"ok": True})):
-                await bridge_server._archive_worker(job)
+                await _arch_mod._archive_worker(job)
 
         asyncio.run(run_worker())
 

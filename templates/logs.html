@@ -63,6 +63,15 @@
       <button type="button" class="fail-cat-pill" :class="activeCategory==='all'?'active':''" @click="setCategory('all')">
         全部 (<span x-text="total"></span>)
       </button>
+      <!-- 「上传被中断」「云端核验未完成」是新追加的两类：它们是线上 53 条告警的
+           全部内容，此前都落进 unknown 显示「❓ 未知异常」，用户看不出原因。
+           放在最前面，因为它们最常出现且都可一键重试。 -->
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='interrupted'?'active':''" @click="setCategory('interrupted')" x-show="categories.interrupted > 0">
+        ⏸️ 上传被中断 (<span x-text="categories.interrupted"></span>)
+      </button>
+      <button type="button" class="fail-cat-pill" :class="activeCategory==='verify_pending'?'active':''" @click="setCategory('verify_pending')" x-show="categories.verify_pending > 0">
+        🔎 云端核验未完成 (<span x-text="categories.verify_pending"></span>)
+      </button>
       <button type="button" class="fail-cat-pill" :class="activeCategory==='token_expired'?'active':''" @click="setCategory('token_expired')" x-show="categories.token_expired > 0">
         🔑 鉴权过期 (<span x-text="categories.token_expired"></span>)
       </button>
@@ -102,8 +111,8 @@
             <!-- 胶囊按钮组（与 OpenList 胶囊同几何）：左段重试（永久失败禁用），右段删除（随时可点，只删记录不动文件） -->
             <span class="pill-btns">
               <button type="button" class="btn xs ghost pill-seg-l" :disabled="j.retryable === false"
-                      :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : '单项重试'"
-                      @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : '重试'">重试</button>
+                      :title="j.retryable === false ? (j.suggestedFix || '该失败无法通过重试修复') : (j.retryMode === 'verify' ? '只重新核对云端大小，不会重新上传' : '单项重试')"
+                      @click="retryOne(j.id)" x-text="j.retryable === false ? '不可重试' : (j.retryMode === 'verify' ? '重新核验' : '重试')">重试</button>
               <button type="button" class="btn xs danger pill-seg-r"
                       title="从告警中心删除该失败记录（只删记录，不动云端/本地文件）"
                       @click="dismissOne(j.id)">

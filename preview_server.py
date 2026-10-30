@@ -547,7 +547,29 @@ async def explorer_preview(request: Request, path: str = "/", q: str = ""):
     if q:
         entries = [e for e in entries if q.lower() in e["name"].lower()]
 
+    # 根页工作台预览数据：chips 的 stats/visits 与生产同构（生产由
+    # routers/explorer._drive_chips 从 OpenList 统计 + 服务端记忆生成）
+    _pv_stats = {"/onedrive": (2, 14, "18.4 GB"), "/wopan": (1, 6, "2.1 GB"),
+                 "/google": (3, 41, "96.7 GB"), "/quark": (0, 3, "740 MB")}
+    _pv_visits = {"/onedrive": 12, "/google": 5, "/quark": 2}
+    drive_chips = []
+    for s in PV_STORAGES:
+        dirs, files, size = _pv_stats.get(s["mount_path"], (0, 0, "—"))
+        drive_chips.append({
+            "path": s["mount_path"], "name": s["name"],
+            "display_name": s["display_name"], "driver": s["driver"],
+            "status": "work", "status_label": "正常在线", "online": True,
+            "dirs": dirs, "files": files, "size": size,
+            "meta": (f"{dirs} 个目录" if dirs else "") + (f" · {files} 个文件" if files else "") + (f" · {size}" if size and size != "—" else ""),
+            "visits": _pv_visits.get(s["mount_path"], 0),
+            "is_current": False,
+        })
+    drive_chips.sort(key=lambda d: (-d["visits"], d["display_name"]))
+
     ctx = _ctx(request, "library-explorer", "library", "explorer", extra={
+        "drive_chips": drive_chips if is_root else [],
+        "browse_last_path": "/onedrive/yello" if is_root else "",
+        "browse_last_label": "OneDrive" if is_root else "",
         "current_path": norm_path,
         "is_root": is_root,
         "openlist_ready": True,
