@@ -25,3 +25,5 @@ patch_backup.py
 .pytest_cache/
 .coverage
 htmlcov/
+# 设计评审用的本地渲染产物（真实页面快照 + 截图），不入库
+.design/

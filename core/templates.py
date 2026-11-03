@@ -66,6 +66,7 @@ def _asset_versions() -> Dict[str, str]:
     return {
         "tokens_css": _asset_version("css/tokens.css"),
         "main_css": _asset_version("css/main.css"),
+        "skin_css": _asset_version("css/skin.css"),
         "app_js": _asset_version("js/app.js"),
         "ui_confirm_js": _asset_version("js/ui_confirm.js"),
     }

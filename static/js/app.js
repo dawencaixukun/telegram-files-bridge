@@ -531,7 +531,7 @@
           var pPath = pSegs.length ? ('/' + pSegs.join('/')) : '/';
           var upRow = document.createElement('div');
           upRow.className = 'arch-dir-row arch-up-row';
-          upRow.style.cssText = 'color:var(--brand);font-weight:600;background:rgba(124,58,237,.08);margin-bottom:4px;';
+          upRow.style.cssText = 'color:var(--brand);font-weight:600;background:var(--brand-wash);margin-bottom:4px;';
           var upSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
           upSvg.setAttribute('viewBox', '0 0 24 24'); upSvg.setAttribute('fill', 'none');
           upSvg.setAttribute('stroke', 'currentColor'); upSvg.setAttribute('stroke-width', '2');
@@ -3680,7 +3680,7 @@
         + '</td>'
         + '<td style="padding:7px 8px;width:26%;">'
         +   '<div style="height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;">'
-        +     '<div style="height:100%;width:' + barW + '%;background:' + (r.dir ? '#8b5cf6' : '#64748b') + ';"></div>'
+        +     '<div style="height:100%;width:' + barW + '%;background:' + (r.dir ? 'var(--brand)' : 'var(--text-3)') + ';"></div>'
         +   '</div>'
         + '</td>'
         + '<td style="padding:7px 12px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;"><b>' + _diskFmt(r.bytes) + '</b></td>'

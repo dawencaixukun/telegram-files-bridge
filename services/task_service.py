@@ -1007,26 +1007,26 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
             "id": "kpi-transfer-total",
             "items": [
                 {"label": "累计下载", "icon": "ic-download", "value": dl_total[0],
-                 "unit": dl_total[1], "id": "kpi-dl-total", "color": "#22d3ee",
+                 "unit": dl_total[1], "id": "kpi-dl-total", "color": "#c8a45e",
                  "points": _spark_points([float(dl_total_bytes)] * 14)},
                 {"label": "累计上传", "icon": "ic-upload", "value": ul_total[0],
                  "unit": ul_total[1], "id": "kpi-ul-total", "color": "#60a5fa",
                  "points": _spark_points([float(ul_total_bytes)] * 14)},
             ],
-            "delta": "", "d": "flat", "spark": "#22d3ee",
+            "delta": "", "d": "flat", "spark": "#c8a45e",
             "points": _spark_points([float(dl_total_bytes)] * 14),
         },
         # 磁盘卡可点：点开看「这 27 GB 被哪些目录占着」。
         # 只给一个分区总数，用户无法判断该删什么，KPI 等于没有可操作性。
         {"label": "本地磁盘占用", "icon": "ic-hdd",
          "value": str(int(disk.get("used_gb", 0))), "unit": "GB",
-         "delta": "", "d": "flat", "spark": "#8b5cf6", "points": _spark_points(trend_disk),
+         "delta": "", "d": "flat", "spark": "#d08c2c", "points": _spark_points(trend_disk),
          "click": "disk"},
         {"label": "云端归档累计", "icon": "ic-cloud", "value": f"{archived_total:,}", "unit": "个",
-         "delta": "", "d": "flat", "spark": "#34d399", "points": _spark_points(trend_archived)},
+         "delta": "", "d": "flat", "spark": "#86a35f", "points": _spark_points(trend_archived)},
     ]
     # 「实时速率」摘要卡（用户要求：两卡合一 —— 同一折线图内同时绘制
-    # 上传（紫 #a78bfa）与下载（青 #22d3ee）两条曲线，图例显示各自实时值）。
+    # 上传（旧金 #c8a45e）与下载（蓝晒青 #7ba0a8）两条曲线，图例显示各自实时值）。
     # 数据源：_SPEED_HISTORY 滚动窗口（14 点）；服务端渲染初始双曲线，
     # 前端轮询 /api/speeds 后实时追加点位重绘两条 polyline。
     up_now = await _upload_speed_snapshot()
@@ -1039,10 +1039,10 @@ async def _dashboard_stats(tasks: List[Dict[str, Any]], disk: Dict[str, Any]) ->
         "href": "/tasks",
         "lines": [
             {"speed_key": "upload", "label": "上传", "value": _fmt_speed(up_now),
-             "color": "#a78bfa", "icon": "ic-upload",
+             "color": "#c8a45e", "icon": "ic-upload",
              "points": ul_pts, "raw": ul_raw, "path": ul_path},
             {"speed_key": "download", "label": "下载", "value": _fmt_speed(dl_now),
-             "color": "#22d3ee", "icon": "ic-download",
+             "color": "#7ba0a8", "icon": "ic-download",
              "points": dl_pts, "raw": dl_raw, "path": dl_path},
         ],
     }]

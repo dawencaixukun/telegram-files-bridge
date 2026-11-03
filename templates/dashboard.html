@@ -73,12 +73,12 @@
        fill="none" aria-hidden="true" style="display:block;width:100%;overflow:visible;">
     <defs>
       <linearGradient id="grad-speed-download" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.28"/>
-        <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.0"/>
+        <stop offset="0%" stop-color="#7ba0a8" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="#7ba0a8" stop-opacity="0.0"/>
       </linearGradient>
       <linearGradient id="grad-speed-upload" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.22"/>
-        <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.0"/>
+        <stop offset="0%" stop-color="#c8a45e" stop-opacity="0.22"/>
+        <stop offset="100%" stop-color="#c8a45e" stop-opacity="0.0"/>
       </linearGradient>
     </defs>
     <!-- 背景参考标线（水平刻度虚线） -->
@@ -140,7 +140,7 @@
 {% block js %}
 <script>
   // 实时速率双平滑曲线：每 2s 轮询 /api/speeds，在同一 SVG（460×130 视区）内
-  // 同时重绘上传（紫 #a78bfa）与下载（青 #22d3ee）两条 Catmull-Rom 平滑曲线
+  // 同时重绘上传（旧金 #c8a45e）与下载（蓝晒青 #7ba0a8）两条 Catmull-Rom 平滑曲线
   // （替代 polyline 生硬尖角）。曲线只反映真实速率，空闲为贴底平线且静止。
   // 服务端经 data-raw 下发原始 bps 序列，首屏与轮询共用同一套联合峰值归一化
   // 几何 + 平滑算法（前后端一致，无跳变）。hx-boost 切页离开时停表防泄漏。
@@ -149,11 +149,11 @@
     var MAX_PTS = 14;
 
     var lines = [
-      { key: 'upload',   color: '#a78bfa',
+      { key: 'upload',   color: '#c8a45e',
         speedEl: document.getElementById('summary-speed-upload'),
         pathEl: document.getElementById('speed-line-upload'),
         area: document.getElementById('speed-area-upload') },
-      { key: 'download', color: '#22d3ee',
+      { key: 'download', color: '#7ba0a8',
         speedEl: document.getElementById('summary-speed-download'),
         pathEl: document.getElementById('speed-line-download'),
         area: document.getElementById('speed-area-download') },

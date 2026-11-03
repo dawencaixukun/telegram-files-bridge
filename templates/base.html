@@ -30,6 +30,8 @@
   {% set _v = asset_v() %}
   <link rel="stylesheet" href="/static/css/tokens.css?v={{ _v.tokens_css }}">
   <link rel="stylesheet" href="/static/css/main.css?v={{ _v.main_css }}">
+  {# skin.css 是「暗房」皮肤层：加载在 main.css 之后，只做覆盖，不改布局逻辑 #}
+  <link rel="stylesheet" href="/static/css/skin.css?v={{ _v.skin_css }}">
   {% block head %}{% endblock %}
   {# 基础运行库与通用胶水统一在 head defer 按序加载：
      htmx -> app.js (先注册全部全局工具函数与组件) -> alpinejs (安全挂载) #}

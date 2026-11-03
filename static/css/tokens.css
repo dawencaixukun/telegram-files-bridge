@@ -1,36 +1,39 @@
 /* =====================================================================
-   tokens.css — Design Tokens  (Dark default  /  Light via [data-theme])
-   Glassmorphism design system for the TG 归档管理台
+   tokens.css — 设计令牌
+   主题：「暗房」Darkroom —— 胶片洗印间的工作台气质
+   · 底色是暖橄榄黑（不是蓝黑），像暗房里的安全灯照在木质工作台上
+   · 唯一的暖光强调色是安全灯橙（safelight ochre），只用于「当前 / 进行中」
+   · 第二色是蓝晒青（cyanotype），只用于信息性状态
+   · 面板不透明、只有 1px 发丝线；玻璃模糊与渐变光斑全部取消
+   · 数字（KPI / 大小 / 时间）一律等宽，读起来像仪表读数
+   Dark 为默认，Light 走 [data-theme="light"]。
    ===================================================================== */
 
 :root {
-  /* ---- Radii ---- */
-  --radius-card: 20px;
-  --radius-control: 12px;
-  --radius-pill: 999px;
-  --radius-lg: 16px;
-  --radius-md: 10px;
-  --radius-sm: 6px;
+  /* ---- Radii：接近直角。暗房里的东西是裁切的，不是吹出来的气泡 ---- */
+  --radius-card: 3px;
+  --radius-control: 3px;
+  --radius-pill: 3px;
+  --radius-lg: 4px;
+  --radius-md: 3px;
+  --radius-sm: 2px;
 
-  /* ---- Surface layers (alias of glass tokens, for panel/drawer fills) ---- */
-  --surface-1: rgba(255, 255, 255, 0.06);
-  --surface-2: rgba(255, 255, 255, 0.09);
-  --surface-3: rgba(255, 255, 255, 0.13);
-  --border: rgba(255, 255, 255, 0.15);
-  --border-subtle: rgba(255, 255, 255, 0.09);
+  /* ---- Surface layers ---- */
+  --surface-1: #1d1a12;
+  --surface-2: #262218;
+  --surface-3: #302b1f;
+  --border: rgba(236, 222, 190, 0.15);
+  --border-subtle: rgba(236, 222, 190, 0.08);
 
-  /* ---- Brand alias (single-hue fallback for flat fills) ---- */
-  --brand: #8b5cf6;
-  --gradient-brand: linear-gradient(135deg, var(--brand-a) 0%, var(--brand-b) 100%);
-  --warn: #f59e0b;
+  /* ---- Brand alias ---- */
+  --brand: #d08c2c;
+  --gradient-brand: #d08c2c;
+  --warn: #d08c2c;
 
-  /* ---- Accent / 交互描边 ----
-     explorer.html 的面包屑 hover、胶囊选中、根搜索焦点环、任务横幅描边都用
-     var(--accent)，但这个变量历史上从未定义过：深色主题下靠继承色勉强能看，
-     浅色主题就直接退化成不可控的继承色。这里补上两个主题的正式取值。 */
-  --accent: #a78bfa;
-  --border-glow: rgba(139, 92, 246, 0.55);
-  --border-hover: rgba(255, 255, 255, 0.34);
+  /* ---- Accent / 交互描边 ---- */
+  --accent: #d08c2c;
+  --border-glow: rgba(208, 140, 44, 0.5);
+  --border-hover: rgba(228, 221, 197, 0.3);
 
   /* ---- Spacing (4px base) ---- */
   --space-1: 4px;
@@ -42,148 +45,152 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* ---- Typography ---- */
+  /* ---- Typography ----
+     三个角色，各有明确职责：
+     display —— 衬线体，只出现在页面标题、品牌名、卡片大标题（馆藏卡片的声音）
+     sans    —— 正文与控件（中文优先苹方/微软雅黑，避免宋体在 13px 发虚）
+     mono    —— 一切数字与路径（等宽 + 表格数字，仪表读数） */
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Songti SC", "Noto Serif SC", "Source Han Serif SC", SimSun, serif;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "JetBrains Mono",
+  --font-mono: "Cascadia Mono", ui-monospace, "SFMono-Regular", "JetBrains Mono",
     Consolas, "Liberation Mono", monospace;
 
-  /* ---- Motion ---- */
-  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  --dur-fast: 140ms;
-  --dur-med: 260ms;
-  --dur-slow: 480ms;
+  /* ---- Motion：快而克制，没有任何弹跳 ---- */
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+  --dur-fast: 110ms;
+  --dur-med: 180ms;
+  --dur-slow: 320ms;
 
   /* ---- Layout ---- */
-  --sidebar-w: 240px;
+  --sidebar-w: 236px;
   --sidebar-w-collapsed: 72px;
-  --topbar-h: 64px;
+  --topbar-h: 58px;
 
-  /* ---- Glass card recipe (default: DARK) ---- */
-  --glass-bg: rgba(255, 255, 255, 0.08);
-  --glass-bg-strong: rgba(255, 255, 255, 0.14); /* data-dense areas */
-  /* 下拉/浮层专用：压在密集文字上时必须近乎实底，否则双重曝光看不清（用户反馈） */
-  --surface-popover: rgba(15, 18, 30, 0.97);
-  /* 语义别名：模板里的下拉/悬停底色统一走这里，不要在模板里写死颜色
-     （历史坑：写了 var(--bg-1, #111827) 的兜底，浅色主题下渲染成纯黑块） */
+  /* ---- 面板配方（默认 DARK）---- */
+  --glass-bg: #1d1a12;              /* 主面板：工作台上的相纸 */
+  --glass-bg-strong: #262218;       /* 次级面板 / 控件填充 */
+  --surface-popover: #221f16;       /* 浮层：必须实底，压在任何内容上都可读 */
   --bg-1: var(--surface-popover);
   --bg-2: var(--surface-2);
   --bg-3: var(--surface-3);
-  --glass-border: rgba(255, 255, 255, 0.15);
-  --glass-border-strong: rgba(255, 255, 255, 0.26);
-  --glass-blur: blur(20px) saturate(140%);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
-  --glass-shadow-soft: 0 4px 18px rgba(0, 0, 0, 0.18);
+  --glass-border: rgba(236, 222, 190, 0.13);
+  --glass-border-strong: rgba(236, 222, 190, 0.28);
+  --glass-blur: none;               /* 暗房没有毛玻璃 */
+  --glass-shadow: none;             /* 阴影只留给浮层，见 skin.css */
+  --glass-shadow-soft: none;
 
   /* ---- Text ---- */
-  --text-1: rgba(255, 255, 255, 0.92);
-  --text-2: rgba(255, 255, 255, 0.6);
-  --text-3: rgba(255, 255, 255, 0.35);
+  --text-1: #f1ead7;                /* 相纸白 */
+  --text-2: #ada492;
+  --text-3: #776f5c;
 
-  /* ---- Brand gradient (purple → cyan) ---- */
-  --brand-a: #8b5cf6;
-  --brand-b: #22d3ee;
-  --brand-grad: linear-gradient(135deg, var(--brand-a) 0%, var(--brand-b) 100%);
-  --brand-grad-soft: linear-gradient(
-    135deg,
-    rgba(139, 92, 246, 0.85),
-    rgba(34, 211, 238, 0.85)
-  );
+  /* ---- Brand ramp：安全灯橙，单色不用渐变 ---- */
+  --brand-a: #d08c2c;
+  --brand-b: #7ba0a8;               /* 蓝晒青：链接与信息态 */
+  --brand-grad: #d08c2c;
+  --brand-grad-soft: rgba(208, 140, 44, 0.85);
+  /* 强调色的两块淡底：给「选中 / 当前行」类背景用，避免在模板里写死紫色 rgba */
+  --brand-wash: rgba(208, 140, 44, 0.1);
+  --brand-line: rgba(208, 140, 44, 0.32);
 
   /* ---- Semantic / status colours ---- */
-  --ok: #34d399;      /* success - green */
-  --info: #60a5fa;    /* running  - blue  */
-  --wait: #fbbf24;    /* queued   - orange*/
-  --err: #f87171;     /* failed   - red   */
-  --iso: #fb7185;     /* isolated - rose  */
-  --queued: #9ca3af;  /* pending  - grey  */
-  --m-code: #22d3ee;  /* verifying- cyan  */
-  --m-upload: #a78bfa;/* uploading- purple*/
+  --ok: #86a35f;                    /* 完成 - 苔绿 */
+  --info: #7ba0a8;                  /* 进行 - 蓝晒青 */
+  --wait: #d08c2c;                  /* 排队 - 安全灯橙 */
+  --err: #c25b45;                   /* 失败 - 砖红 */
+  --iso: #b06a5c;                   /* 隔离 - 陶土 */
+  --queued: #6d6a5b;
+  --m-code: #7ba0a8;                /* 校验 - 蓝晒青 */
+  --m-upload: #c8a45e;              /* 上传 - 旧金 */
 
-  /* ---- Dark ambient background layers ---- */
-  --bga-1: rgba(124, 58, 237, 0.55);
-  --bga-2: rgba(37, 99, 235, 0.5);
-  --bga-3: rgba(34, 211, 238, 0.42);
-  --bga-4: rgba(236, 72, 153, 0.32);
-  --bg-canvas: #0b0b14;
+  /* ---- 背景层：一盏灯，不加光斑 ---- */
+  --bga-1: transparent;
+  --bga-2: transparent;
+  --bga-3: transparent;
+  --bga-4: transparent;
+  --bg-canvas: #131109;
 
-  /* ---- Chart theming (matches glass) ---- */
-  --chart-grid: rgba(255, 255, 255, 0.08);
-  --chart-tick: rgba(255, 255, 255, 0.42);
-  --chart-tooltip-bg: rgba(20, 20, 32, 0.82);
-  --chart-tooltip-border: rgba(255, 255, 255, 0.16);
+  /* ---- Chart theming ---- */
+  --chart-grid: rgba(228, 221, 197, 0.08);
+  --chart-tick: rgba(228, 221, 197, 0.42);
+  --chart-tooltip-bg: #221f16;
+  --chart-tooltip-border: rgba(228, 221, 197, 0.18);
 
-  --sidebar-active-bg: rgba(255, 255, 255, 0.1);
-  --hover-bg: rgba(255, 255, 255, 0.07);
-  --focus-ring: rgba(139, 92, 246, 0.55);
-  --scrollbar: rgba(255, 255, 255, 0.18);
-  --scrollbar-hover: rgba(255, 255, 255, 0.34);
+  --sidebar-active-bg: transparent;
+  --hover-bg: rgba(236, 222, 190, 0.06);
+  --focus-ring: #d08c2c;
+  --scrollbar: rgba(236, 222, 190, 0.2);
+  --scrollbar-hover: rgba(236, 222, 190, 0.36);
 
-  /* ---- 缩略图浮层标签（角标/网盘名/时长）----
-     这些标签压在任意缩略图上，底色必须是与主题同向的「遮罩」而不是固定的深色：
-     暗色主题用深遮罩 + 白字可读；浅色主题若继续写死 rgba(15,23,42,.85)，
-     整块标签就是贴在浅色页面上的黑块（用户反馈：白天主题网盘标识黑黑一块）。 */
-  --media-chip-bg: rgba(15, 23, 42, 0.72);
-  --media-chip-bg-hover: rgba(15, 23, 42, 0.86);
-  --media-chip-border: rgba(255, 255, 255, 0.18);
-  --media-chip-text: rgba(255, 255, 255, 0.94);
-  --media-chip-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  /* ---- 缩略图浮层标签 ---- */
+  --media-chip-bg: rgba(16, 15, 9, 0.82);
+  --media-chip-bg-hover: rgba(16, 15, 9, 0.92);
+  --media-chip-border: rgba(236, 222, 190, 0.2);
+  --media-chip-text: rgba(241, 234, 215, 0.95);
+  --media-chip-shadow: none;
 }
 
-/* ---------------- LIGHT THEME ---------------- */
+/* ---------------- LIGHT THEME：新闻纸 ---------------- */
 [data-theme="light"] {
-  --glass-bg: rgba(255, 255, 255, 0.65);
-  --glass-bg-strong: rgba(255, 255, 255, 0.82);
-  --surface-popover: rgba(255, 255, 255, 0.98);
-  --glass-border: rgba(40, 40, 90, 0.14);
-  --glass-border-strong: rgba(40, 40, 90, 0.24);
-  --glass-shadow: 0 8px 32px rgba(40, 40, 90, 0.14);
-  --glass-shadow-soft: 0 4px 18px rgba(40, 40, 90, 0.08);
+  --glass-bg: #faf8f0;
+  --glass-bg-strong: #f1efe3;
+  --surface-popover: #fbfaf5;
+  --glass-border: rgba(22, 21, 15, 0.16);
+  --glass-border-strong: rgba(22, 21, 15, 0.34);
 
-  /* Surface 层在亮色主题下反转为淡灰填充，避免深色主题的白色半透明叠在浅底上"发灰" */
-  --surface-1: rgba(255, 255, 255, 0.72);
-  --surface-2: rgba(40, 40, 90, 0.05);
-  --surface-3: rgba(40, 40, 90, 0.09);
-  --border: rgba(40, 40, 90, 0.16);
-  --border-subtle: rgba(40, 40, 90, 0.10);
+  --surface-1: #faf8f0;
+  --surface-2: #f1efe3;
+  --surface-3: #e5e2d3;
+  --border: rgba(22, 21, 15, 0.16);
+  --border-subtle: rgba(22, 21, 15, 0.09);
 
-  /* 与暗色一一对应的语义别名（浅色下是白底浮层 + 淡灰悬停） */
   --bg-1: var(--surface-popover);
   --bg-2: var(--surface-2);
   --bg-3: var(--surface-3);
 
-  --text-1: rgba(20, 22, 40, 0.92);
-  --text-2: rgba(20, 22, 40, 0.6);
-  --text-3: rgba(20, 22, 40, 0.35);
+  --text-1: #17160f;
+  --text-2: #585546;
+  --text-3: #83806f;
 
-  /* 浅色主题的强调色必须压深（紫），否则压在白底上几乎看不见 */
-  --accent: #7c3aed;
-  --border-glow: rgba(124, 58, 237, 0.45);
-  --border-hover: rgba(40, 40, 90, 0.34);
+  --accent: #a2651a;
+  --brand: #a2651a;
+  --gradient-brand: #a2651a;
+  --brand-a: #a2651a;
+  --brand-b: #2f6470;
+  --brand-grad: #a2651a;
+  --brand-grad-soft: rgba(162, 101, 26, 0.85);
+  --brand-wash: rgba(162, 101, 26, 0.1);
+  --brand-line: rgba(162, 101, 26, 0.32);
+  --border-glow: rgba(162, 101, 26, 0.45);
+  --border-hover: rgba(22, 21, 15, 0.32);
 
-  --bga-1: rgba(147, 111, 245, 0.5);
-  --bga-2: rgba(96, 165, 250, 0.45);
-  --bga-3: rgba(103, 232, 249, 0.4);
-  --bga-4: rgba(244, 114, 182, 0.3);
-  --bg-canvas: #e9eaf5;
+  --ok: #4f6b32;
+  --info: #2f6470;
+  --wait: #a2651a;
+  --err: #a8442f;
+  --iso: #8d4a3d;
+  --queued: #83806f;
+  --m-code: #2f6470;
+  --m-upload: #8a6a1e;
 
-  --chart-grid: rgba(40, 40, 90, 0.1);
-  --chart-tick: rgba(40, 40, 90, 0.5);
-  --chart-tooltip-bg: rgba(255, 255, 255, 0.9);
-  --chart-tooltip-border: rgba(40, 40, 90, 0.2);
+  --bg-canvas: #e6e3d6;
 
-  --sidebar-active-bg: rgba(255, 255, 255, 0.6);
-  --hover-bg: rgba(40, 40, 90, 0.06);
-  --focus-ring: rgba(139, 92, 246, 0.45);
-  --scrollbar: rgba(40, 40, 90, 0.22);
-  --scrollbar-hover: rgba(40, 40, 90, 0.40);
+  --chart-grid: rgba(22, 21, 15, 0.1);
+  --chart-tick: rgba(22, 21, 15, 0.5);
+  --chart-tooltip-bg: #fbfaf5;
+  --chart-tooltip-border: rgba(22, 21, 15, 0.2);
 
-  /* 浅色主题的缩略图浮层标签：改为半透明白底 + 深字。
-     不再出现「浅页面上压一块深色矩形」的黑块观感，
-     同时因为仍有底色，压在任何缩略图（亮/暗画面）上都保持对比度。 */
-  --media-chip-bg: rgba(255, 255, 255, 0.86);
-  --media-chip-bg-hover: rgba(255, 255, 255, 0.96);
-  --media-chip-border: rgba(40, 40, 90, 0.16);
-  --media-chip-text: rgba(20, 22, 40, 0.88);
-  --media-chip-shadow: 0 2px 8px rgba(40, 40, 90, 0.16);
+  --sidebar-active-bg: transparent;
+  --hover-bg: rgba(22, 21, 15, 0.055);
+  --focus-ring: #a2651a;
+  --scrollbar: rgba(22, 21, 15, 0.22);
+  --scrollbar-hover: rgba(22, 21, 15, 0.4);
+
+  --media-chip-bg: rgba(251, 250, 245, 0.9);
+  --media-chip-bg-hover: rgba(251, 250, 245, 0.98);
+  --media-chip-border: rgba(22, 21, 15, 0.18);
+  --media-chip-text: rgba(23, 22, 15, 0.9);
+  --media-chip-shadow: none;
 }

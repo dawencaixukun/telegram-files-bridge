@@ -18,6 +18,7 @@
   </script>
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="stylesheet" href="/static/css/skin.css">
   <!-- 预加载主面板核心静态资源，在用户输入账号密码期间提前缓存至本地，登录后直开（0 延迟） -->
   <link rel="prefetch" href="/static/js/vendor/chart.umd.min.js">
   <link rel="prefetch" href="/static/js/vendor/htmx.min.js?v=20260902j">
@@ -30,12 +31,12 @@
   <div class="auth-wrap" style="min-height:100vh;display:grid;place-items:center;padding:24px;">
     <div class="card strong pad-lg" style="width:100%;max-width:420px;">
       <div style="display:flex;align-items:center;gap:14px;justify-content:center;margin-bottom:28px;">
-        <span class="logo" style="width:46px;height:46px;border-radius:14px;background:var(--brand-grad);display:grid;place-items:center;color:#fff;box-shadow:0 6px 22px rgba(139,92,246,.5);">
+        <span class="logo" style="width:40px;height:40px;border-radius:2px;background:var(--brand);display:grid;place-items:center;color:#17160f;">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>
         </span>
         <div>
-          <div style="font-size:20px;font-weight:700;">TG 归档台</div>
-          <div style="font-size:12px;color:var(--text-3);">v0.1.0 · 预览</div>
+          <div style="font-family:var(--font-display);font-size:20px;font-weight:600;letter-spacing:.02em;">TG 归档台</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-3);letter-spacing:.04em;">v0.1.0 · 预览</div>
         </div>
       </div>
 
