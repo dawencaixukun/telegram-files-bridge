@@ -288,6 +288,16 @@ class TestEndpoint(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json().get("mountRoot"), "缺少下钻起点 mountRoot")
 
+    def test_watermark_reports_app_root(self):
+        """「项目目录」视图的起点：弹窗默认落点必须是项目数据根，
+        而不是整个分区（分区视图保留给水位排查，两者一键切换）。"""
+        r = self.client.get("/api/disk/watermark/status", cookies=self.cookies,
+                            headers={"Accept": "application/json"})
+        self.assertEqual(r.status_code, 200)
+        app_root = r.json().get("appRoot")
+        self.assertTrue(app_root, "缺少项目起点 appRoot")
+        self.assertTrue(os.path.isdir(app_root), "appRoot 必须是真实目录")
+
 
 class TestUiWiring(unittest.TestCase):
     """模板/前端接线：KPI 可点、弹窗已挂载、设置页有入口。"""
@@ -314,7 +324,8 @@ class TestUiWiring(unittest.TestCase):
 
     def test_modal_has_navigation_slots(self):
         tpl = self._read("templates/partials/_disk_breakdown_modal.html")
-        for anchor in ("diskBreakdownBackdrop", "diskRows", "diskPathChip", "diskUpBtn"):
+        for anchor in ("diskBreakdownBackdrop", "diskRows", "diskPathChip", "diskUpBtn",
+                       "diskScopeProject", "diskScopePartition"):
             self.assertIn(anchor, tpl)
 
     def test_settings_has_entry(self):
@@ -324,7 +335,7 @@ class TestUiWiring(unittest.TestCase):
     def test_app_js_defines_handlers(self):
         js = self._read("static/js/app.js")
         for fn in ("__openDiskBreakdown", "__closeDiskBreakdown", "__diskLoad",
-                   "__diskEnter", "__diskUp", "__diskRefresh"):
+                   "__diskEnter", "__diskUp", "__diskRefresh", "__diskScope"):
             self.assertIn(fn, js)
 
 

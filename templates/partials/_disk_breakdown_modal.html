@@ -17,6 +17,12 @@
     </div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-3);">
+      <div class="seg" id="diskScopeSeg" role="group" aria-label="占用统计范围" style="flex:none;">
+        <button type="button" id="diskScopeProject" class="active" onclick="window.__diskScope('project')"
+                title="只统计 Telegram 归档系统自己的数据目录（任务库 / 下载落地 / 日志）">项目目录</button>
+        <button type="button" id="diskScopePartition" onclick="window.__diskScope('partition')"
+                title="统计整个分区：磁盘水位熔断按分区使用率触发，排查空间告急看这里">整个分区</button>
+      </div>
       <button type="button" class="btn sm ghost" id="diskUpBtn" onclick="window.__diskUp()" style="display:none;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-chevron"/></svg>
         上一级
@@ -35,7 +41,9 @@
 
     <div class="hint" style="margin-top:var(--space-3);font-size:12px;line-height:1.6;">
       口径与实际分配的磁盘块一致（<code>st_blocks</code>，硬链接去重、不跨设备），所以合计能与
-      <code>df</code> 的「已用」对上；不是 <code>ls -l</code> 显示的逻辑大小。
+      <code>df</code> 的「已用」对上；不是 <code>ls -l</code> 显示的逻辑大小。<br>
+      默认从<b>项目目录</b>看 tg 归档自己占了多少；磁盘水位熔断按<b>整个分区</b>计算，
+      排查「空间告急但项目没占多少」时切到分区视图找真正的占用大户。
     </div>
 
     <div class="modal-foot">

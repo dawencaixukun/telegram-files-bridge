@@ -851,6 +851,9 @@ async def api_disk_watermark_status(request: Request):
         # 分区根路径：设置页「查看目录占用明细」以它作为下钻起点。
         # 直接读 disk_kpi_hint()，避免前端把 app-data 当成「整个分区」。
         "mountRoot": disk_kpi_hint().get("root") or "/",
+        # 项目数据根：磁盘明细弹窗「项目目录」视图的起点。水位熔断按分区算、
+        # 「tg 自己占了多少」看这里，两个口径各有用途，前端提供切换。
+        "appRoot": os.path.abspath(APP_ROOT_DIR if os.path.isdir(APP_ROOT_DIR) else BASE_DIR),
     })
 
 

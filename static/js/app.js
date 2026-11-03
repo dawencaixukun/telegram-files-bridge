@@ -3609,6 +3609,28 @@
      目录行可点、文件行不可点 —— 点文件没有「下一层」，必须明确区分，
      否则用户点了没反应会以为坏了。 */
   var _diskState = { path: '', parent: '', loading: false };
+  /* 两个下钻起点：mountRoot=分区根（水位熔断口径），appRoot=项目数据根
+     （tg 归档自己的占用口径）。由 /api/disk/watermark/status 一次带回。 */
+  var _diskRoots = { mountRoot: '', appRoot: '' };
+
+  function _diskNorm(p) {
+    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  }
+
+  /* 切换按钮的高亮态跟着「当前所在」走：在项目根子树里就亮「项目目录」，
+     正好在分区根就亮「整个分区」，下钻到别处（如 /var/lib/docker）则都不亮，
+     避免按钮撒谎。 */
+  function _diskRenderScope(d) {
+    var cur = _diskNorm(d && d.path);
+    var app = _diskNorm(_diskRoots.appRoot);
+    var mnt = _diskNorm(_diskRoots.mountRoot);
+    var inProject = !!app && (cur === app || cur.indexOf(app + '/') === 0);
+    var isPartition = !!mnt && cur === mnt;
+    var pb = document.getElementById('diskScopeProject');
+    var qb = document.getElementById('diskScopePartition');
+    if (pb) pb.classList.toggle('active', inProject && !isPartition);
+    if (qb) qb.classList.toggle('active', isPartition);
+  }
 
   function _diskFmt(bytes) {
     var n = Number(bytes) || 0;
@@ -3710,6 +3732,7 @@
         if (chip) chip.textContent = _diskState.path;
         var up = document.getElementById('diskUpBtn');
         if (up) up.style.display = _diskState.parent ? '' : 'none';
+        _diskRenderScope(d);
         _diskRenderSummary(d);
         _diskRenderWarn(d);
         _diskRenderRows(d);
@@ -3730,6 +3753,12 @@
   window.__diskRefresh = function () {
     window.__diskLoad(_diskState.path || '', true);
   };
+  window.__diskScope = function (which) {
+    var p = which === 'partition'
+      ? (_diskRoots.mountRoot || '/')
+      : (_diskRoots.appRoot || _diskRoots.mountRoot || '/');
+    window.__diskLoad(p, false);
+  };
 
   window.__openDiskBreakdown = function (btn) {
     var start = (btn && btn.getAttribute && btn.getAttribute('data-disk-path')) || '';
@@ -3737,17 +3766,22 @@
     if (!b) return;
     b.classList.add('show');
     document.body.style.overflow = 'hidden';
-    if (!start) {
-      /* 起点必须是「整个分区」，不能是 app-data —— 用户关心的是 27 GB
-         都去哪了，只给他看 app-data 会答非所问。所以先问一次挂载点。 */
-      fetch('/api/disk/watermark/status', { headers: { 'Accept': 'application/json' } })
-        .then(function (r) { return r.json(); })
-        .then(function (d) { return (d && d.mountRoot) || '/'; })
-        .catch(function () { return '/'; })
-        .then(function (root) { window.__diskLoad(root, false); });
-    } else {
-      window.__diskLoad(start, false);
-    }
+    /* 先问一次水位状态，把两个起点（分区根 + 项目数据根）都拿回来。
+       默认落在「项目目录」：日常最关心的是 tg 归档自己占了多少；
+       水位熔断按整个分区算，排查空间告急再一键切到「整个分区」。
+       入口若显式带了 data-disk-path 则尊重之。 */
+    fetch('/api/disk/watermark/status', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) {
+          _diskRoots.mountRoot = d.mountRoot || '/';
+          _diskRoots.appRoot = d.appRoot || '';
+        }
+      })
+      .catch(function () { /* 拿不到就用缓存的起点，最差退回分区根 */ })
+      .then(function () {
+        window.__diskLoad(start || _diskRoots.appRoot || _diskRoots.mountRoot || '/', false);
+      });
   };
 
   window.__closeDiskBreakdown = function () {
