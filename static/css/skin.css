@@ -517,6 +517,47 @@ a:hover {
 .pill.failed { color: var(--err); border-color: rgba(194, 91, 69, 0.5); background: transparent; }
 .pill.isolated { color: var(--iso); border-color: rgba(176, 106, 92, 0.55); background: transparent; }
 
+/* ---------- 账本区（.ledger）：内容区不装进卡片 ----------
+   控件（筛选条）留在框里，内容（列表/表格）直接铺在页面上，
+   只靠上下两条发丝线与页头对齐。这样一页不会变成一串同样的圆角盒子。 */
+.card.ledger {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--glass-border-strong);
+  border-bottom: 1px solid var(--glass-border);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.card.ledger > .card-head {
+  margin: 0;
+  padding: 16px 2px 10px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.card.ledger .table-wrap {
+  border-radius: 0;
+}
+
+.card.ledger thead th {
+  background: transparent;
+  padding: 9px 12px 9px 2px;
+}
+
+.card.ledger tbody td {
+  padding: 11px 12px 11px 2px;
+}
+
+.card.ledger thead th:last-child,
+.card.ledger tbody td:last-child {
+  padding-right: 2px;
+}
+
+.card.ledger tbody tr:last-child td {
+  border-bottom: none;
+}
+
 /* ---------- 表格：更安静的横线，更紧的行距 ---------- */
 .table-wrap {
   border-radius: 2px;
@@ -737,8 +778,12 @@ td .mono,
 
 /* ---------- 日志 ---------- */
 .log-list {
-  background: var(--glass-bg);
-  border-radius: 2px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--glass-border-strong);
+  border-bottom: 1px solid var(--glass-border);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .log-list .lrow {

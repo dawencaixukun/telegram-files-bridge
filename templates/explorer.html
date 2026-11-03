@@ -1041,6 +1041,169 @@
   .batch-bar-inner { justify-content: space-between; padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
   .batch-bar-actions .btn { padding: 5px 8px; font-size: 12px; }
 }
+
+/* =====================================================================
+   暗房覆盖层 —— explorer 自有组件对齐全站皮肤
+   本页自带 900 行内联样式（历史原因：网盘文件管理器先于统一皮肤写成）。
+   这里不重写它们，只在末尾按「发丝线 + 直角 + 安全灯橙」的语言覆盖表面：
+   · 圆角一律收到 2–3px，删除全部 backdrop-filter 与紫色渐变
+   · 选中态统一成「浅纸底 + 橙色下划线」，不再整块铺色
+   · 列表容器降级为账本（上下发丝线，无边框无底色）
+   ===================================================================== */
+
+/* ---- 工具条 / 视图切换 ---- */
+.explorer-toolbar {
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 2px;
+}
+.explorer-toolbar .btn { border-radius: 2px; }
+.toolbar-search .input { border-radius: 2px; }
+.toolbar-sort .toolbar-sort-btn { border-radius: 2px; }
+.toolbar-sort .toolbar-sort-menu,
+.toolbar-menu,
+.drive-menu {
+  background: var(--surface-popover);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 3px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.toolbar-menu-item,
+.toolbar-sort .toolbar-sort-item { border-radius: 2px; }
+
+.view-switch {
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 2px;
+  padding: 0;
+}
+.view-switch .btn { border-radius: 0; }
+.view-switch .btn.active,
+.view-switch .btn.is-active {
+  background: var(--surface-2);
+  color: var(--text-1);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+/* ---- 网盘胶囊：描边 + 选中下划线 ---- */
+.explorer-capsules-bar { gap: 6px; }
+.capsule-btn {
+  border-radius: 2px;
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  padding: 5px 11px;
+  font-size: 12.5px;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.capsule-btn:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-hover);
+}
+.capsule-btn.active {
+  background: var(--surface-2);
+  border-color: var(--brand-line);
+  color: var(--text-1);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+/* ---- 继续上次浏览：纸面板 + 橙色左记号 ---- */
+.resume-card {
+  border-radius: 2px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-left: 2px solid var(--brand);
+}
+.resume-card:hover {
+  transform: none;
+  border-color: var(--border-hover);
+  border-left-color: var(--brand);
+}
+.resume-ico {
+  border-radius: 2px;
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: var(--brand);
+}
+.resume-go { color: var(--brand); font-weight: 600; }
+
+/* ---- 网盘卡片 ---- */
+.drive-chip-head {
+  text-transform: none;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.drive-chip {
+  border-radius: 2px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+}
+.drive-chip:hover {
+  border-color: var(--border-hover);
+  background: var(--hover-bg);
+}
+.dc-ico { border-radius: 2px; }
+.dc-visits { border-radius: 2px; font-family: var(--font-mono); font-size: 10.5px; }
+
+/* ---- 根搜索 ---- */
+.root-search-bar { border-radius: 2px; }
+.root-search-row { border-radius: 2px; }
+.rsr-badge { border-radius: 2px; font-family: var(--font-mono); font-size: 10px; }
+
+/* ---- 文件夹卡片：暗房空框，不用黄橙渐变 ---- */
+.thumb.folder-card { background: var(--glass-bg); }
+.thumb.folder-card:hover { background: var(--hover-bg); }
+.thumb.folder-card .t-img { background: none; color: var(--brand); }
+
+/* ---- 列表视图：账本 ---- */
+.thumb-grid.view-list {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--glass-border-strong);
+  border-bottom: 1px solid var(--glass-border);
+  border-radius: 0;
+}
+.thumb-grid.view-list .thumb {
+  min-height: 44px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+.thumb-grid.view-list .thumb:hover { background: var(--hover-bg); }
+
+/* ---- 任务横幅 / 批量条 / 勾选框：去掉毛玻璃与渐变 ---- */
+.active-task-banner {
+  background: var(--brand-wash);
+  border: 1px solid var(--brand-line);
+  border-radius: 2px;
+}
+.cloud-check {
+  border-radius: 2px;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.batch-bar-inner {
+  background: var(--surface-popover);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 3px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.batch-bar-info strong { font-family: var(--font-display); font-size: 17px; }
+
+/* ---- 视频播放按钮：相纸上的深色圆点 ---- */
+.t-play-circle {
+  background: rgba(16, 15, 9, 0.74);
+  border: 1px solid rgba(241, 234, 215, 0.55);
+}
+.t-video-overlay:hover .t-play-circle {
+  background: rgba(16, 15, 9, 0.86);
+  border-color: var(--brand);
+}
 </style>
 
 <script>
