@@ -124,7 +124,9 @@ a:hover {
 
 .nav-item {
   border-radius: 2px;
-  padding: 7px 8px;
+  /* 左内边距留给「当前页」那根竖线；竖线必须落在内容盒里，
+     否则会被 .sidebar nav 的 overflow 裁掉（负偏移不可用）。 */
+  padding: 7px 8px 7px 12px;
   font-size: 13.5px;
   font-weight: 450;
   gap: 10px;
@@ -144,7 +146,7 @@ a:hover {
 
 /* 当前页只留一根安全灯橙的短竖线：位置比色块更安静，也更好扫读 */
 .nav-item.active::before {
-  left: -10px;
+  left: 0;
   width: 2px;
   height: 15px;
   border-radius: 0;
@@ -440,10 +442,12 @@ a:hover {
 
 .kpi .k-value small {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text-3);
   letter-spacing: 0.02em;
+  margin-left: 5px;
+  vertical-align: baseline;
 }
 
 .kpi-dual .k-value {
