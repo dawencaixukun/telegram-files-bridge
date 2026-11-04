@@ -13,10 +13,61 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 router = APIRouter()
 
+# 任务表分页：一页 50 条。历史实现把 900+ 条任务一次性塞进 HTML（1.6 MB），
+# 服务端序列化 + 浏览器建 DOM 都要几百毫秒，切页明显发顿。
+# 现在首屏只渲染第一页，其余由「加载更多」按 htmx 追加（已渲染的行不重建，
+# 展开/勾选状态不丢）。
+TASKS_PAGE_SIZE = 50
+TASKS_PAGE_MAX = 1000      # 「加载更多」/自动刷新一次最多回多少条，防被撑爆
+
+
+def _filter_tasks(all_tasks, status="", source="", date_from="", date_to=""):
+    """与历史 /partials/tasks 完全一致的口径（状态 / 来源 / 日期）。"""
+    filtered = list(all_tasks)
+    if status:
+        # active/unarchived/hide_archived 都是「排除已归档」这一个语义
+        if status in ("active", "unarchived", "hide_archived"):
+            filtered = [t for t in filtered if t.get("status") != "archived"]
+        else:
+            filtered = [t for t in filtered if t.get("status") == status]
+    if source:
+        filtered = [t for t in filtered if t.get("source") == source]
+    import datetime as _dt
+    try:
+        if date_from:
+            ts_from = _dt.datetime.combine(_dt.date.fromisoformat(date_from), _dt.time.min).timestamp()
+            filtered = [t for t in filtered if t.get("_date_ts") and t["_date_ts"] >= ts_from]
+        if date_to:
+            ts_to = _dt.datetime.combine(_dt.date.fromisoformat(date_to), _dt.time.max).timestamp()
+            filtered = [t for t in filtered if t.get("_date_ts") and t["_date_ts"] <= ts_to]
+    except ValueError:
+        pass  # 非法日期串直接忽略该过滤条件
+    return filtered
+
+
+def _page_slice(filtered, offset=0, limit=TASKS_PAGE_SIZE):
+    """把过滤结果切成一段，并返回渲染所需的页码参数。"""
+    try:
+        limit = int(limit or TASKS_PAGE_SIZE)
+    except (TypeError, ValueError):
+        limit = TASKS_PAGE_SIZE
+    try:
+        offset = int(offset or 0)
+    except (TypeError, ValueError):
+        offset = 0
+    limit = max(1, min(limit, TASKS_PAGE_MAX))
+    offset = max(0, offset)
+    return filtered[offset:offset + limit], offset, limit, len(filtered)
+
 @router.get("/tasks", response_class=HTMLResponse)
 async def tasks(request: Request):
+    all_tasks = await tasks_all()
+    page, offset, limit, total = _page_slice(all_tasks, 0, TASKS_PAGE_SIZE)
     ctx = await _ctx(request, "tasks", "tasks", extra={
-        "tasks": await tasks_all(),
+        "tasks": page,
+        "tasks_total": total,
+        "tasks_offset": offset,
+        "tasks_limit": limit,
         "chat_sources": await chat_sources(),
     })
     return templates.TemplateResponse("tasks.html", ctx)
@@ -83,8 +134,13 @@ async def post_task(request: Request):
     # htmx 请求返回局部表格；fetch JSON 请求返回结果对象
     if "application/json" in request.headers.get("content-type", ""):
         return JSONResponse({"ok": ok, "message": message})
+    _all = await tasks_all(force=True)
+    _page, _off, _lim, _total = _page_slice(_all, 0, TASKS_PAGE_SIZE)
     table_ctx = await _ctx(request, "tasks", "tasks", extra={
-        "tasks": await tasks_all(force=True),
+        "tasks": _page,
+        "tasks_total": _total,
+        "tasks_offset": _off,
+        "tasks_limit": _lim,
         "submit_error": message if not ok else "",
         "submit_ok": ok if ok else 0,
     })
@@ -121,8 +177,13 @@ async def submit_post(request: Request):
                 log.info("已提交下载：成功解析 %s/%s 条链接", ok_count, len(lines))
     else:
         error = "没有输入任何链接"
+    _all = await tasks_all(force=True)
+    _page, _off, _lim, _total = _page_slice(_all, 0, TASKS_PAGE_SIZE)
     table_ctx = await _ctx(request, "tasks", "tasks", extra={
-        "tasks": await tasks_all(force=True),
+        "tasks": _page,
+        "tasks_total": _total,
+        "tasks_offset": _off,
+        "tasks_limit": _lim,
         "submit_error": error,
         "submit_ok": ok_count,
     })
@@ -237,28 +298,30 @@ async def task_cancel(request: Request):
 
 @router.get("/partials/tasks", response_class=HTMLResponse)
 async def partial_tasks(request: Request, status: str = "", source: str = "",
-                        date_from: str = "", date_to: str = "",
-                        refresh: str = ""):
+                        date_from: str = "", date_to: str = "", refresh: str = "",
+                        offset: int = 0, limit: int = TASKS_PAGE_SIZE,
+                        rows_only: int = 0):
+    """任务表分片。
+
+    rows_only=1 时只回 <tr> 片段：「加载更多」用它把新行追加到已有表格里，
+    已渲染的行不被重建（展开行、勾选状态都不会丢）。
+    不带 rows_only 时回整张表（首屏 / 筛选变更 / 5s 自动刷新都走这条路）。
+    """
     force = bool(refresh)
     all_tasks = await tasks_all(force=force)
-    filtered = list(all_tasks)
-    if status:
-        if status in ("active", "unarchived", "hide_archived"):
-            filtered = [t for t in filtered if t.get("status") != "archived"]
-        else:
-            filtered = [t for t in filtered if t.get("status") == status]
-    if source:
-        filtered = [t for t in filtered if t["source"] == source]
-    # 日期过滤（本地时区，按文件日期 _date_ts 比对）
-    import datetime as _dt
-    try:
-        if date_from:
-            ts_from = _dt.datetime.combine(_dt.date.fromisoformat(date_from), _dt.time.min).timestamp()
-            filtered = [t for t in filtered if t.get("_date_ts") and t["_date_ts"] >= ts_from]
-        if date_to:
-            ts_to = _dt.datetime.combine(_dt.date.fromisoformat(date_to), _dt.time.max).timestamp()
-            filtered = [t for t in filtered if t.get("_date_ts") and t["_date_ts"] <= ts_to]
-    except ValueError:
-        pass  # 非法日期串直接忽略该过滤条件
-    return templates.TemplateResponse("partials/_tasks_table.html", {"request": request, "tasks": filtered})
-
+    filtered = _filter_tasks(all_tasks, status, source, date_from, date_to)
+    page, offset, limit, total = _page_slice(filtered, offset, limit)
+    ctx = {
+        "request": request,
+        "tasks": page,
+        "tasks_total": total,
+        "tasks_offset": offset,
+        "tasks_limit": limit,
+        # 过滤条件要回传给模板，才能拼出「加载更多」的下一段 URL
+        "status": status,
+        "source": source,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    tpl = "partials/_tasks_rows.html" if rows_only else "partials/_tasks_table.html"
+    return templates.TemplateResponse(tpl, ctx)

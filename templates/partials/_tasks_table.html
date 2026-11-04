@@ -16,7 +16,8 @@
   <div class="card pad-lg ledger">
     <div class="card-head">
       <h2 class="card-title">任务列表</h2>
-      <span class="card-sub">{{ tasks|length }} 条</span>
+      {% set _total = tasks_total | default(tasks | length) %}
+      <span class="card-sub">{{ _total }} 条{% if _total > (tasks|length) %} · 已显示 {{ tasks|length }}{% endif %}</span>
     </div>
     <div class="table-wrap">
       {% if tasks %}
@@ -33,86 +34,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for t in tasks %}
-          <tr class="clickable-row" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__toggleTask(this)">
-            <td onclick="event.stopPropagation()"><input type="checkbox" class="check task-check" aria-label="选择任务 {{ t.id }}"></td>
-            <td>{{ t.time }}</td>
-            <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
-            <td><a class="link" href="/tasks/{{ t.id }}" onclick="event.stopPropagation()">{{ t.filename }}</a></td>
-            <td>{{ t.size }}</td>
-            <td>
-              {# 阶段列只反映「下载」状态（用户要求：只需要保留下载时状态）。
-                 归档进度仍在卡片下方与详情页可见，这里统一收敛为
-                 待下载 / 下载中 / 已下载 / 失败，避免同一行既有「已下载 6%」
-                 又有「归档中」两套互相打脸的口径。 #}
-              {% if t.status == 'download' %}
-                <div>
-                  <div class="progress blue">
-                    <span style="width:{{ t.progress }}%"></span>
-                  </div>
-                  <div class="progress-meta">
-                    <span>下载中 {{ t.loaded }} · {{ t.size }}</span>
-                    <span>{% if t.speed_label %}<span class="tnum" title="实时下载速率（页面自动刷新）">{{ t.speed_label }}</span> · {% endif %}{{ t.progress }}%</span>
-                  </div>
-                </div>
-              {% elif t.status == 'waiting_disk' %}
-                <div>
-                  <span class="pill warn" title="{{ t.error_msg or '本地磁盘使用率超 85%，任务已安全挂起，回落至 75% 自动恢复调度' }}"><span class="p-dot"></span>磁盘挂起</span>
-                  <div class="sub" style="margin-top:4px;color:var(--wait);font-size:12px;">{{ t.error_msg or '等待磁盘空间释放' }}</div>
-                </div>
-              {% elif t.status == 'waiting_throttle' %}
-                {# TG 节流：与磁盘挂起必须区分开 —— 看到「磁盘挂起」用户会去清磁盘，
-                   而这里真实原因是随机节奏排队 / 当天请求预算已用完等次日续跑。 #}
-                <div>
-                  <span class="pill" style="background:rgba(99,102,241,.16);color:#818cf8;border-color:rgba(99,102,241,.32);"
-                        title="{{ t.error_msg or '按随机节奏排队放行（防 TG 风控）' }}">
-                    <span class="p-dot" style="background:#818cf8;"></span>节流排队
-                  </span>
-                  <div class="sub" style="margin-top:4px;color:var(--text-2);font-size:12px;">{{ t.error_msg or '按随机节奏排队中' }}</div>
-                </div>
-              {% elif t.status == 'failed' %}
-                <span class="pill failed"><span class="p-dot"></span>下载失败</span>
-                <span class="sub" style="margin-top:4px;">{{ t.error_msg }}</span>
-              {% elif t.status in ('pending',) %}
-                <span class="pill pending"><span class="p-dot"></span>待下载</span>
-              {% elif t.status == 'isolated' %}
-                <span class="pill failed"><span class="p-dot"></span>已隔离</span>
-              {% else %}
-                <span class="pill downloaded"><span class="p-dot"></span>已下载</span>
-                {% if t.status == 'upload' %}<span class="sub" style="margin-top:4px;">归档 {{ t.progress }}%</span>{% endif %}
-              {% endif %}
-            </td>
-            <td>
-              <div class="row-actions" onclick="event.stopPropagation()">
-                {% if t.status in ('failed','isolated','pending','waiting_disk') %}
-                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
-                {% endif %}
-                {% if t.status in ('pending','download','upload','verify','waiting_disk','waiting_throttle') %}
-                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
-                {% endif %}
-                <a class="icon-btn xs" aria-label="详情" title="详情" href="/tasks/{{ t.id }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg></a>
-              </div>
-            </td>
-          </tr>
-          <tr id="task-{{ t.id }}" style="display:none;">
-            <td colspan="7" style="background:var(--hover-bg);">
-              <div style="padding:8px 12px;">
-                <div class="detail-grid" style="grid-template-columns:repeat(2,1fr);gap:16px;">
-                  <div><div class="plabel">本地路径</div><span class="pvalue" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.local_path }}</span></div>
-                  <div><div class="plabel">来源链接</div>{% if t.source_url %}<a class="link" href="{{ t.source_url }}" target="_blank" rel="noopener noreferrer" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.source_url }}</a>{% else %}<span class="pvalue">—</span>{% endif %}</div>
-                </div>
-                <div class="timeline" style="margin-top:16px;">
-                  {% for st in t.stages %}
-                  <div class="tl-item {% if st.state == 'idle' or (st.state is not defined and st.done == 'no') %}ghost{% endif %}{% if st.state == 'active' %} active{% endif %}">
-                    <div class="tl-title">{{ st.name }}</div>
-                    <div class="tl-time">{{ st.time }}<span class="tl-dur"> · {{ st.dur }}</span></div>
-                  </div>
-                  {% endfor %}
-                </div>
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
+          {% include "partials/_tasks_rows.html" %}
         </tbody>
       </table>
       {% else %}
@@ -134,6 +56,27 @@
   window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}] = { displayId: {{ t.id | tojson }}, uniqueId: {{ t._unique_id | tojson }}, telegramId: {{ t._telegram_id | tojson }} };
   window.__TASK_META[{{ ('id:' ~ t.id) | tojson }}] = window.__TASK_META[{{ (t._unique_id or ('id:' ~ t.id)) | tojson }}];
   {% endfor %}
+
+  /* 「加载更多」追加进来的行自带 data-meta-json：htmx 把片段插进 tbody 后由这里补登记。
+     页面内 <tr> 里不能放 <script>（浏览器会把脚本移出表格），所以走属性自愈。 */
+  window.__syncTaskMeta = function (root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll('tr[data-meta-json]').forEach(function (r) {
+      var raw = r.getAttribute('data-meta-json');
+      if (!raw) return;
+      try {
+        var m = JSON.parse(raw);
+        if (!m || m.displayId === null || m.displayId === undefined) return;
+        var key = m.uniqueId || ('id:' + m.displayId);
+        window.__TASK_META[key] = m;
+        window.__TASK_META['id:' + m.displayId] = m;
+      } catch (e) { /* 属性损坏就跳过，不影响其它行 */ }
+    });
+  };
+  window.__syncTaskMeta(document);
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    window.__syncTaskMeta(evt && evt.target ? evt.target : document);
+  });
 </script>
 <script>
   // 任务表格自动刷新（历史缺陷：下载速率/进度只在手动刷新整页时更新）。
@@ -181,6 +124,9 @@
           if (el.value) params.set(el.name, el.value);
         });
       }
+      // 已渲染多少条就重渲染多少条：自动刷新不把「加载更多」出来的页收回去
+      var loaded = document.querySelectorAll('tbody tr[data-task-id]').length;
+      params.set('limit', String(Math.max(50, loaded)));
       var qs = params.toString();
       var url = '/partials/tasks' + (qs ? '?' + qs : '');
       var st = captureState();

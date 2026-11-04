@@ -1,0 +1,108 @@
+{# =====================================================================
+   _tasks_rows.html — 任务表 <tbody> 行片段（分页 / 追加加载共用）
+   ---------------------------------------------------------------------
+   传入：
+     tasks         本片任务列表
+     tasks_total   过滤后的总条数（缺省 = tasks|length）
+     tasks_offset  本片起始偏移（缺省 0）
+     tasks_limit   每片条数（缺省 50）
+     status/source/date_from/date_to  当前过滤条件（拼「加载更多」URL 用）
+   为什么单独成文件：首屏由 _tasks_table.html include 它，
+   「加载更多」时后端只渲染这一个片段，htmx 用 outerHTML 替换掉「加载更多」那一行，
+   已渲染的行不被重建 —— 展开/勾选状态不会丢。
+   ===================================================================== #}
+{% set _off = tasks_offset | default(0) %}
+{% set _lim = tasks_limit | default(50) %}
+{% set _total = tasks_total | default(tasks | length) %}
+{% set _next = _off + (tasks | length) %}
+{% for t in tasks %}
+          <tr class="clickable-row" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}"
+              data-meta-json='{{ {"displayId": t.id, "uniqueId": t._unique_id, "telegramId": t._telegram_id} | tojson }}'
+              onclick="window.__toggleTask(this)">
+            <td onclick="event.stopPropagation()"><input type="checkbox" class="check task-check" aria-label="选择任务 {{ t.id }}"></td>
+            <td>{{ t.time }}</td>
+            <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
+            <td><a class="link" href="/tasks/{{ t.id }}" onclick="event.stopPropagation()">{{ t.filename }}</a></td>
+            <td>{{ t.size }}</td>
+            <td>
+              {% if t.status == 'download' %}
+                <div>
+                  <div class="progress blue">
+                    <span style="width:{{ t.progress }}%"></span>
+                  </div>
+                  <div class="progress-meta">
+                    <span>下载中 {{ t.loaded }} · {{ t.size }}</span>
+                    <span>{% if t.speed_label %}<span class="tnum" title="实时下载速率（页面自动刷新）">{{ t.speed_label }}</span> · {% endif %}{{ t.progress }}%</span>
+                  </div>
+                </div>
+              {% elif t.status == 'waiting_disk' %}
+                <div>
+                  <span class="pill warn" title="{{ t.error_msg or '本地磁盘使用率超 85%，任务已安全挂起，回落至 75% 自动恢复调度' }}"><span class="p-dot"></span>磁盘挂起</span>
+                  <div class="sub" style="margin-top:4px;color:var(--wait);font-size:12px;">{{ t.error_msg or '等待磁盘空间释放' }}</div>
+                </div>
+              {% elif t.status == 'waiting_throttle' %}
+                <div>
+                  <span class="pill" style="background:rgba(99,102,241,.16);color:#818cf8;border-color:rgba(99,102,241,.32);"
+                        title="{{ t.error_msg or '按随机节奏排队放行（防 TG 风控）' }}">
+                    <span class="p-dot" style="background:#818cf8;"></span>节流排队
+                  </span>
+                  <div class="sub" style="margin-top:4px;color:var(--text-2);font-size:12px;">{{ t.error_msg or '按随机节奏排队中' }}</div>
+                </div>
+              {% elif t.status == 'failed' %}
+                <span class="pill failed"><span class="p-dot"></span>下载失败</span>
+                <span class="sub" style="margin-top:4px;">{{ t.error_msg }}</span>
+              {% elif t.status in ('pending',) %}
+                <span class="pill pending"><span class="p-dot"></span>待下载</span>
+              {% elif t.status == 'isolated' %}
+                <span class="pill failed"><span class="p-dot"></span>已隔离</span>
+              {% else %}
+                <span class="pill downloaded"><span class="p-dot"></span>已下载</span>
+                {% if t.status == 'upload' %}<span class="sub" style="margin-top:4px;">归档 {{ t.progress }}%</span>{% endif %}
+              {% endif %}
+            </td>
+            <td>
+              <div class="row-actions" onclick="event.stopPropagation()">
+                {% if t.status in ('failed','isolated','pending','waiting_disk') %}
+                <button class="icon-btn xs" aria-label="重试" title="重试" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__retryTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-refresh"/></svg></button>
+                {% endif %}
+                {% if t.status in ('pending','download','upload','verify','waiting_disk','waiting_throttle') %}
+                <button class="icon-btn xs" aria-label="取消" title="取消" data-task-id="{{ t.id }}" data-unique-id="{{ t._unique_id or '' }}" onclick="window.__cancelTask(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-x"/></svg></button>
+                {% endif %}
+                <a class="icon-btn xs" aria-label="详情" title="详情" href="/tasks/{{ t.id }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#ic-external"/></svg></a>
+              </div>
+            </td>
+          </tr>
+          <tr id="task-{{ t.id }}" style="display:none;">
+            <td colspan="7" style="background:var(--hover-bg);">
+              <div style="padding:8px 12px;">
+                <div class="detail-grid" style="grid-template-columns:repeat(2,1fr);gap:16px;">
+                  <div><div class="plabel">本地路径</div><span class="pvalue" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.local_path }}</span></div>
+                  <div><div class="plabel">来源链接</div>{% if t.source_url %}<a class="link" href="{{ t.source_url }}" target="_blank" rel="noopener noreferrer" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">{{ t.source_url }}</a>{% else %}<span class="pvalue">—</span>{% endif %}</div>
+                </div>
+                <div class="timeline" style="margin-top:16px;">
+                  {% for st in t.stages %}
+                  <div class="tl-item {% if st.state == 'idle' or (st.state is not defined and st.done == 'no') %}ghost{% endif %}{% if st.state == 'active' %} active{% endif %}">
+                    <div class="tl-title">{{ st.name }}</div>
+                    <div class="tl-time">{{ st.time }}<span class="tl-dur"> · {{ st.dur }}</span></div>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </td>
+          </tr>
+{% endfor %}
+{% if _next < _total %}
+          <tr class="tasks-more-row">
+            <td colspan="7" style="padding:10px 12px;">
+              <button type="button" class="btn sm ghost"
+                      hx-get="/partials/tasks?rows_only=1&offset={{ _next }}&limit={{ _lim }}{% if status %}&status={{ status | urlencode }}{% endif %}{% if source %}&source={{ source | urlencode }}{% endif %}{% if date_from %}&date_from={{ date_from | urlencode }}{% endif %}{% if date_to %}&date_to={{ date_to | urlencode }}{% endif %}"
+                      hx-target="closest tr" hx-swap="outerHTML">
+                加载更多（还有 {{ _total - _next }} 条）
+              </button>
+            </td>
+          </tr>
+{% elif _off %}
+          <tr class="tasks-end-row">
+            <td colspan="7" style="padding:10px 12px;color:var(--text-3);font-size:12px;">已到末尾 · 共 {{ _total }} 条</td>
+          </tr>
+{% endif %}
