@@ -355,7 +355,10 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
                 remote_names[d] = c_names
                 remote_files_by_dir[d] = c_files
                 if is_unmocked:
-                    _REMOTE_DIR_LIST_CACHE[d] = (now_m + 15.0, jobs_sig, c_names, c_files)
+                    # 90s：这是「云端目录列表」快照，只用于给归档行打上存在/失效角标。
+                    # 原来 15s，导致每 15 秒就有一页 /library/cloud 要白付 2s 的
+                    # OpenList 目录翻页；归档记录本身才是真相来源，角标可以慢一点。
+                    _REMOTE_DIR_LIST_CACHE[d] = (now_m + 90.0, jobs_sig, c_names, c_files)
         except Exception as e:  # noqa: BLE001
             log.warning("云端归档存在性校验失败（按日志原样展示）: %s", e)
 
