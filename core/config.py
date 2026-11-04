@@ -10,7 +10,7 @@ import time
 import posixpath
 import secrets
 from urllib.parse import urlsplit
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------
 # 目录与环境配置

@@ -198,8 +198,8 @@ class TestArchiveClassification(unittest.TestCase):
         self.assertIn('id="speed-chart"', resp.text)
         self.assertIn('id="speed-line-upload"', resp.text)
         self.assertIn('id="speed-line-download"', resp.text)
-        self.assertIn("#a78bfa", resp.text)
-        self.assertIn("#22d3ee", resp.text)
+        self.assertIn("#c8a45e", resp.text)
+        self.assertIn("#7ba0a8", resp.text)
         # 图例数字元素（summary-speed-*）仍在
         self.assertIn('id="summary-speed-upload"', resp.text)
         self.assertIn('id="summary-speed-download"', resp.text)
@@ -316,11 +316,11 @@ class TestArchiveClassification(unittest.TestCase):
         self.assertIn("累计上传", sub_by_label)
         self.assertTrue(sub_by_label["累计下载"]["unit"])
         self.assertTrue(sub_by_label["累计上传"]["unit"])
-        # 2b) 摘要为单卡双折线（lines 嵌套：上传紫 #a78bfa / 下载青 #22d3ee）
+        # 2b) 摘要为单卡双折线（lines 嵌套：上传旧金 #c8a45e / 下载蓝晒青 #7ba0a8）
         self.assertEqual(len(stats["summary"]), 1)
         lines = {ln["speed_key"]: ln for ln in stats["summary"][0]["lines"]}
-        self.assertEqual(lines["upload"]["color"], "#a78bfa")
-        self.assertEqual(lines["download"]["color"], "#22d3ee")
+        self.assertEqual(lines["upload"]["color"], "#c8a45e")
+        self.assertEqual(lines["download"]["color"], "#7ba0a8")
         self.assertTrue(lines["upload"]["points"])
         self.assertTrue(lines["download"]["points"])
         # 3) 云端归档累计：当天有 1 条 done（仍按归档任务计数）

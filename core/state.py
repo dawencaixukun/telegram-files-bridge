@@ -42,7 +42,6 @@ _TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
 
 def _tasks_cache_invalidate() -> None:
     """任务列表缓存统一失效入口（新任务入队/任务取消/状态变更后调用）。"""
-    global _TASKS_CACHE
     _TASKS_CACHE["expire"] = 0.0
     _TASKS_CACHE["value"] = None
 
@@ -1079,7 +1078,6 @@ def _get_notify_config_public() -> Dict[str, Any]:
 
 
 def _openlist_update_base_url(url: str) -> str:
-    global _openlist_client, _openlist_upload_client
     raw = str(url or "").strip().rstrip("/")
     if raw:
         try:

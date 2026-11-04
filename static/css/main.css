@@ -633,7 +633,6 @@ body.drawer-open .scrim {
 
 /* ---------- Grid helpers ---------- */
 .grid { display: grid; gap: var(--space-5); }
-.g-4 { grid-template-columns: repeat(4, 1fr); }
 .g-3 { grid-template-columns: repeat(3, 1fr); }
 .g-2 { grid-template-columns: repeat(2, 1fr); }
 .mt-4 { margin-top: var(--space-4); }
@@ -887,7 +886,6 @@ td .mono { font-family: var(--font-mono); font-size: 12px; }
   transition: width 0.5s var(--ease);
 }
 .progress.blue > span { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
-.progress.purple > span { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
 .progress-meta {
   display: flex;
   justify-content: space-between;
@@ -1263,7 +1261,6 @@ button.input.focused {
 }
 .hash:hover { border-color: var(--brand-a); }
 .hash svg { width: 12px; height: 12px; flex-shrink: 0; }
-.hash .h-full { display: none; }
 [data-theme="light"] .hash { background: rgba(255, 255, 255, 0.5); }
 
 /* Timeline (task detail) */
@@ -1508,7 +1505,6 @@ a:focus-visible, button:focus-visible {
    Responsive
    ===================================================================== */
 @media (max-width: 1199px) {
-  .g-4 { grid-template-columns: repeat(2, 1fr); }
   .g-3 { grid-template-columns: repeat(2, 1fr); }
   .g-3 > .kpi-dual { grid-column: span 2; }
 }
@@ -1594,7 +1590,7 @@ a:focus-visible, button:focus-visible {
   .card.pad-lg { padding: var(--space-4); }
   .page-header { gap: var(--space-2); margin-bottom: var(--space-4); }
   .page-header h1 { font-size: 20px; }
-  .g-4, .g-3, .g-2 { grid-template-columns: minmax(0, 1fr); }
+  .g-3, .g-2 { grid-template-columns: minmax(0, 1fr); }
   .g-3 > .kpi-dual { grid-column: auto; }
   .kpi-dual .k-value { font-size: 22px; }
   .topbar .user-btn .uname { display: none; }

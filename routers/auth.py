@@ -63,7 +63,7 @@ async def login_submit(request: Request):
 
 @router.get("/init", response_class=HTMLResponse)
 async def init(request: Request):
-    if not await _init_gate_open(_is_initialized()):
+    if not await _init_gate_open():
         # 初始化是一次性动作：已完成时不再向全网开放表单
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": ""})
@@ -75,7 +75,7 @@ async def init_submit(request: Request):
     ip = _client_ip(request)
     if _login_blocked(ip):
         return templates.TemplateResponse("login.html", {"request": request, "variant": "init", "error": "尝试过于频繁，请稍后再试"})
-    if not await _init_gate_open(_is_initialized()):
+    if not await _init_gate_open():
         return RedirectResponse(url="/login", status_code=303)
     form = await request.form()
     otp = str(form.get("otp", "")).strip()

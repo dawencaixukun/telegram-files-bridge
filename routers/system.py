@@ -123,7 +123,6 @@ async def api_logs_txt():
 
 
 @router.get("/api/system/doctor")
-@router.get("/api/doctor/check")
 async def api_system_doctor():
     """System Doctor 全链路系统健康与依赖一键自检接口。"""
     report = await _run_system_doctor_check()

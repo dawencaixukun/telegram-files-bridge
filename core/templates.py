@@ -182,7 +182,7 @@ def _speed_chart_smooth_path(values: List[float],
 
 def _speed_chart_points(values: Optional[List[float]] = None,
                         width: float = 460.0, height: float = 120.0,
-                        is_upload: bool = False, count: int = 14) -> Tuple[str, List[float], str]:
+                        count: int = 14) -> Tuple[str, List[float], str]:
     """生成速率曲线的归一化坐标、原始值序列与平滑 path。
 
     历史缺陷：空闲时曾用「假正弦波」填充曲线（两条线反向起伏假装有流量），

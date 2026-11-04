@@ -105,7 +105,7 @@ def _is_public(path: str) -> bool:
     return any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
 
-async def _init_gate_open(local_flag: bool) -> bool:
+async def _init_gate_open() -> bool:
     """/init 是否开放：以后端 bootstrap/status 为准，本地标志仅作辅助。
 
     注意 fail-closed：后端不可达时旧代码 return not local_flag（本地无标志 →

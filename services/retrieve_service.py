@@ -8,7 +8,7 @@ import os
 import time
 import asyncio
 from urllib.parse import urljoin
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from core.config import APP_ROOT_DIR, OPENLIST_URL
 from core.state import _RETRIEVE_JOBS
 from core.logging import log
