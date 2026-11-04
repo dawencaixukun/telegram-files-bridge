@@ -587,10 +587,72 @@ async def _download_speed_snapshot() -> float:
                if str(t.get("status") or "") == "download")
 
 
+_TASKS_INFLIGHT: Optional[asyncio.Task] = None
+
+
+def _spawn_tasks_refresh(force: bool) -> "asyncio.Task[List[Dict[str, Any]]]":
+    """单飞回源：同一时刻只允许一个任务列表回源在飞。"""
+    global _TASKS_INFLIGHT
+
+    def _swallow(fut):
+        # 后台刷新的异常必须就地吞掉，否则事件循环会打 "Task exception was never retrieved"
+        try:
+            fut.exception()
+        except Exception:  # noqa: BLE001
+            pass
+
+    task = asyncio.create_task(_compose_tasks(force))
+    task.add_done_callback(_swallow)
+    _TASKS_INFLIGHT = task
+    return task
+
+
+def _tasks_refresh_running() -> Optional[asyncio.Task]:
+    global _TASKS_INFLIGHT
+    if _TASKS_INFLIGHT is not None and not _TASKS_INFLIGHT.done():
+        return _TASKS_INFLIGHT
+    _TASKS_INFLIGHT = None
+    return None
+
+
 async def tasks_all(force: bool = False) -> List[Dict[str, Any]]:
+    """任务列表统一入口：陈旧即返回 + 后台单飞刷新。
+
+    为什么改：本函数每次都要回源打 Java 后端 /files（实测 1.1–1.3s），而
+    /tasks、仪表盘、以及**每个页面**的侧栏角标（running_count / local_unarchived）
+    都会读它 —— 切一次导航就白付一次 1 秒多的回源。现在分三种情况：
+      · 缓存未过期            → 直接返回，零回源；
+      · 过期但手里有旧值，且不是用户操作触发的脏读 → 立刻返回旧值，后台刷新；
+      · 用户刚提交/取消任务（dirty）或显式 force → 阻塞回源，保证自己的操作立即可见。
+    """
+    global _TASKS_INFLIGHT
     now = time.monotonic()
-    if not force and _TASKS_CACHE["expire"] > now and _TASKS_CACHE["value"] is not None:
-        return _TASKS_CACHE["value"]
+    cached = _TASKS_CACHE.get("value")
+    fresh = float(_TASKS_CACHE.get("expire") or 0.0) > now
+    dirty = bool(_TASKS_CACHE.get("dirty"))
+
+    if not force and cached is not None:
+        if fresh:
+            return cached
+        if not dirty:
+            if _tasks_refresh_running() is None:
+                _spawn_tasks_refresh(True)
+            return cached
+
+    running = _tasks_refresh_running()
+    if running is None:
+        running = _spawn_tasks_refresh(force)
+    try:
+        return await asyncio.shield(running)
+    except Exception as e:  # noqa: BLE001
+        log.warning("任务列表回源失败，沿用上一次结果: %s", e)
+        if cached is not None:
+            return cached
+        raise
+
+
+async def _compose_tasks(force: bool = False) -> List[Dict[str, Any]]:
+    """真正回源并组装任务列表（原 tasks_all 主体）。"""
     tasks = await _build_tasks(force=force)
     if _WAITING_DISK_TASKS:
         waiting_tasks = [_format_waiting_disk_task(w) for w in _WAITING_DISK_TASKS.values()]
@@ -617,6 +679,7 @@ async def tasks_all(force: bool = False) -> List[Dict[str, Any]]:
     _observe_tasks(tasks)
     _TASKS_CACHE["expire"] = time.monotonic() + CACHE_TTL
     _TASKS_CACHE["value"] = tasks
+    _TASKS_CACHE["dirty"] = False
     return tasks
 
 

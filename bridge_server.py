@@ -106,6 +106,15 @@ _flood_wait_timer_task: Optional[asyncio.Task] = None
 _bot_command_task: Optional[asyncio.Task] = None
 _watch_task: Optional[asyncio.Task] = None
 _prewarm_task: Optional[asyncio.Task] = None
+_tasks_warm_task: Optional[asyncio.Task] = None
+
+
+async def _warm_tasks_cache() -> None:
+    """启动即回源一次任务列表，把缓存垫热（失败无所谓，首个请求再走阻塞路径）。"""
+    try:
+        await tasks_all(force=True)
+    except Exception as e:  # noqa: BLE001
+        log.debug("任务缓存预热失败: %s", e)
 
 
 @app.on_event("startup")
@@ -126,6 +135,8 @@ async def _startup():
     _relay_task = asyncio.create_task(ws_relay_loop())
     asyncio.create_task(BACKEND.refresh_bootstrap_status())
     _prewarm_task = asyncio.create_task(prewarm_browse_cache())
+    # 任务列表缓存预热：否则重启后第一次切页要白等一次 1s+ 的回源（tasks_all 陈旧返回的前置条件）
+    _tasks_warm_task = asyncio.create_task(_warm_tasks_cache())
     _auto_archive_task = asyncio.create_task(_auto_archive_loop())
     # TG Bot 命令长轮询（/ck /yd /st /err /help）：未配置 Bot 时内部自动挂起等待
     _bot_command_task = asyncio.create_task(bot_command_loop())
@@ -145,6 +156,8 @@ async def _startup():
 @app.on_event("shutdown")
 async def _shutdown():
     global _relay_task, _auto_archive_task, _flood_wait_timer_task, _bot_command_task, _watch_task, _prewarm_task
+    if _tasks_warm_task is not None and not _tasks_warm_task.done():
+        _tasks_warm_task.cancel()
     if _prewarm_task is not None and not _prewarm_task.done():
         _prewarm_task.cancel()
         try:

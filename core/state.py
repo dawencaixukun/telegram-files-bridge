@@ -37,13 +37,19 @@ _FLOOD_WAIT_TIMER_TASK: Optional[asyncio.Task] = None
 # ---------------------------------------------------------------------
 # 2. 缓存与队列
 # ---------------------------------------------------------------------
-_TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None}
+_TASKS_CACHE: Dict[str, Any] = {"expire": 0.0, "value": None, "dirty": False}
 
 
 def _tasks_cache_invalidate() -> None:
-    """任务列表缓存统一失效入口（新任务入队/任务取消/状态变更后调用）。"""
+    """任务列表缓存统一失效入口（新任务入队/任务取消/状态变更后调用）。
+
+    语义：标记「立即过期 + 脏」，但**保留旧值**。
+    · dirty=True 让下一次读取阻塞回源 —— 用户自己的提交/取消必须立刻可见；
+    · 保留 value 是为了在后台刷新还没回来时，其它并发请求仍有数据可用
+      （旧实现把 value 直接置 None，任何一次状态变更都会让后续请求一起阻塞）。
+    """
     _TASKS_CACHE["expire"] = 0.0
-    _TASKS_CACHE["value"] = None
+    _TASKS_CACHE["dirty"] = True
 
 
 _WAITING_DISK_TASKS: Dict[str, Dict[str, Any]] = {}

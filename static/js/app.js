@@ -3847,22 +3847,39 @@
         finishNavProgress();
       });
 
-      /* 侧栏导航：手指按下/悬停即刻预热缓存，点击瞬间高亮 + 关抽屉 + 顶部进度条 */
+      /* 侧栏导航预热：悬停必须停留 150ms 才发请求，且最多 2 个在飞。
+         原实现 mouseover 即刻整页 GET —— 鼠标从侧栏扫过就能连发十几次渲染
+         （云端归档一页就是 4 MB HTML、单 worker 串行处理），真正的点击被堵在
+         这些预热请求后面，表现就是「切导航极其卡顿、等很久」。
+         现在缓存已做陈旧返回（见后端 tasks_all），冷启动也就一次，预热只需兜底。 */
       var prefetchedUrls = {};
+      var prefetchTimer = null;
+      var prefetchInflight = 0;
       function prefetchNav(a) {
         if (!a) return;
+        if (prefetchInflight >= 2) return;
         var href = a.getAttribute('href');
         if (!href || href.charAt(0) !== '/' || href === window.location.pathname) return;
         var now = Date.now();
         if (prefetchedUrls[href] && now - prefetchedUrls[href] < 10000) return;
         prefetchedUrls[href] = now;
+        prefetchInflight++;
         try {
-          fetch(href, { method: 'GET', credentials: 'same-origin', priority: 'low' }).catch(function () {});
-        } catch (e) {}
+          fetch(href, { method: 'GET', credentials: 'same-origin', priority: 'low' })
+            .catch(function () {})
+            .then(function () { prefetchInflight--; });
+        } catch (e) {
+          prefetchInflight--;
+        }
       }
       document.addEventListener('mouseover', function (e) {
         var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
-        if (a) prefetchNav(a);
+        if (!a) return;
+        clearTimeout(prefetchTimer);
+        prefetchTimer = setTimeout(function () { prefetchNav(a); }, 150);
+      }, { passive: true });
+      document.addEventListener('mouseout', function () {
+        clearTimeout(prefetchTimer);
       }, { passive: true });
       document.addEventListener('touchstart', function (e) {
         var a = e.target && e.target.closest ? e.target.closest('.sidebar .nav-item') : null;
