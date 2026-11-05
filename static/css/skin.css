@@ -731,6 +731,13 @@ td .mono,
   background: var(--brand);
 }
 
+/* 「加载更多」行（任务表 / 云端卡片组共用一套节奏） */
+.cloud-more-row {
+  padding: 14px 0 4px;
+  display: flex;
+  align-items: center;
+}
+
 /* ---------- 缩略图：像接触印相样张 ---------- */
 .thumb {
   border-radius: 2px;

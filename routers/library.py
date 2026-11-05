@@ -18,6 +18,51 @@ import services.openlist_service as _openlist_mod
 
 router = APIRouter()
 
+# 云端归档卡片分页：一组先渲染 60 张。历史实现把 458 张卡一次性塞进 HTML（4 MB，
+# 单卡约 8.8 KB 的属性/角标/按钮），服务端序列化和浏览器建 DOM 都要几百毫秒。
+CLOUD_PAGE_SIZE = 60
+
+
+def _cloud_groups_full(cloud_files, mounts) -> List[Dict[str, Any]]:
+    """按「落在哪个网盘」分组（顺序：先按真实挂载顺序，再补历史记录里的网盘）。
+
+    返回的每组都带完整 files 列表，页面渲染时再切片，避免两处逻辑各算一遍。
+    """
+    by_drive: Dict[str, List[Dict[str, Any]]] = {}
+    for f in cloud_files:
+        by_drive.setdefault(str(f.get("drive") or "默认网盘"), []).append(f)
+    ordered_keys = [d for d in mounts if d in by_drive]
+    ordered_keys += [k for k in by_drive if k not in ordered_keys]
+    groups: List[Dict[str, Any]] = []
+    for idx, k in enumerate(ordered_keys):
+        rows = by_drive[k]
+        total_bytes = sum(int(r.get("size_bytes") or 0) for r in rows)
+        missing = sum(1 for r in rows if r.get("status") == "missing")
+        groups.append({
+            "key": idx,
+            "drive": k,
+            "files": rows,
+            "count": len(rows),
+            "size_human": _fmt_size(total_bytes),
+            "missing_count": missing,
+        })
+    return groups
+
+
+def _cloud_groups_for_page(groups, page_size: int = CLOUD_PAGE_SIZE):
+    """把每组截成首屏 page_size 张，并带上 total/rendered 供「加载更多」按钮使用。"""
+    out = []
+    for g in groups:
+        rows = g["files"]
+        shown = rows[:page_size]
+        out.append({
+            **g,
+            "files": shown,
+            "rendered": len(shown),
+            "total": len(rows),
+        })
+    return out
+
 @router.get("/library/local", response_class=HTMLResponse)
 async def library_local(request: Request, category: str = ""):
     tasks_list, openlist_ready, sources, ctx = await asyncio.gather(
@@ -61,26 +106,9 @@ async def library_cloud(request: Request):
         log.warning("网盘分类：读取 OpenList 挂载失败，退化为按归档记录聚合: %s",
                     mounts_res.get("message"))
 
-    # 按网盘分组：云端页全部条目都是已归档，所以「未归档/已归档」这个维度分不出来；
-    # 真正有意义的分组维度是「落在哪个网盘」。每组先聚合数量与体积供文件夹卡片头部展示。
-    drive_groups: List[Dict[str, Any]] = []
-    by_drive: Dict[str, List[Dict[str, Any]]] = {}
-    for f in cloud_files:
-        by_drive.setdefault(str(f.get("drive") or "默认网盘"), []).append(f)
-    # 组的顺序：先按真实挂载顺序，再补历史记录里出现过但当前未挂载的网盘
-    ordered_keys = [d for d in mounts if d in by_drive]
-    ordered_keys += [k for k in by_drive if k not in ordered_keys]
-    for k in ordered_keys:
-        rows = by_drive[k]
-        total_bytes = sum(int(r.get("size_bytes") or 0) for r in rows)
-        missing = sum(1 for r in rows if r.get("status") == "missing")
-        drive_groups.append({
-            "drive": k,
-            "files": rows,
-            "count": len(rows),
-            "size_human": _fmt_size(total_bytes),
-            "missing_count": missing,
-        })
+    # 按网盘分组（口径见 _cloud_groups_full）：每组先只渲染前 CLOUD_PAGE_SIZE 张，
+    # 其余由「加载更多」经 /partials/cloud-cards 追加进来。
+    drive_groups = _cloud_groups_for_page(_cloud_groups_full(cloud_files, mounts))
 
     ctx.update({
         "cloud_files": cloud_files,
@@ -90,6 +118,47 @@ async def library_cloud(request: Request):
         "openlist_mounts_ok": bool(mounts_res.get("ok")),
     })
     return templates.TemplateResponse("library_cloud.html", ctx)
+
+
+@router.get("/partials/cloud-cards", response_class=HTMLResponse)
+async def partial_cloud_cards(request: Request, drive: str = "", key: int = 0,
+                              offset: int = CLOUD_PAGE_SIZE, limit: int = CLOUD_PAGE_SIZE):
+    """云端归档「加载更多」分片。
+
+    返回两段：
+      1. N 张卡片 —— htmx 以 beforeend 追加到 #cloudGrid-<key>（已渲染卡片不重建）；
+      2. #cloudMore-<key> 块的带外替换（hx-swap-oob），更新按钮文案或显示「已显示全部」。
+    """
+    cloud_files, mounts_res = await asyncio.gather(_cloud_archive_rows(), openlist_mounts())
+    mounts = list(mounts_res.get("mounts") or [])
+    groups = _cloud_groups_full(cloud_files, mounts)
+    group = next((g for g in groups if g["drive"] == drive), None)
+    if group is None and 0 <= key < len(groups):
+        group = groups[key]
+    if group is None:
+        return templates.TemplateResponse("partials/_cloud_more.html", {
+            "request": request, "key": key, "drive": drive,
+            "offset": 0, "total": 0, "oob": True,
+        })
+    try:
+        limit = max(1, min(int(limit or CLOUD_PAGE_SIZE), 300))
+    except (TypeError, ValueError):
+        limit = CLOUD_PAGE_SIZE
+    try:
+        offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    rows = group["files"]
+    page = rows[offset:offset + limit]
+    return templates.TemplateResponse("partials/_cloud_cards_batch.html", {
+        "request": request,
+        "files": page,
+        "key": group["key"],
+        "drive": group["drive"],
+        "offset": offset + len(page),
+        "total": len(rows),
+        "oob": True,
+    })
 
 
 @router.get("/partials/local-files", response_class=HTMLResponse)
@@ -410,8 +479,12 @@ async def library_cloud_rename(request: Request):
 @router.post("/library/cloud/clear-missing")
 @router.post("/archive/cloud/clear-missing")
 async def library_cloud_clear_missing():
-    """清理已失效记录：扫描当前 _cloud_archive_rows() 中 status == 'missing' 的任务，从本地日志中移除。"""
-    rows = await _cloud_archive_rows()
+    """清理已失效记录：扫描当前 _cloud_archive_rows() 中 status == 'missing' 的任务，从本地日志中移除。
+
+    这里必须用 check_remote="sync"：清理是不可逆操作，不能拿过期快照当真相
+    （常态读取走非阻塞的陈旧返回，见 _cloud_archive_rows 的说明）。
+    """
+    rows = await _cloud_archive_rows(check_remote="sync")
     missing_paths = {r["cloud_path"].lower() for r in rows if r.get("status") == "missing"}
     missing_ids = {r["id"] for r in rows if r.get("status") == "missing" and r.get("id")}
 

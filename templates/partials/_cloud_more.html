@@ -1,0 +1,17 @@
+{# 云端归档「加载更多」：整块由 #cloudMore-<key> 自替换（htmx outerHTML / OOB）。
+   入参：key（分组序号）、drive（分组名）、offset（已渲染数）、total（总条数）、oob（是否带外交换） #}
+{% set _offset = offset | default(0) %}
+{% set _total = total | default(0) %}
+<div class="cloud-more-row" id="cloudMore-{{ key }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if _offset < _total %}
+  <button type="button" class="btn sm ghost"
+          hx-get="/partials/cloud-cards?drive={{ drive | urlencode }}&offset={{ _offset }}&limit=60"
+          hx-target="#cloudGrid-{{ key }}" hx-swap="beforeend"
+          hx-indicator="#cloudMoreSpin-{{ key }}">
+    加载更多（还有 {{ _total - _offset }} 个）
+  </button>
+  <span class="hint htmx-indicator" id="cloudMoreSpin-{{ key }}" style="margin-left:8px;">加载中…</span>
+  {% else %}
+  <span class="hint" style="color:var(--text-3);font-size:12px;">已显示全部 {{ _total }} 个</span>
+  {% endif %}
+</div>

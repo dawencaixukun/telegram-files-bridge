@@ -20,7 +20,7 @@ from core.config import (
 )
 from core.state import (
     _ARCHIVE_JOBS, _ARCHIVE_CONFIG, _DELETED_LOCAL_UIDS, _QUICK_ARCHIVE_REGISTRY, _SUB_RULES, _archive_save, _archive_config_save, _archive_sem, _archive_registry_lookup, _archive_public, _archive_state_of, _archive_latest_raw_of,
-    _archive_path_owners, _archive_upload_lock, _ARCHIVE_CONCURRENCY,
+    _archive_path_owners, _archive_upload_lock, _ARCHIVE_CONCURRENCY, _TASKS_CACHE,
 )
 from core.backend import BACKEND
 from core.logging import log, LOG_STORE
@@ -313,8 +313,124 @@ async def _archive_worker(job: Dict[str, Any]) -> None:
 
 _REMOTE_DIR_LIST_CACHE: Dict[str, Tuple[float, int, set, List[Dict[str, Any]]]] = {}
 
+# ---- 云端目录快照：陈旧返回 + 后台单飞刷新 ----
+# 历史问题：/library/cloud 在请求里同步跑 OpenList fs/list（单目录实测 1.9s，
+# 冷时 10s），整页被它堵住；而这份数据只用来给卡片打「云端在存 / 已失效」角标。
+# 现在：永远先用手里最新快照渲染（哪怕过期），过期了在后台刷新，下一次访问即新值。
+_CLOUD_VERIFY_TTL = 90.0
+_CLOUD_VERIFY_CACHE: Dict[str, Dict[str, Any]] = {}      # dir -> {names, files, ts}
+_CLOUD_VERIFY_INFLIGHT: Dict[str, Any] = {}              # dir -> asyncio.Task（单飞）
 
-async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]:
+
+async def _cloud_verify_remote_dir(d: str) -> None:
+    """拉一次某个云端目录的全量列表并写进快照（翻页拉全，见 _openlist_list_all）。"""
+    try:
+        token = await _openlist_token()
+        code, content, _msg = await _openlist_list_all(token, d)
+        if code != 200:
+            return
+        names = {str(c.get("name") or "") for c in content}
+        files = [c for c in content if isinstance(c, dict) and not c.get("is_dir")]
+        _CLOUD_VERIFY_CACHE[d] = {"names": names, "files": files, "ts": time.monotonic()}
+    except Exception as e:  # noqa: BLE001
+        log.debug("云端目录校验失败(%s): %s", d, e)
+    finally:
+        _CLOUD_VERIFY_INFLIGHT.pop(d, None)
+
+
+def _cloud_verify_spawn(d: str) -> None:
+    """后台刷新一个目录的快照；同目录同时只跑一个（单飞）。"""
+    task = _CLOUD_VERIFY_INFLIGHT.get(d)
+    if task is not None and not task.done():
+        return
+    task = asyncio.create_task(_cloud_verify_remote_dir(d))
+
+    def _swallow(fut):
+        try:
+            fut.exception()
+        except Exception:  # noqa: BLE001
+            pass
+
+    task.add_done_callback(_swallow)
+    _CLOUD_VERIFY_INFLIGHT[d] = task
+
+
+# ---- 后端原始文件记录快照（缩略图联查用）----
+# 第二处阻塞点：/api/files 冷调用实测 1.2s，后端不可达时 httpx 重试可到 6s。
+# 这份数据只用来给卡片补缩略图/消息定位，缺了就是「无图占位」，不该堵住整页。
+_RAW_FILES_TTL = 30.0
+_RAW_FILES_CACHE: Dict[str, Dict[str, Any]] = {}
+_RAW_FILES_TS = 0.0
+_RAW_FILES_INFLIGHT: Any = None
+
+
+async def _raw_files_refresh() -> None:
+    global _RAW_FILES_TS, _RAW_FILES_INFLIGHT
+    try:
+        _r = await BACKEND.list_all_files_page_info(force=False)
+        rows = list(BACKEND._unwrap_files(_r) or [])
+        fresh: Dict[str, Dict[str, Any]] = {}
+        for f in rows:
+            u = str(f.get("uniqueId") or "")
+            if u:
+                fresh[u] = f
+        _RAW_FILES_CACHE.clear()
+        _RAW_FILES_CACHE.update(fresh)
+        _RAW_FILES_TS = time.monotonic()
+    except Exception as e:  # noqa: BLE001
+        log.debug("云端卡片联查后端原始记录失败（任务列表兜底）: %s", e)
+    finally:
+        _RAW_FILES_INFLIGHT = None
+
+
+def _raw_files_spawn() -> None:
+    global _RAW_FILES_INFLIGHT
+    task = _RAW_FILES_INFLIGHT
+    if task is not None and not task.done():
+        return
+    task = asyncio.create_task(_raw_files_refresh())
+
+    def _swallow(fut):
+        try:
+            fut.exception()
+        except Exception:  # noqa: BLE001
+            pass
+
+    task.add_done_callback(_swallow)
+    _RAW_FILES_INFLIGHT = task
+
+
+async def _raw_files_map(sync: bool = False) -> Dict[str, Dict[str, Any]]:
+    """返回 uid -> 后端原始记录。
+
+    · sync=True：阻塞拉新（清理失效 / 改名自愈这类要真相的调用）；
+    · 否则：有快照直接用（哪怕过期），后台刷新；快照为空时给 50ms 极短窗口，
+      拿不到就转后台 —— 云端页不为一张缩略图等后端。
+    """
+    fresh = bool(_RAW_FILES_TS) and (time.monotonic() - _RAW_FILES_TS) < _RAW_FILES_TTL
+    if sync:
+        if not fresh:
+            await _raw_files_refresh()
+    elif not fresh:
+        if _RAW_FILES_CACHE:
+            _raw_files_spawn()
+        else:
+            try:
+                await asyncio.wait_for(_raw_files_refresh(), timeout=0.05)
+            except Exception:  # noqa: BLE001
+                _raw_files_spawn()
+    return dict(_RAW_FILES_CACHE)
+
+
+async def _cloud_archive_rows(check_remote: Any = True) -> List[Dict[str, Any]]:
+    """云端归档行。
+
+    check_remote:
+      · True（默认）：**不阻塞**。用手里最新快照判存在性；过期就后台刷新。
+      · "sync"：阻塞模式，先等这一轮 OpenList 目录列表返回再判（清理失效记录、
+        改名自愈这类「要真相」的调用方用）。
+      · False：完全不碰网络（聚合搜索等）。
+    """
     done = [j for j in _ARCHIVE_JOBS.values() if j.get("state") == "done"]
     done.sort(key=lambda j: j.get("archived_at") or j.get("created_at") or 0.0, reverse=True)
     latest: Dict[str, Dict[str, Any]] = {}
@@ -328,39 +444,28 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
 
     remote_names: Dict[str, set] = {}
     remote_files_by_dir: Dict[str, List[Dict[str, Any]]] = {}
+    pending_dirs: set = set()
+    sync_mode = bool(check_remote) and str(check_remote).lower() == "sync"
     if check_remote:
-        try:
-            token = await _openlist_token()
-            dirs = sorted({str(j.get("remote_dir") or "") for j in rows if j.get("remote_dir")})
-            is_unmocked = _openlist_client.__dict__.get("post") is None
-            now_m = time.monotonic()
-            jobs_sig = len(rows)
-            for d in dirs:
-                if is_unmocked and d in _REMOTE_DIR_LIST_CACHE:
-                    exp, sig, c_names, c_files = _REMOTE_DIR_LIST_CACHE[d]
-                    if exp > now_m and sig == jobs_sig:
-                        remote_names[d] = c_names
-                        remote_files_by_dir[d] = c_files
-                        continue
-                # 必须翻页拉全（单页上限 500）：目录超过 500 个文件时，第一页
-                # 之后真实存在的文件会被判成「云端失效」——线上实测 635 个文件
-                # 的目录里，452 条归档记录有 80 条被误报为已删除/已移动。
-                code, content, _msg = await _openlist_list_all(token, d)
-                if code != 200:
-                    continue
-                c_names = {str(c.get("name") or "") for c in content}
-                c_files = [
-                    c for c in content if isinstance(c, dict) and not c.get("is_dir")
-                ]
-                remote_names[d] = c_names
-                remote_files_by_dir[d] = c_files
-                if is_unmocked:
-                    # 90s：这是「云端目录列表」快照，只用于给归档行打上存在/失效角标。
-                    # 原来 15s，导致每 15 秒就有一页 /library/cloud 要白付 2s 的
-                    # OpenList 目录翻页；归档记录本身才是真相来源，角标可以慢一点。
-                    _REMOTE_DIR_LIST_CACHE[d] = (now_m + 90.0, jobs_sig, c_names, c_files)
-        except Exception as e:  # noqa: BLE001
-            log.warning("云端归档存在性校验失败（按日志原样展示）: %s", e)
+        dirs = sorted({str(j.get("remote_dir") or "") for j in rows if j.get("remote_dir")})
+        now_m = time.monotonic()
+        for d in dirs:
+            snap = _CLOUD_VERIFY_CACHE.get(d)
+            fresh = bool(snap) and (now_m - float(snap.get("ts") or 0.0)) < _CLOUD_VERIFY_TTL
+            if not fresh:
+                if sync_mode:
+                    await _cloud_verify_remote_dir(d)
+                    snap = _CLOUD_VERIFY_CACHE.get(d)
+                else:
+                    # 常态：立刻用旧快照渲染，刷新丢到后台（下一次访问就是新结果）
+                    _cloud_verify_spawn(d)
+            if snap:
+                remote_names[d] = snap["names"]
+                remote_files_by_dir[d] = snap["files"]
+            else:
+                # 一次快照都没有（刚部署/刚重启）：行按归档日志如实展示，
+                # 但不能判成 missing —— 那会把整页刷成红色「云端失效」。
+                pending_dirs.add(d)
 
     out = []
     for j in rows:
@@ -406,6 +511,8 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
             "directUrl": _url,
             "openlistUrl": _url,
             "exists": exists,
+            # 该目录还没有任何快照（后台正在拉）：模板可据此显示「核验中」而不是误判
+            "verifyPending": rd in pending_dirs,
             "deleteLocal": bool(j.get("delete_local")),
             "localDeleted": bool(j.get("local_deleted")),
             "localPath": j.get("local_path") or "",
@@ -479,29 +586,34 @@ async def _cloud_archive_rows(check_remote: bool = True) -> List[Dict[str, Any]]
     # 全部落「无图占位」。缩略图字段（thumbnailUniqueId/thumbnail/telegramId/
     # chatId/messageId）与下载状态无关，因此联查数据源二：直接回源后端
     # 原始 /api/files 记录，任务列表命中优先、原始记录兜底。
-    raw_map: Dict[str, Dict[str, Any]] = {}
-
-
-
-    # 联查数据源二辅助：回源 Java 后端原始 /api/files 记录（不经
-    # downloadStatus 过滤）。独立成闭包便于测试 patch 与复用。
-    async def _raw_files():
-        _r = await BACKEND.list_all_files_page_info(force=False)
-        return list(BACKEND._unwrap_files(_r) or [])
-
+    # 联查数据源二：Java 后端原始 /api/files 记录（不经 downloadStatus 过滤）。
+    # 走快照：常态不等待后端，缺数据时先无图占位、后台补齐（见 _raw_files_map）。
     try:
-        for f in await _raw_files():
-            u = str(f.get("uniqueId") or "")
-            if u:
-                raw_map[u] = f
+        raw_map = await _raw_files_map(sync=sync_mode)
     except Exception as e:  # noqa: BLE001
         log.debug("云端卡片联查后端原始记录失败（任务列表兜底）: %s", e)
+        raw_map = {}
     uid_map: Dict[str, Dict[str, Any]] = {}
     if any(r.get("uniqueId") for r in out):
         try:
-            # 延迟导入防循环依赖：task_service 也在函数体内反向引用本模块
-            from services.task_service import tasks_all
-            for t in await tasks_all():
+            # 缩略图联查的「数据源一」= 任务列表缓存快照：**只读，不等待回源**。
+            # 冷启动（进程刚起来、缓存空）时先让卡片落无图占位，同时后台热一次，
+            # 下一次访问就有图了 —— 绝不能让云端页为一张缩略图等 1s+。
+            _tlist = list(_TASKS_CACHE.get("value") or [])
+            if not _tlist:
+                # 缓存空（进程刚起来）：给 50ms 的极短窗口 —— 已就绪的实现会立刻返回，
+                # 真要回源就放弃并转后台，页面不等。
+                from services.task_service import tasks_all as _tasks_all
+                try:
+                    _tlist = await asyncio.wait_for(_tasks_all(), timeout=0.05)
+                except Exception:  # noqa: BLE001
+                    _tlist = []
+                if not _tlist:
+                    try:
+                        asyncio.get_running_loop().create_task(_tasks_all())
+                    except Exception:  # noqa: BLE001
+                        pass
+            for t in _tlist:
                 tu = str(t.get("_unique_id") or "")
                 if tu:
                     uid_map[tu] = t

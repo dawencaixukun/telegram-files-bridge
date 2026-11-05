@@ -141,11 +141,15 @@ class TestCloudRowsUseFullListing(unittest.TestCase):
         self._orig = dict(bridge_server._ARCHIVE_JOBS)
         bridge_server._ARCHIVE_JOBS.clear()
         bridge_server._REMOTE_DIR_LIST_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_INFLIGHT.clear()
 
     def tearDown(self):
         bridge_server._ARCHIVE_JOBS.clear()
         bridge_server._ARCHIVE_JOBS.update(self._orig)
         bridge_server._REMOTE_DIR_LIST_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_INFLIGHT.clear()
 
     def _make_jobs(self, count):
         for i in range(count):
@@ -172,7 +176,8 @@ class TestCloudRowsUseFullListing(unittest.TestCase):
 
         with patch.object(bridge_server._openlist_client, "post", new=fake_post), \
                 patch.object(bridge_server, "_openlist_token", new=AsyncMockOf("tk")):
-            rows = asyncio.run(bridge_server._cloud_archive_rows())
+            # 校验「有没有假 missing」必须拿真实列表，走阻塞通道
+            rows = asyncio.run(bridge_server._cloud_archive_rows(check_remote="sync"))
 
         self.assertEqual(len(rows), 520)
         missing = [r for r in rows if r.get("status") == "missing"]
@@ -194,11 +199,62 @@ class TestCloudRowsUseFullListing(unittest.TestCase):
                 patch.object(bridge_server, "_openlist_token", new=AsyncMockOf("tk")), \
                 patch.object(bridge_server, "_openlist_relocate_after_rename",
                              new=AsyncMockOf(None)):
-            rows = asyncio.run(bridge_server._cloud_archive_rows())
+            rows = asyncio.run(bridge_server._cloud_archive_rows(check_remote="sync"))
 
         missing = sorted(r["filename"] for r in rows if r.get("status") == "missing")
         self.assertEqual(missing, ["v0519.mp4"],
                          "真实缺失的文件必须仍然被标记出来")
+
+
+class TestCloudRowsNonBlocking(unittest.TestCase):
+    """默认通道不得阻塞在 OpenList 目录列表上 —— 云端页 10s 卡顿的根因回归。"""
+
+    def setUp(self):
+        self._orig = dict(bridge_server._ARCHIVE_JOBS)
+        bridge_server._ARCHIVE_JOBS.clear()
+        bridge_server._REMOTE_DIR_LIST_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_INFLIGHT.clear()
+
+    def tearDown(self):
+        bridge_server._ARCHIVE_JOBS.clear()
+        bridge_server._ARCHIVE_JOBS.update(self._orig)
+        bridge_server._CLOUD_VERIFY_CACHE.clear()
+        bridge_server._CLOUD_VERIFY_INFLIGHT.clear()
+
+    def _make_jobs(self, count):
+        for i in range(count):
+            jid = f"nb{i:04d}"
+            name = f"n{i:04d}.mp4"
+            bridge_server._ARCHIVE_JOBS[jid] = {
+                "id": jid, "unique_id": f"nb-u{i:04d}", "filename": name,
+                "remote_dir": "/onedrive/yello",
+                "remote_path": f"/onedrive/yello/{name}",
+                "size_bytes": 2048, "state": "done",
+                "archived_at": 1000.0 + i,
+            }
+
+    def test_default_mode_returns_without_waiting_for_listing(self):
+        import time as _time
+        self._make_jobs(3)
+
+        async def slow_post(path, *a, **kw):
+            await asyncio.sleep(0.4)      # 模拟线上 OpenList 的慢目录列表
+            return _Resp(_dir_payload(["n0000.mp4", "n0001.mp4", "n0002.mp4"], 3, 1, 500))
+
+        async def run():
+            t0 = _time.perf_counter()
+            rows = await bridge_server._cloud_archive_rows()
+            return rows, _time.perf_counter() - t0
+
+        with patch.object(bridge_server._openlist_client, "post", new=slow_post),                 patch.object(bridge_server, "_openlist_token", new=AsyncMockOf("tk")):
+            rows, cost = asyncio.run(run())
+
+        self.assertEqual(len(rows), 3)
+        self.assertLess(cost, 0.2, "默认通道不得等待 OpenList 目录列表（实测已阻塞 %.2fs）" % cost)
+        # 没有任何快照时不能把行判成缺失，只能标「核验中」
+        self.assertEqual([r for r in rows if r.get("status") == "missing"], [])
+        self.assertTrue(all(r.get("verifyPending") for r in rows), "首次无快照应标记核验中")
 
 
 class AsyncMockOf:
