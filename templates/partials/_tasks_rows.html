@@ -23,7 +23,7 @@
             <td>{{ t.time }}</td>
             <td>{{ t.source }}<span class="sub">msg {{ t.msg_id }}</span></td>
             <td><a class="link" href="/tasks/{{ t.id }}" onclick="event.stopPropagation()">{{ t.filename }}</a></td>
-            <td>{{ t.size }}</td>
+            <td class="tnum" style="text-align:right;white-space:nowrap;">{{ t.size }}</td>
             <td>
               {% if t.status == 'download' %}
                 <div>

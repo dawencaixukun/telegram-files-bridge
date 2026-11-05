@@ -23,14 +23,17 @@
       {% if tasks %}
       <table>
         <thead>
+          {# 列宽必须显式给死：表格是 table-layout:auto，列宽由「所有行内容」共同决定。
+             分页后一次只渲染 50 行，若不给宽度，各列会按这 50 行的最小内容宽度塌缩
+             —— 大小列被挤成两行、操作列贴边。写死宽度后翻页/加载更多都不再抖。 #}
           <tr>
-            <th style="width:36px;"><input type="checkbox" class="check" aria-label="全选" onclick="document.querySelectorAll('.task-check').forEach(c=>c.checked=this.checked)"></th>
-            <th>时间</th>
-            <th>来源</th>
+            <th style="width:34px;"><input type="checkbox" class="check" aria-label="全选" onclick="document.querySelectorAll('.task-check').forEach(c=>c.checked=this.checked)"></th>
+            <th style="width:104px;">时间</th>
+            <th style="width:168px;">来源</th>
             <th>文件名</th>
-            <th>大小</th>
-            <th style="min-width:160px;">阶段</th>
-            <th style="width:120px;">操作</th>
+            <th style="width:96px;text-align:right;">大小</th>
+            <th style="width:176px;">阶段</th>
+            <th style="width:104px;">操作</th>
           </tr>
         </thead>
         <tbody>
